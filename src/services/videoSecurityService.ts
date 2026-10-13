@@ -26,7 +26,14 @@ export const videoSecurityService = {
   ): Promise<VideoStreamingTicket> {
     await new Promise((res) => setTimeout(res, 350));
 
+    // TICKET FIX (BUG-12): issue absolute timestamps alongside the relative TTL.
+    // Without `expiresAt` the client can neither display a live countdown nor
+    // detect expiry to re-request the signed URL (production behaviour).
+    const issuedAtDate = new Date();
+    const expiresAtDate = new Date(issuedAtDate.getTime() + 900 * 1000);
+
     // Dynamic watermark text composed of masked phone and student ID
+    // PRIVACY FIX (BUG-01 mirror, client): only the masked phone ever reaches the UI layer.
     const watermarkText = user 
       ? `${user.maskedPhone || user.phoneNumber} | شناسه: ${user.id.toUpperCase()}`
       : 'نسخه آزمایشی مستر دستباف | مهمان';
@@ -35,6 +42,8 @@ export const videoSecurityService = {
       ticketId: `tkt_${Date.now()}_${Math.random().toString(36).substring(7)}`,
       lessonId: lesson.id,
       expiresInSeconds: 900,
+      issuedAt: issuedAtDate.toISOString(),
+      expiresAt: expiresAtDate.toISOString(),
       watermarkText,
       watermarkUserId: user?.id || 'guest',
       provider: 'ArvanCloud VoD / VideoCDN HLS Mock',

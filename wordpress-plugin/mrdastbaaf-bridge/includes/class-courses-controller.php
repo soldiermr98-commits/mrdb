@@ -83,7 +83,19 @@ class MrDastbaaf_Courses_Controller {
         }
 
         $user = get_user_by('ID', $user_id);
-        $watermark_text = $user ? ($user->user_login . ' | ID: ' . $user->ID) : 'مهمان | مستر دستباف';
+
+        // PRIVACY FIX (BUG-01): user_login IS the raw phone number. The previous
+        // code embedded it verbatim into the forensic watermark, so every signed
+        // ticket leaked the student's full mobile number to the video surface.
+        // Only the masked form may ever leave the server.
+        $watermark_text = 'مهمان | مستر دستباف';
+        $watermark_user_id = 'guest';
+        if ($user) {
+            $phone = (string) $user->user_login;
+            $masked_phone = substr($phone, 0, 4) . '***' . substr($phone, -4);
+            $watermark_text = $masked_phone . ' | ID: ' . $user->ID;
+            $watermark_user_id = (string) $user_id;
+        }
 
         /**
          * TODO: اتصال به کلید خصوصی سرور ویدیو (ابرآروان / ویدیو سی‌دی‌ان) جهت تولید Signed URL
@@ -94,8 +106,10 @@ class MrDastbaaf_Courses_Controller {
             'ticketId' => $ticket_id,
             'lessonId' => $lesson_id,
             'expiresInSeconds' => 900, // ۱۵ دقیقه اعتبار
+            'issuedAt' => gmdate('c'), // BUG-12: زمان مطلق صدور (ISO 8601)
+            'expiresAt' => gmdate('c', time() + 900), // BUG-12: زمان مطلق انقضا
             'watermarkText' => $watermark_text,
-            'watermarkUserId' => $user_id ? (string)$user_id : 'guest',
+            'watermarkUserId' => $watermark_user_id,
             'streamType' => 'hls',
         ));
     }

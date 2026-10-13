@@ -3,12 +3,10 @@
  * @description Service for managing manual bank transfers (کارت به کارت / حواله پایا)
  */
 
-import { INITIAL_ORDERS } from '../data/mockData';
 import { ManualTransferDetails, MembershipPlan, PaymentOrder, UserProfile } from '../types';
 import { authService } from './authService';
 import { membershipService } from './membershipService';
-
-const STORAGE_KEY_ORDERS = 'mrdastbaaf_orders';
+import { orderStore } from './orderStore';
 
 export const transferService = {
   /**
@@ -21,16 +19,6 @@ export const transferService = {
     details: ManualTransferDetails
   ): Promise<PaymentOrder> {
     await new Promise((res) => setTimeout(res, 500));
-
-    const savedOrders: PaymentOrder[] = (() => {
-      try {
-        const saved = localStorage.getItem(STORAGE_KEY_ORDERS);
-        if (saved) return JSON.parse(saved);
-      } catch (e) {
-        // ignore
-      }
-      return INITIAL_ORDERS;
-    })();
 
     const orderId = `ord-${Date.now()}`;
     const orderNumber = `MD-${Math.floor(10000 + Math.random() * 90000)}`;
@@ -52,12 +40,7 @@ export const transferService = {
       manualTransferDetails: details,
     };
 
-    savedOrders.unshift(newOrder);
-    try {
-      localStorage.setItem(STORAGE_KEY_ORDERS, JSON.stringify(savedOrders));
-    } catch (e) {
-      // ignore
-    }
+    orderStore.add(newOrder);
 
     return newOrder;
   },
@@ -68,41 +51,35 @@ export const transferService = {
   async approveTransferOrder(orderId: string, adminNotes?: string): Promise<PaymentOrder> {
     await new Promise((res) => setTimeout(res, 400));
 
-    const savedOrders: PaymentOrder[] = (() => {
-      try {
-        const saved = localStorage.getItem(STORAGE_KEY_ORDERS);
-        if (saved) return JSON.parse(saved);
-      } catch (e) {
-        // ignore
-      }
-      return INITIAL_ORDERS;
-    })();
+    const order = orderStore.findById(orderId);
+    if (!order) throw new Error('سفارش یافت نشد.');
 
-    const idx = savedOrders.findIndex((o) => o.id === orderId);
-    if (idx === -1) throw new Error('سفارش یافت نشد.');
+    const details: ManualTransferDetails | undefined = order.manualTransferDetails
+      ? {
+          ...order.manualTransferDetails,
+          adminReviewNote: adminNotes || 'فیش بانکی توسط کارشناس مالی تایید شد.',
+          reviewedAt: new Date().toISOString(),
+        }
+      : undefined;
 
-    const order = savedOrders[idx];
-    order.status = 'completed';
-    order.verifiedAt = new Date().toISOString();
-    if (order.manualTransferDetails) {
-      order.manualTransferDetails.adminReviewNote = adminNotes || 'فیش بانکی توسط کارشناس مالی تایید شد.';
-      order.manualTransferDetails.reviewedAt = new Date().toISOString();
-    }
-
-    savedOrders[idx] = order;
-    localStorage.setItem(STORAGE_KEY_ORDERS, JSON.stringify(savedOrders));
+    const updated = orderStore.update(orderId, {
+      status: 'completed',
+      verifiedAt: new Date().toISOString(),
+      manualTransferDetails: details,
+    });
+    if (!updated) throw new Error('سفارش یافت نشد.');
 
     // If current logged in user is the owner of this order, update their membership
     const currentUser = authService.getCurrentUser();
-    if (currentUser && currentUser.id === order.userId) {
-      const plan = membershipService.getPlanById(order.itemId);
+    if (currentUser && currentUser.id === updated.userId) {
+      const plan = membershipService.getPlanById(updated.itemId);
       if (plan) {
         const membership = membershipService.createMembershipRecord(plan);
         authService.updateCurrentUser({ membership });
       }
     }
 
-    return order;
+    return updated;
   },
 
   /**
@@ -115,29 +92,23 @@ export const transferService = {
 
     await new Promise((res) => setTimeout(res, 400));
 
-    const savedOrders: PaymentOrder[] = (() => {
-      try {
-        const saved = localStorage.getItem(STORAGE_KEY_ORDERS);
-        if (saved) return JSON.parse(saved);
-      } catch (e) {
-        // ignore
-      }
-      return INITIAL_ORDERS;
-    })();
+    const order = orderStore.findById(orderId);
+    if (!order) throw new Error('سفارش یافت نشد.');
 
-    const idx = savedOrders.findIndex((o) => o.id === orderId);
-    if (idx === -1) throw new Error('سفارش یافت نشد.');
+    const details: ManualTransferDetails | undefined = order.manualTransferDetails
+      ? {
+          ...order.manualTransferDetails,
+          adminReviewNote: reason,
+          reviewedAt: new Date().toISOString(),
+        }
+      : undefined;
 
-    const order = savedOrders[idx];
-    order.status = 'rejected';
-    if (order.manualTransferDetails) {
-      order.manualTransferDetails.adminReviewNote = reason;
-      order.manualTransferDetails.reviewedAt = new Date().toISOString();
-    }
+    const updated = orderStore.update(orderId, {
+      status: 'rejected',
+      manualTransferDetails: details,
+    });
+    if (!updated) throw new Error('سفارش یافت نشد.');
 
-    savedOrders[idx] = order;
-    localStorage.setItem(STORAGE_KEY_ORDERS, JSON.stringify(savedOrders));
-
-    return order;
+    return updated;
   },
 };

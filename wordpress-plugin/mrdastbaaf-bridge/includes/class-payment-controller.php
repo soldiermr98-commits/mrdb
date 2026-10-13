@@ -19,7 +19,7 @@ class MrDastbaaf_Payment_Controller {
         register_rest_route(MRDASTBAAF_API_NAMESPACE, '/payment/zibal/verify', array(
             'methods' => 'POST',
             'callback' => array($this, 'handle_zibal_verify'),
-            'permission_callback' => '__return_true', // استعلام توسط وب‌هوک یا بازگشت پرداخت
+            'permission_callback' => '__return_true', // استعلام توسط وب‌هوک یا بازگشت پرداخت — با توکن امضاشده محافظت می‌شود
         ));
 
         register_rest_route(MRDASTBAAF_API_NAMESPACE, '/payment/manual-transfer/submit', array(
@@ -27,6 +27,25 @@ class MrDastbaaf_Payment_Controller {
             'callback' => array($this, 'handle_manual_transfer_submit'),
             'permission_callback' => 'is_user_logged_in',
         ));
+    }
+
+    /**
+     * SECURITY FIX (BUG-03): تولید توکن امضاشده برای URL کال‌بک.
+     * قبلاً اندپوینت verify کاملاً باز بود: هر کسی با دانستن track_id می‌توانست
+     * سفارش‌های در انتظار را «failed» کند یا کال‌بک جعلی بزند. اکنون هر سفارش
+     * یک cb_token اختصاصی دارد که فقط در کال‌بک سرور-to-سرور/ریدایرکت زیبال
+     * جاسازی می‌شود و با hash_equals اعتبارسنجی می‌گردد.
+     */
+    private function generate_callback_token($order_id) {
+        $secret = wp_salt('auth');
+        return hash_hmac('sha256', $order_id, $secret);
+    }
+
+    private function validate_callback_token($order_id, $provided_token) {
+        if (empty($provided_token) || !is_string($provided_token)) {
+            return false;
+        }
+        return hash_equals($this->generate_callback_token($order_id), $provided_token);
     }
 
     /**
@@ -69,7 +88,8 @@ class MrDastbaaf_Payment_Controller {
          */
         $merchant = get_option('mrdastbaaf_zibal_merchant', 'zibal'); // 'zibal' = sandbox
         $amount_rial = $plan->price_toman * 10;
-        $callback_url = get_option('mrdastbaaf_frontend_url', home_url()) . '/payment/callback?orderId=' . $order_id;
+        $cb_token = $this->generate_callback_token($order_id);
+        $callback_url = add_query_arg('cb_token', $cb_token, get_option('mrdastbaaf_frontend_url', home_url()) . '/payment/callback?orderId=' . $order_id);
 
         $response = wp_remote_post('https://gateway.zibal.ir/v1/request', array(
             'headers' => array('Content-Type' => 'application/json'),
@@ -113,6 +133,7 @@ class MrDastbaaf_Payment_Controller {
         global $wpdb;
         $track_id = sanitize_text_field($request->get_param('track_id'));
         $success = sanitize_text_field($request->get_param('success'));
+        $cb_token = $request->get_param('cb_token');
 
         $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
         $order = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_orders WHERE zibal_track_id = %s", $track_id));
@@ -121,6 +142,13 @@ class MrDastbaaf_Payment_Controller {
             return new WP_Error('not_found', 'سفارش متناظر با این شناسه یافت نشد.', array('status' => 404));
         }
 
+        // SECURITY FIX (BUG-03a): این اندپوینت عمومی است؛ بدون توکن معتبر کال‌بک،
+        // هیچ تغییری در وضعیت سفارش مجاز نیست (نه failed و نه completed).
+        if (!$this->validate_callback_token($order->id, $cb_token)) {
+            return new WP_Error('forbidden', 'توکن کال‌بک نامعتبر است.', array('status' => 403));
+        }
+
+        // IDEMPOTENCY (BUG-03d): اگر سفارش قبلاً تایید شده، دوباره activate/verify نکن.
         if ($order->status === 'completed') {
             return rest_ensure_response(array('success' => true, 'message' => 'این تراکنش قبلاً تایید گردیده است.'));
         }
@@ -152,7 +180,17 @@ class MrDastbaaf_Payment_Controller {
             return new WP_Error('verify_rejected', 'تاییدیه پرداخت زیبال صادر نگردید.', array('status' => 400));
         }
 
-        $ref_number = (string) $verify_body['refNumber'];
+        // SECURITY FIX (BUG-03c): تطبیق مبلغ تاییدشده زیبال با فاکتور.
+        // درخواست پرداخت با مبلغ ریالی (تومان × ۱۰) ارسال شده است؛ پس پاسخ verify
+        // نیز باید دقیقاً همان مبلغ ریالی باشد. بدون این بررسی، پرداختِ کمتر از
+        // مبلغ فاکتور هم اشتراک فعال می‌کرد (partial payment attack).
+        $expected_rial = (int) $order->amount_toman * 10;
+        if (isset($verify_body['amount']) && (int) $verify_body['amount'] !== $expected_rial) {
+            $wpdb->update($table_orders, array('status' => 'failed'), array('id' => $order->id));
+            return new WP_Error('amount_mismatch', 'مبلغ پرداخت‌شده با فاکتور سفارش مطابقت ندارد.', array('status' => 400));
+        }
+
+        $ref_number = isset($verify_body['refNumber']) ? (string) $verify_body['refNumber'] : '';
         $now = current_time('mysql');
 
         // ثبت موفقیت فاکتور
@@ -162,31 +200,23 @@ class MrDastbaaf_Payment_Controller {
             'verified_at' => $now,
         ), array('id' => $order->id));
 
-        // فعال‌سازی اشتراک کاربر در جدول عضویت‌ها
+        // فعال‌سازی/تمدید اشتراک کاربر — LOGIC FIX (BUG-04): تابع مشترک تمدید
         $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
         $plan = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_plans WHERE id = %s", $order->plan_id));
 
-        $duration_days = $plan ? $plan->duration_days : 30;
-        $tier = $plan ? $plan->tier : 'bronze';
-        $expires_at = date('Y-m-d H:i:s', strtotime("+$duration_days days", strtotime($now)));
+        $membership_result = MrDastbaaf_Membership_Helper::grant_or_extend($order->user_id, $plan, $order->id);
 
-        $table_memberships = $wpdb->prefix . 'mrdastbaaf_user_memberships';
-        $wpdb->insert($table_memberships, array(
-            'id' => 'mem_' . wp_generate_password(12, false),
-            'user_id' => $order->user_id,
-            'plan_id' => $order->plan_id,
-            'tier' => $tier,
-            'status' => 'active',
-            'started_at' => $now,
-            'expires_at' => $expires_at,
-            'last_order_id' => $order->id,
-            'auto_renew' => 0,
-        ));
+        /**
+         * TODO: ارسال پیامک تایید خرید/تمدید به هنرجو (الگوی اوتینو)
+         */
+        do_action('mrdastbaaf_membership_granted', $order->user_id, $membership_result);
 
         return rest_ensure_response(array(
             'success' => true,
             'orderNumber' => $order->order_number,
             'refNumber' => $ref_number,
+            'membershipMode' => $membership_result['mode'], // 'created' یا 'extended'
+            'membershipExpiresAt' => $membership_result['expires_at'],
             'message' => 'پرداخت با موفقیت در شاپرک تایید شد و اشتراک فعال گردید.',
         ));
     }

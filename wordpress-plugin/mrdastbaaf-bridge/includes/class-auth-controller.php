@@ -76,14 +76,30 @@ class MrDastbaaf_Auth_Controller {
 
         $phone = preg_replace('/^(\+98|0098)/', '0', trim($phone));
         $storage_key = 'mrdastbaaf_otp_val_' . md5($phone);
+
+        // SECURITY FIX (BUG-02): brute-force protection.
+        // The old endpoint had NO attempt limit: a 5-digit code (90,000 combinations)
+        // valid for 120 seconds could be brute-forced by hammering this endpoint.
+        // We now allow at most 5 verification attempts per issued code and burn
+        // the code (forcing a new SMS request) as soon as the budget is exhausted.
+        $attempts_key = 'mrdastbaaf_otp_attempts_' . md5($phone);
+        $attempts = (int) get_transient($attempts_key);
+        if ($attempts >= 5) {
+            delete_transient($storage_key); // کد سوخته می‌شود؛ ورود فقط با کد جدید ممکن است
+            return new WP_Error('otp_locked', 'تعداد تلاش‌های نامعتبر بیش از حد مجاز بود. لطفاً کد تایید جدید درخواست کنید.', array('status' => 429));
+        }
+
         $hashed_code = get_transient($storage_key);
 
         if (!$hashed_code || !wp_check_password($otp_code, $hashed_code)) {
-            return new WP_Error('invalid_otp', 'کد تایید وارد شده نامعتبر یا منقضی شده است.', array('status' => 401));
+            set_transient($attempts_key, $attempts + 1, 300); // بودجه تلاش: ۵ دقیقه
+            $remaining = 5 - ($attempts + 1);
+            return new WP_Error('invalid_otp', 'کد تایید وارد شده نامعتبر یا منقضی شده است.' . ($remaining > 0 ? ' تلاش باقی‌مانده: ' . $remaining : ''), array('status' => 401));
         }
 
-        // حذف کد یک‌بارمصرف پس از استفاده موفق
+        // کد مصرف شد؛ بودجه تلاش‌ها نیز پاک می‌شود
         delete_transient($storage_key);
+        delete_transient($attempts_key);
 
         // جستجو یا ساخت کاربر در wp_users
         $user = get_user_by('login', $phone);

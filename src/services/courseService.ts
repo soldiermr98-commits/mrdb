@@ -125,11 +125,20 @@ export const courseService = {
     }
 
     // 4. Check active membership tier
+    // SECURITY FIX (BUG-08): `expiresAt` must be validated server-side in production,
+    // and must ALSO be validated here. Previously an expired membership
+    // (status still 'active' in localStorage) granted full lesson access.
     const userMembership = user.membership;
-    if (!userMembership || userMembership.status !== 'active') {
+    if (
+      !userMembership ||
+      userMembership.status !== 'active' ||
+      new Date(userMembership.expiresAt).getTime() <= Date.now()
+    ) {
       return {
         canAccess: false,
-        reason: `برای مشاهده این درس، نیاز به خرید یا تمدید اشتراک ${lesson.requiredTier === 'gold' ? 'طلایی' : lesson.requiredTier === 'silver' ? 'نقره‌ای' : 'برنزی'} دارید.`,
+        reason: userMembership && new Date(userMembership.expiresAt).getTime() <= Date.now()
+          ? 'اشتراک شما منقضی شده است. برای دسترسی مجدد، اشتراک خود را تمدید کنید.'
+          : `برای مشاهده این درس، نیاز به خرید یا تمدید اشتراک ${lesson.requiredTier === 'gold' ? 'طلایی' : lesson.requiredTier === 'silver' ? 'نقره‌ای' : 'برنزی'} دارید.`,
         requiredTier: lesson.requiredTier,
       };
     }

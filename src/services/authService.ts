@@ -17,15 +17,18 @@ import { UserProfile, UserRole } from '../types';
 const STORAGE_KEY_USER = 'mrdastbaaf_current_user';
 const STORAGE_KEY_TOKEN = 'mrdastbaaf_auth_token';
 
-// In-memory runtime state with session persistence for prototype
+// In-memory runtime state with session persistence.
+// SECURITY FIX (BUG-07): if no user is persisted, currentUser stays `null`.
+// The previous fallback to INITIAL_USERS[0] meant "logout" was not real:
+// after logout + page refresh the visitor silently became a logged-in student.
 let currentUser: UserProfile | null = (() => {
   try {
     const saved = localStorage.getItem(STORAGE_KEY_USER);
-    if (saved) return JSON.parse(saved);
+    if (saved) return JSON.parse(saved) as UserProfile;
   } catch (e) {
     // ignore
   }
-  return INITIAL_USERS[0]; // Default to student Sara Ahmadi for immediate evaluation
+  return null;
 })();
 
 export const authService = {

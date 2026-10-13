@@ -2,20 +2,23 @@
 
 این پوشه شامل کدهای کامل افزونه اختصاصی وردپرس به نام **`mrdastbaaf-bridge`** است که وظیفه برقراری ارتباط امن بین وب‌اپلیکیشن PWA مستر دستباف و هسته وردپرس، اوتینو، نیاس کورس و درگاه زیبال را بر عهده دارد.
 
+**نسخه فعلی: `1.0.1`** — شامل رفع ۶ باگ بحرانی امنیتی/منطقی فاز اول (جزئیات: بخش ۱۰ سند `FullDoc.MD` و فایل `CHANGELOG.md` در ریشه ریپو).
+
 ---
 
 ## 📂 ساختار فایل‌های افزونه
 
 ```text
 wordpress-plugin/mrdastbaaf-bridge/
-├── mrdastbaaf-bridge.php            # فایل اصلی افزونه و رجیستری روت‌ها
+├── mrdastbaaf-bridge.php            # فایل اصلی افزونه و رجیستری روت‌ها (CORS مبتنی بر Option از ۱.۰.۱)
 └── includes/
     ├── class-database.php          # ساخت جداول دیتابیس و پلن‌های اولیه
-    ├── class-auth-controller.php   # مدیریت پیامک کد تایید و ورود
-    ├── class-courses-controller.php # کاتالوگ دوره‌ها و صدور بلیت ویدیو
+    ├── class-membership-helper.php # منطق مشترک فعال‌سازی/تمدید اشتراک (جدید در ۱.۰.۱)
+    ├── class-auth-controller.php   # مدیریت پیامک کد تایید و ورود (+ محافظت Brute-Force از ۱.۰.۱)
+    ├── class-courses-controller.php # کاتالوگ دوره‌ها و صدور بلیت ویدیو (+ واترمارک ماسک‌شده از ۱.۰.۱)
     ├── class-memberships-controller.php # تعرفه‌ها و استعلام اشتراک دستی
-    ├── class-payment-controller.php # پرداخت زیبال و فیش کارت‌به‌کارت
-    └── class-admin-controller.php   # پنل مدیریت، تایید فیش‌ها و اختیارات
+    ├── class-payment-controller.php # پرداخت زیبال و فیش کارت‌به‌کارت (+ توکن cb_token از ۱.۰.۱)
+    └── class-admin-controller.php   # پنل مدیریت، تایید فیش‌ها (+ پاکسازی XSS سکشن‌ها از ۱.۰.۱)
 ```
 
 ---
@@ -54,7 +57,7 @@ wordpress-plugin/mrdastbaaf-bridge/
 - `POST /lessons/{id}/playback-ticket` (صدور بلیط تماشای ویدیو با بررسی سطح اشتراک)
 - `GET /memberships/plans` (لیست پلن‌های عضویت)
 - `POST /payment/zibal/initiate` (ایجاد تراکنش زیبال در سرور)
-- `POST /payment/zibal/verify` (تایید دوطرفه سرور-به-سرور زیبال)
+- `POST /payment/zibal/verify` (تایید دوطرفه سرور-به-سرور زیبال — از نسخه ۱.۰.۱ نیازمند پارامتر `cb_token` امضاشده است)
 - `POST /payment/manual-transfer/submit` (ثبت فیش کارت‌به‌کارت در وضعیت معلق)
 - `GET /admin/analytics` (آمار تجمیعی مالی - نیازمند لاگین ادمین)
 - `GET /admin/receipts` (صف بررسی فیش‌ها - نیازمند لاگین ادمین)

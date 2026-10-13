@@ -160,28 +160,20 @@ class MrDastbaaf_Admin_Controller {
                 'reviewed_at' => $now,
             ), array('order_id' => $order_id));
 
-            // فعال‌سازی اشتراک کاربر
+            // فعال‌سازی اشتراک کاربر — LOGIC FIX (BUG-04): تمدید به‌جای رکورد تکراری
             $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
             $plan = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_plans WHERE id = %s", $order->plan_id));
 
-            $duration_days = $plan ? $plan->duration_days : 30;
-            $tier = $plan ? $plan->tier : 'bronze';
-            $expires_at = date('Y-m-d H:i:s', strtotime("+$duration_days days", strtotime($now)));
+            $membership_result = MrDastbaaf_Membership_Helper::grant_or_extend($order->user_id, $plan, $order->id);
 
-            $table_memberships = $wpdb->prefix . 'mrdastbaaf_user_memberships';
-            $wpdb->insert($table_memberships, array(
-                'id' => 'mem_' . wp_generate_password(12, false),
-                'user_id' => $order->user_id,
-                'plan_id' => $order->plan_id,
-                'tier' => $tier,
-                'status' => 'active',
-                'started_at' => $now,
-                'expires_at' => $expires_at,
-                'last_order_id' => $order->id,
-                'auto_renew' => 0,
+            do_action('mrdastbaaf_membership_granted', $order->user_id, $membership_result);
+
+            return rest_ensure_response(array(
+                'success' => true,
+                'message' => ($membership_result['mode'] === 'extended'
+                    ? 'فیش تایید و اشتراک کاربر با حفظ روزهای باقی‌مانده تمدید شد.'
+                    : 'فیش تایید و اشتراک کاربر فعال گردید.'),
             ));
-
-            return rest_ensure_response(array('success' => true, 'message' => 'فیش تایید و اشتراک کاربر فعال گردید.'));
         }
 
         return new WP_Error('invalid_decision', 'تصمیم نامعتبر است.', array('status' => 400));
@@ -217,6 +209,10 @@ class MrDastbaaf_Admin_Controller {
 
     /**
      * خواندن و ذخیره چیدمان سکشن‌های صفحه اصلی
+     *
+     * SECURITY FIX (BUG-05): قبلاً JSON خام بدون هیچ پاکسازی‌ای در option ذخیره
+     * می‌شد؛ هر ادمین/مهاجم می‌توانست اسکریپت تزریق کند که در صفحه اصلی رندر و
+     * Stored XSS می‌شد. اکنون فقط کلیدهای مجاز با مقادیر پاکسازی‌شده ذخیره می‌شوند.
      */
     public function handle_homepage_sections(WP_REST_Request $request) {
         $option_key = 'mrdastbaaf_homepage_sections';
@@ -227,8 +223,70 @@ class MrDastbaaf_Admin_Controller {
         }
 
         if ($request->get_method() === 'PUT') {
-            $sections = $request->get_json_params();
-            update_option($option_key, $sections);
+            $raw_sections = $request->get_json_params();
+            if (!is_array($raw_sections)) {
+                return new WP_Error('invalid_payload', 'ساختار داده ارسالی معتبر نیست.', array('status' => 400));
+            }
+
+            $allowed_keys = array('id', 'key', 'title', 'subtitle', 'isEnabled', 'sortOrder', 'configData');
+            $valid_section_keys = array('hero', 'categories', 'featured_courses', 'membership_plans', 'artisan_story', 'faq');
+            $clean_sections = array();
+
+            foreach ($raw_sections as $section) {
+                if (!is_array($section)) {
+                    continue;
+                }
+                $clean = array();
+
+                foreach ($allowed_keys as $key) {
+                    if (!array_key_exists($key, $section)) {
+                        continue;
+                    }
+                    $value = $section[$key];
+
+                    switch ($key) {
+                        case 'title':
+                        case 'subtitle':
+                            $clean[$key] = sanitize_text_field((string) $value); // no HTML/JS survives
+                            break;
+                        case 'isEnabled':
+                            $clean[$key] = (bool) $value;
+                            break;
+                        case 'sortOrder':
+                            $clean[$key] = (int) $value;
+                            break;
+                        case 'key':
+                            $key_val = sanitize_key((string) $value);
+                            if (in_array($key_val, $valid_section_keys, true)) {
+                                $clean[$key] = $key_val;
+                            }
+                            break;
+                        case 'id':
+                            $clean[$key] = sanitize_key((string) $value);
+                            break;
+                        case 'configData':
+                            // فقط مقادیر اسکالر رشته‌ای/عددی پاکسازی‌شده پذیرفته می‌شود
+                            if (is_array($value)) {
+                                $clean_config = array();
+                                foreach ($value as $ck => $cv) {
+                                    $config_key = sanitize_key((string) $ck);
+                                    if ($config_key === '' || is_array($cv) || is_object($cv)) {
+                                        continue;
+                                    }
+                                    $clean_config[$config_key] = is_bool($cv) ? $cv : (is_numeric($cv) ? $cv : sanitize_text_field((string) $cv));
+                                }
+                                $clean[$key] = (object) $clean_config;
+                            }
+                            break;
+                    }
+                }
+
+                if (!empty($clean)) {
+                    $clean_sections[] = $clean;
+                }
+            }
+
+            update_option($option_key, $clean_sections, false); // autoload = false برای عملکرد بهتر
             return rest_ensure_response(array('success' => true, 'message' => 'چیدمان صفحه اصلی ذخیره شد.'));
         }
     }

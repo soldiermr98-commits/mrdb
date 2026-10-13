@@ -93,11 +93,23 @@ export const membershipService = {
 
     const diffDays = Math.ceil((expires.getTime() - started.getTime()) / (1000 * 60 * 60 * 24));
 
-    // Convert to mock Jalali date (adding 1399/1400 baseline for demo presentation)
-    const jalaliYear = expires.getFullYear() - 621;
-    const jalaliMonth = String(expires.getMonth() + 1).padStart(2, '0');
-    const jalaliDay = String(expires.getDate()).padStart(2, '0');
-    const jalaliFormatted = `${jalaliYear}/${jalaliMonth}/${jalaliDay}`;
+    // DISPLAY FIX (BUG-10): real Gregorian→Jalali conversion using the Intl
+    // Persian calendar. The old `getFullYear() - 621` arithmetic produced
+    // Gregorian month/day mislabeled as Jalali (off by ~2-3 months).
+    // Fallback keeps the app usable on engines without Persian calendar support.
+    let jalaliFormatted: string;
+    try {
+      jalaliFormatted = new Intl.DateTimeFormat('fa-IR-u-ca-persian-nu-latn', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(expires);
+    } catch (e) {
+      const jalaliYear = expires.getFullYear() - 621; // approximate fallback only
+      const jalaliMonth = String(expires.getMonth() + 1).padStart(2, '0');
+      const jalaliDay = String(expires.getDate()).padStart(2, '0');
+      jalaliFormatted = `${jalaliYear}/${jalaliMonth}/${jalaliDay}`;
+    }
 
     return {
       tier: plan.tier,

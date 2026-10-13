@@ -164,6 +164,9 @@ export interface VideoStreamingTicket {
   ticketId: string;
   lessonId: string;
   expiresInSeconds: number;
+  /** TICKET FIX (BUG-12): absolute ISO expiry so the player can compute live TTL and re-auth. */
+  issuedAt: string;
+  expiresAt: string;
   watermarkText: string;
   watermarkUserId: string;
   provider: 'ArvanCloud VoD / VideoCDN HLS Mock';

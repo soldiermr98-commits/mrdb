@@ -64,6 +64,9 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
     if (!isOpen) return;
 
     let mounted = true;
+    // PLAYER FIX (BUG-11c): drop the previous lesson's ticket immediately so the
+    // watermark/ticket UI can never show a stale ticket for a different lesson.
+    setTicket(null);
     videoSecurityService.requestPlaybackTicket(currentLesson, currentUser).then((t) => {
       if (mounted) setTicket(t);
     });
@@ -76,16 +79,26 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
     };
   }, [isOpen, currentLesson, currentUser]);
 
+  // PLAYER FIX (BUG-11a): reset the simulated playhead whenever the lesson changes,
+  // otherwise the scrubber/notes timestamps carry over from the previous lesson.
+  useEffect(() => {
+    setCurrentTime(0);
+  }, [currentLesson.id]);
+
   // Simulated playback time advancement
   useEffect(() => {
     let timer: any;
     if (isPlaying && simulatedNetworkState === 'good') {
+      // PLAYER FIX (BUG-11b): the speed selector was dead UI. The interval now
+      // advances the playhead according to the selected playback speed.
+      const speed = parseFloat(playbackSpeed) || 1;
+      const stepMs = Math.round(1000 / speed);
       timer = setInterval(() => {
         setCurrentTime((prev) => (prev >= totalDuration ? 0 : prev + 1));
-      }, 1000);
+      }, stepMs);
     }
     return () => clearInterval(timer);
-  }, [isPlaying, totalDuration, simulatedNetworkState]);
+  }, [isPlaying, totalDuration, simulatedNetworkState, playbackSpeed]);
 
   if (!isOpen) return null;
 
@@ -111,6 +124,27 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
 
   const watermarkString = ticket?.watermarkText || (currentUser ? currentUser.maskedPhone : '۰۹۱۲***۶۷۸۹');
 
+  // TICKET EXPIRY FIX (BUG-12): the ticket now carries an absolute expiry timestamp.
+  // A 1-second heartbeat keeps the remaining TTL live and auto-expires the ticket,
+  // mirroring the production signed-URL behaviour (پلیر باید بلیط منقضی را دوباره درخواست کند).
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isOpen || !ticket) return;
+    const tick = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [isOpen, ticket]);
+
+  const ticketExpiresAtMs = ticket?.expiresAt ? new Date(ticket.expiresAt).getTime() : null;
+  const ticketTtlRemaining = ticketExpiresAtMs ? Math.max(0, Math.ceil((ticketExpiresAtMs - nowTick) / 1000)) : 0;
+  const isTicketExpired = !!ticket && ticketTtlRemaining <= 0;
+
+  useEffect(() => {
+    if (isTicketExpired && isOpen && currentLesson && currentUser) {
+      // Auto-renew: production player re-authenticates on signed URL expiry.
+      videoSecurityService.requestPlaybackTicket(currentLesson, currentUser).then((t) => setTicket(t));
+    }
+  }, [isTicketExpired, isOpen, currentLesson, currentUser]);
+
   return (
     <div className="fixed inset-0 z-50 bg-black/95 text-white flex flex-col animate-in fade-in duration-200">
       {/* Top Navbar */}
@@ -131,7 +165,18 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
 
         <div className="flex items-center gap-2">
           {/* Mock integration badge */}
-          <span className="hidden sm:inline-flex items-center gap-1 bg-amber-950/80 text-amber-300 border border-amber-800/60 px-2 py-0.5 rounded-md text-[10px]">
+          {/* Ticket TTL countdown (BUG-12 companion fix) */}
+          {ticket && (
+            <span
+              className="hidden sm:inline-flex items-center gap-1 bg-emerald-950/80 text-emerald-300 border border-emerald-800/60 px-2 py-0.5 rounded-md text-[10px] font-mono"
+              dir="ltr"
+              title="زمان اعتبار باقی‌مانده بلیط استریم"
+            >
+              <Shield className="w-3 h-3" />
+              TTL {ticketTtlRemaining}s
+            </span>
+          )}
+          <span className="hidden md:inline-flex items-center gap-1 bg-amber-950/80 text-amber-300 border border-amber-800/60 px-2 py-0.5 rounded-md text-[10px]">
             <Shield className="w-3 h-3" />
             پلیر آزمایشی با واترمارک پویا
           </span>

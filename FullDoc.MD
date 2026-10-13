@@ -16,6 +16,7 @@
 7. [معماری امنیت و حفاظت از رسانه (Video & Payment Security)](#۷-معماری-امنیت-و-حفاظت-از-رسانه-video--payment-security)
 8. [راهنمای راه‌اندازی سریع برای توسعه‌دهندگان (Developer Quickstart)](#۸-راهنمای-راه‌اندازی-سریع-برای-توسعه‌دهندگان-developer-quickstart)
 9. [چک‌لیست انتقال به محیط تجاری (Production Checklist)](#۹-چک‌لیست-انتقال-به-محیط-تجاری-production-checklist)
+10. [گزارش فاز اول: رفع باگ‌های بحرانی (Critical Bug Fixes — Phase 1)](#۱۰-گزارش-فاز-اول-رفع-باگ‌های-بحرانی-critical-bug-fixes--phase-1)
 
 ---
 
@@ -333,7 +334,56 @@ npm run build
 - [ ] **تنظیم کلیدهای درگاه زیبال:** درج Merchant ID رسمی زیبال در تنظیمات افزونه وردپرس (`mrdastbaaf_zibal_merchant`).
 - [ ] **تنظیم هوک پیامکی اوتینو:** اتصال تابع ارسال پیامک به پترن پیامکی اختصاصی مستر دستباف در `class-auth-controller.php`.
 - [ ] **تنظیم سرویس ویدیو (HLS/CDN):** پیکربندی کلید خصوصی تولید توکن‌های امضاشده استریم در `class-courses-controller.php`.
-- [ ] **فعال‌سازی HTTPS اجباری و هدرهای امنیتی CORS:** اطمینان از اعمال گواهی SSL و بستن CORS سرور به دامنه اختصاصی فرانت‌اند.
+- [ ] **فعال‌سازی HTTPS اجباری و هدرهای امنیتی CORS:** اطمینان از اعمال گواهی SSL و بستن CORS سرور به دامنه اختصاصی فرانت‌اند. دامنه‌های مجاز از Option وردپرس `mrdastbaaf_allowed_origins` خوانده می‌شوند (از نسخه ۱.۰.۱؛ دیگر localhost پیش‌فرض نیست).
+- [ ] **کال‌بک زیبال با توکن امضاشده:** مطمئن شوید فرانت‌اند پارامتر `cb_token` دریافتی از URL کال‌بک را بدون تغییر به اندپوینت `/payment/zibal/verify` بازارسال می‌کند (از نسخه ۱.۰.۱ الزامی است؛ درغیر این‌صورت پاسخ ۴۰۳ دریافت می‌شود).
+
+---
+
+## ۱۰. گزارش فاز اول: رفع باگ‌های بحرانی (Critical Bug Fixes — Phase 1)
+
+**نسخه اعمال‌شده:** افزونه وردپرس `1.0.1` — وب‌اپ PWA (پروتوتایپ)
+**نتیجه صحت‌سنجی:** `tsc --noEmit` بدون خطا؛ بازبینی دستی فایل‌های PHP (PHP CLI در محیط توسعه در دسترس نبود).
+
+### ۱۰-۱. باگ‌های امنیتی افزونه وردپرس (PHP)
+
+| شناسه | شدت | شرح باگ | فیکس اعمال‌شده | فایل |
+|---|---|---|---|---|
+| BUG-01 | بحرانی (حریم خصوصی) | واترمارک پلکبک شامل **شماره موبایل خام** کاربر بود (`user_login` خودِ شماره است) و روی سطح ویدیو نشت می‌کرد. | ماسک‌سازی سمت سرور با فرمت `0912***6789` پیش از صدور تیکت؛ فقط فرم ماسک‌شده از سرور خارج می‌شود. | `class-courses-controller.php` |
+| BUG-02 | بحرانی (Brute-Force) | اندپوینت `/auth/verify-otp` **بدون محدودیت تلاش** بود؛ کد ۵ رقمی (۹۰,۰۰۰ حالت) با اعتبار ۱۲۰ ثانیه قابل حدس سیستماتیک بود. | بودجه ۵ تلاش نامعتبر per-OTP (ترنزینت ۵ دقیقه‌ای)؛ با اتمام بودجه، کد سوزانده می‌شود و ورود فقط با کد جدید ممکن است؛ پیام شامل «تلاش باقی‌مانده». | `class-auth-controller.php` |
+| BUG-03 | بحرانی (مالی) | اندپوینت عمومی `/payment/zibal/verify` کاملاً باز بود: (الف) هر کسی با track_id می‌توانست سفارش‌های pending را `failed` کند، (ب) **مبلغ پاسخ verify با فاکتور مقایسه نمی‌شد** (حمله پرداخت جزئی)، (ج) کال‌بک قابل جعل بود. | توکن HMAC-SHA256 اختصاصی هر سفارش (`cb_token`) با `wp_salt('auth')` در URL کال‌بک + اعتبارسنجی `hash_equals`؛ تطبیق دقیق مبلغ ریالی پاسخ زیبال با فاکتور؛ idempotency برای سفارش‌های تکراری. | `class-payment-controller.php` |
+| BUG-04 | بحرانی (منطق مالی) | در هر پرداخت موفق همیشه **رکورد عضویت جدید** درج می‌شد؛ تمدید اشتراک، روزهای باقی‌مانده اشتراک قبلی را هدر می‌داد و رکوردهای موازی می‌ساخت. | کلاس مشترک `MrDastbaaf_Membership_Helper::grant_or_extend()`: اگر اشتراک فعال موجود باشد، `expires_at` از انقضای قبلی تمدید می‌شود (حفظ روزهای باقی‌مانده)؛ در غیر این‌صورت اشتراک جدید ساخته می‌شود. خروجی `mode: created/extended`. | `includes/class-membership-helper.php` (جدید) + `class-payment-controller.php` + `class-admin-controller.php` |
+| BUG-05 | بحرانی (Stored XSS) | `PUT /admin/homepage-sections` مقدار JSON را **بدون هیچ پاکسازی‌ای** در option ذخیره می‌کرد؛ تزریق اسکریپت که در صفحه اصلی رندر می‌شد ممکن بود. | Whitelist کلیدها (`id, key, title, subtitle, isEnabled, sortOrder, configData`) + `sanitize_text_field` روی رشته‌ها + `sanitize_key` روی کلیدها + رد ساختارهای تودرتو در configData؛ `autoload=false` برای option. | `class-admin-controller.php` |
+| BUG-06 | بحرانی (پیکربندی) | دامنه `http://localhost:3000` به‌صورت هاردکد در لیست CORS پروداکشن مجاز بود؛ ریسک اجرای درخواست‌های اعتباردار از Origin لوکال. | لیست دامنه‌ها از Option وردپرس `mrdastbaaf_allowed_origins` خوانده می‌شود (پیش‌فرض: فقط دامنه‌های رسمی بدون localhost)؛ افزودن هدر `Vary: Origin`. افزودن localhost در dev فقط از طریق فیلتر `mrdastbaaf_allowed_origins`. | `mrdastbaaf-bridge.php` |
+
+### ۱۰-۲. باگ‌های بحرانی وب‌اپلیکیشن (TypeScript)
+
+| شناسه | شدت | شرح باگ | فیکس اعمال‌شده | فایل |
+|---|---|---|---|---|
+| BUG-07 | بحرانی (احراز هویت) | «خروج» واقعی وجود نداشت: در بوت اپ، در نبود کاربر ذخیره‌شده، به‌صورت پیش‌فرض کاربر نمونه (سارا احمدی) لاگین می‌شد؛ بعد از logout + refresh کاربر دوباره لاگین بود. | Fallback حذف شد؛ در نبود سشن ذخیره‌شده `currentUser = null`. میانبرهای دموی مودال ورود برای بازبینی حفظ شده‌اند. | `authService.ts` |
+| BUG-08 | بحرانی (کنترل دسترسی) | `canAccessLesson` فقط `status === 'active'` را چک می‌کرد و **`expiresAt` نادیده گرفته می‌شد**؛ اشتراک منقضی به درس‌ها دسترسی داشت. | بررسی `expiresAt > now` به‌علاوه status؛ پیام اختصاصی «اشتراک منقضی شده — تمدید کنید». یادآوری: در پروداکشن این بررسی باید سمت سرور نیز انجام شود. | `courseService.ts` |
+| BUG-09 | بحرانی (یکپارچگی داده) | `paymentService` و `transferService` هر دو روی کلید `mrdastbaaf_orders` می‌نوشتند ولی **کش درون‌حافظه‌ای جدا** داشتند؛ فیش کارت‌به‌کارت جدید در لیست سفارش‌ها/داشبورد ادمین تا reload دیده نمی‌شد. | ماژول مشترک `orderStore.ts` (منبع واحد حقیقت) با خواندن read-through از localStorage و یک مسیر mutation؛ هر دو سرویس بازنویسی شدند. + گارد idempotency در verify کلاینت. | `orderStore.ts` (جدید)، `paymentService.ts`، `transferService.ts` |
+| BUG-10 | بحرانی (نمایش مالی) | تبدیل جعلی جلالی (`سال گرگوری − ۶۲۱`) ماه/روز اشتباه تولید می‌کرد (خطای ~۲–۳ ماه در تاریخ انقضای اشتراک). | تبدیل واقعی با `Intl.DateTimeFormat('fa-IR-u-ca-persian-nu-latn')` + fallback تقریبی برای موتورهای بدون تقویم فارسی. | `membershipService.ts` |
+| BUG-11 | بحرانی (UX پلیر) | سه نقص پلیر: (الف) تایم‌لاین هنگام تعویض درس ریست نمی‌شد، (ب) کنترل سرعت پخش کاملاً مرده بود (هیچ اثری روی تایمر نداشت)، (ج) تیکت/واترمارک درس قبلی هنگام سوییچ باقی می‌ماند. | ریست `currentTime` به ۰ با تغییر درس؛ گام تایمر بر اساس `playbackSpeed` (۱۰۰۰/سرعت میلی‌ثانیه)؛ پاک‌سازی تیکت قبل از درخواست تیکت جدید. | `LessonPlayerModal.tsx` |
+| BUG-12 | بحرانی (امنیت ویدیو) | تیکت استریم فقط TTL نسبی داشت (`expiresInSeconds`)؛ کلاینت نمی‌توانست انقضا را تشخیص دهد یا شمارنده زنده نشان دهد. | فیلدهای مطلق `issuedAt`/`expiresAt` (ISO 8601) در تایپ و سرویس (کلاینت) و پاسخ REST (PHP، `gmdate('c')`)؛ شمارنده زنده TTL در هدر پلیر + تمدید خودکار تیکت در انقضا (شبیه‌سازی رفتار Signed URL پروداکشن). | `types/index.ts`، `videoSecurityService.ts`، `LessonPlayerModal.tsx`، `class-courses-controller.php` |
+
+### ۱۰-۳. فایل‌های تغییر یافته / ایجاد شده
+
+**ایجاد شده:**
+- `src/services/orderStore.ts` — استور مشترک سفارش‌ها (BUG-09)
+- `wordpress-plugin/mrdastbaaf-bridge/includes/class-membership-helper.php` — منطق تمدید اشتراک (BUG-04)
+- `CHANGELOG.md` — گزارش نسخه‌ها
+
+**اصلاح شده:**
+- `src/services/authService.ts` (BUG-07) · `src/services/courseService.ts` (BUG-08) · `src/services/membershipService.ts` (BUG-10) · `src/services/paymentService.ts` (BUG-09) · `src/services/transferService.ts` (BUG-09) · `src/services/videoSecurityService.ts` (BUG-12)
+- `src/types/index.ts` (BUG-12) · `src/components/player/LessonPlayerModal.tsx` (BUG-11/12)
+- `wordpress-plugin/mrdastbaaf-bridge/mrdastbaaf-bridge.php` (BUG-06، بامپ نسخه ۱.۰.۱) · `includes/class-auth-controller.php` (BUG-02) · `includes/class-courses-controller.php` (BUG-01/12) · `includes/class-payment-controller.php` (BUG-03/04) · `includes/class-admin-controller.php` (BUG-04/05)
+
+### ۱۰-۴. نکات مهاجرت برای استقرار
+
+1. **پس از آپدیت افزونه**، فرانت‌اند پروداکشن باید `cb_token` را در فرآیند کال‌بک زیبال عبور دهد؛ در غیر این‌صورت verify با ۴۰۳ رد می‌شود (رفتار امن درست).
+2. دامنه‌های مجاز CORS را از بخش تنظیمات (Option: `mrdastbaaf_allowed_origins`) تنظیم کنید؛ دامنه localhost **هرگز** نباید در پروداکشن باشد.
+3. اگر جدول `user_memberships` رکوردهای تکراری قدیمی دارد، پس از استقرار یک اسکریپت یک‌بارمصرف برای merge رکوردهای هم‌کاربر اجرا کنید.
+4. `expiresAt` اشتراک در کلاینت فقط برای UX است؛ **منبع حقیقت** همیشه پاسخ `/auth/me` و `/memberships/my-status` سرور است.
 
 ---
 **توسعه‌یافته با بالاترین استانداردهای مهندسی نرم‌افزار برای مجموعه مستر دستباف**
