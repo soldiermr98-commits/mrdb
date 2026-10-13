@@ -19,6 +19,7 @@ import {
   Flame,
 } from 'lucide-react';
 import { Course, CourseCategory, HomepageSectionConfig, MembershipPlan } from '../types';
+import { INITIAL_HOMEPAGE_SECTIONS, INITIAL_MEMBERSHIP_PLANS } from '../data/mockData';
 import { adminService } from '../services/adminService';
 import { courseService } from '../services/courseService';
 import { membershipService } from '../services/membershipService';
@@ -35,9 +36,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onOpenLessonPreview,
   onSelectPlan,
 }) => {
-  const [sections, setSections] = useState<HomepageSectionConfig[]>([]);
+  const [sections, setSections] = useState<HomepageSectionConfig[]>(INITIAL_HOMEPAGE_SECTIONS);
   const [featuredCourses, setFeaturedCourses] = useState<Course[]>([]);
-  const [plans, setPlans] = useState<MembershipPlan[]>([]);
+  const [plans, setPlans] = useState<MembershipPlan[]>(INITIAL_MEMBERSHIP_PLANS);
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
 
   useEffect(() => {

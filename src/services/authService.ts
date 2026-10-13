@@ -4,8 +4,11 @@
  * 
  * ARCHITECTURE NOTE:
  * In production, this service will connect to the WordPress REST API endpoint
- * provided by the Otino OTP plugin (e.g. POST /wp-json/otino/v1/send-otp and
- * POST /wp-json/otino/v1/verify-otp). User accounts and roles remain in WordPress (wp_users).
+ * provided by the Otino OTP plugin or a custom WordPress bridge.
+ * 
+ * TODO: Official Otino OTP REST API endpoints, request schemas, and SMS provider hooks
+ * are currently unknown and pending official documentation and staging credentials.
+ * Do not invent production endpoints until documentation is provided.
  */
 
 import { INITIAL_USERS } from '../data/mockData';

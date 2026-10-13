@@ -48,11 +48,11 @@ export const PWAInstallButton: React.FC<Props> = ({ variant = 'header' }) => {
     return (
       <button
         onClick={install}
-        className="flex items-center gap-1.5 bg-amber-700 hover:bg-amber-680 text-amber-50 px-3 py-1.5 rounded-lg text-xs font-medium transition shadow-sm"
+        className="flex items-center gap-1.5 bg-amber-700 hover:bg-amber-680 text-amber-50 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium transition shadow-sm"
         title="نصب اپلیکیشن روی گوشی یا دسکتاپ"
       >
-        <Download className="w-3.5 h-3.5" />
-        <span>نصب اپلیکیشن</span>
+        <Download className="w-3.5 h-3.5 shrink-0" />
+        <span className="hidden sm:inline">نصب اپلیکیشن</span>
       </button>
     );
   }

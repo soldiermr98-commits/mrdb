@@ -1,6 +1,10 @@
 /**
  * @file services/courseService.ts
  * @description Service for managing courses and lessons, simulating Nias Course WordPress plugin
+ * 
+ * TODO: Official Nias Course WordPress database schemas, custom post types, lesson media access
+ * tables, and REST endpoints are currently unknown and pending documentation.
+ * Do not invent production Nias Course endpoints until documentation is provided.
  */
 
 import { INITIAL_COURSES } from '../data/mockData';

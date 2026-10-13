@@ -9,6 +9,9 @@
  * verification request (POST https://gateway.zibal.ir/v1/verify) using the merchant key.
  * Only after the server validates that result == 100 (Success) and status == 1 (Paid)
  * is the user's role/membership updated in the database.
+ * 
+ * TODO: Real Zibal Merchant ID, production IPG callback URL, and backend verification routes
+ * are currently pending staging credentials. Do not hardcode or generate real merchant keys.
  */
 
 import { INITIAL_ORDERS } from '../data/mockData';

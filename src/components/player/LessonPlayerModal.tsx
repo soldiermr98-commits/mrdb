@@ -241,17 +241,16 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
           </div>
 
           {/* Video Control Bar */}
-          <div className="bg-stone-900/95 border-t border-stone-800 px-4 py-2.5 z-30">
-            {/* Scrubber progress slider */}
-            <div className="flex items-center gap-3 text-[11px] text-stone-400 mb-2">
-              <span className="font-mono text-stone-300">{formatSeconds(currentTime)}</span>
+          <div className="bg-stone-900/95 border-t border-stone-800 px-3 sm:px-4 py-2.5 z-30">
+            {/* Scrubber progress slider: LTR layout ensures time advances naturally from left to right */}
+            <div className="flex items-center gap-2 sm:gap-3 text-[11px] text-stone-400 mb-2" dir="ltr">
+              <span className="font-mono text-stone-300 shrink-0">{formatSeconds(currentTime)}</span>
               <div
                 className="flex-1 h-1.5 bg-stone-700 rounded-full relative cursor-pointer"
                 onClick={(e) => {
                   const rect = e.currentTarget.getBoundingClientRect();
                   const clickX = e.clientX - rect.left;
                   const ratio = Math.max(0, Math.min(1, clickX / rect.width));
-                  // In RTL, flip or compute
                   setCurrentTime(Math.floor(ratio * totalDuration));
                 }}
               >
@@ -259,15 +258,15 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
                   className="h-full bg-amber-600 rounded-full relative"
                   style={{ width: `${(currentTime / totalDuration) * 100}%` }}
                 >
-                  <div className="w-3 h-3 bg-amber-300 rounded-full absolute -left-1 -top-0.5 shadow-sm" />
+                  <div className="w-3 h-3 bg-amber-300 rounded-full absolute -right-1 -top-0.5 shadow-sm" />
                 </div>
               </div>
-              <span className="font-mono">{formatSeconds(totalDuration)}</span>
+              <span className="font-mono text-stone-400 shrink-0">{formatSeconds(totalDuration)}</span>
             </div>
 
-            {/* Bottom Controls Row */}
-            <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-3">
+            {/* Bottom Controls Row: responsive flex-wrap for narrow mobile screens */}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
                 <button
                   onClick={() => setIsPlaying(!isPlaying)}
                   className="p-1.5 rounded-lg bg-amber-800 hover:bg-amber-700 text-white transition"
