@@ -86,7 +86,8 @@ class MrDastbaaf_Admin_Controller {
                   WHERE o.gateway = 'card_to_card' AND o.status = 'pending' 
                   ORDER BY o.created_at DESC";
 
-        $rows = $wpdb->get_results($query);
+        // BUG-37: صف بدون LIMIT می‌توانست در حجم بالا مصرف حافظه را منفجر کند
+        $rows = $wpdb->get_results($query . ' LIMIT 100');
         $receipts = array();
 
         foreach ($rows as $r) {
@@ -110,7 +111,13 @@ class MrDastbaaf_Admin_Controller {
             );
         }
 
-        return rest_ensure_response($receipts);
+        // BUG-37: تعداد کل فیش‌های در انتظار (برای هدر صف بررسی)
+        $total_pending = (int) $wpdb->get_var("SELECT COUNT(*) FROM $table_orders WHERE gateway = 'card_to_card' AND status = 'pending'");
+
+        return rest_ensure_response(array(
+            'total' => $total_pending,
+            'receipts' => $receipts,
+        ));
     }
 
     /**
@@ -128,6 +135,12 @@ class MrDastbaaf_Admin_Controller {
         $order = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_orders WHERE id = %s", $order_id));
         if (!$order) {
             return new WP_Error('not_found', 'سفارش یافت نشد.', array('status' => 404));
+        }
+
+        // BUG-37: فقط فیش‌های کارت‌به‌کارتِ «در انتظار» قابل تایید/رد هستند —
+        // سفارش زیبال یا پردازش‌شده نباید از مسیر بررسی دستی دستکاری شود.
+        if ($order->gateway !== 'card_to_card' || $order->status !== 'pending') {
+            return new WP_Error('not_reviewable', 'این سفارش قابل بررسی نیست؛ فقط فیش‌های کارت‌به‌کارتِ در انتظار مجاز هستند.', array('status' => 409));
         }
 
         $now = current_time('mysql');
@@ -149,10 +162,20 @@ class MrDastbaaf_Admin_Controller {
         }
 
         if ($decision === 'approve') {
+            // BUG-37: ادعای اتمیک سفارش پیش از grant — دو ادمین هم‌زمان (یا درخواست
+            // تکراری) نمی‌توانند اشتراک را دوباره فعال کنند؛ UPDATE مشروط به pending.
+            $claimed = $wpdb->query($wpdb->prepare(
+                "UPDATE $table_orders SET status = 'completed', verified_at = %s WHERE id = %s AND status = 'pending'",
+                $now, $order_id
+            ));
+            if (1 !== (int) $claimed) {
+                return new WP_Error('order_already_processed', 'این سفارش هم‌اکنون پردازش شده است؛ فهرست فیش‌ها را به‌روزرسانی کنید.', array('status' => 409));
+            }
+
             /**
-             * SECURITY FIX (BUG-14 caller): فعال‌سازی اشتراک «قبل از» completed شدن
-             * سفارش انجام می‌شود. اگر grant_or_extend شکست بخورد (پلن حذف‌شده یا
-             * خطای DB)، سفارش در صف باقی می‌ماند تا مشکل رفع شود — پول کاربر بدون
+             * SECURITY FIX (BUG-14 caller): فعال‌سازی اشتراک پیش از نهایی‌سازی انجام
+             * می‌شود. اگر grant_or_extend شکست بخورد (پلن حذف‌شده یا خطای DB)،
+             * سفارش به pending برمی‌گردد و در صف باقی می‌ماند — پول کاربر بدون
              * اشتراک گم نمی‌شود و مدیر خطا را می‌بیند.
              */
             $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
@@ -160,14 +183,16 @@ class MrDastbaaf_Admin_Controller {
 
             $membership_result = MrDastbaaf_Membership_Helper::grant_or_extend($order->user_id, $plan, $order->id);
             if (false === $membership_result) {
+                // BUG-37: برگشت وضعیت به pending — فیش دوباره در صف بررسی قرار می‌گیرد
+                $wpdb->query($wpdb->prepare(
+                    "UPDATE $table_orders SET status = 'pending' WHERE id = %s AND status = 'completed'",
+                    $order_id
+                ));
                 return new WP_Error('membership_grant_failed', 'تایید انجام شد اما فعال‌سازی اشتراک ناموفق بود؛ سفارش در صف بررسی باقی ماند. لطفاً پلن متناظر سفارش را بررسی کنید.', array('status' => 409));
             }
 
-            $wpdb->update($table_orders, array(
-                'status' => 'completed',
-                'verified_at' => $now,
-            ), array('id' => $order_id));
-
+            // BUG-37: وضعیت سفارش در ادعای اتمیک به completed تغییر کرده است؛
+            // در اینجا فقط یادداشت بررسی ثبت می‌شود.
             $wpdb->update($table_transfers, array(
                 'admin_review_note' => $admin_note ?: 'فیش با موفقیت تایید شد.',
                 'reviewer_admin_id' => $reviewer_id,
@@ -204,8 +229,19 @@ class MrDastbaaf_Admin_Controller {
          * بی‌صدا صفر می‌کرد (فروش رایگان!). اکنون قیمت فقط وقتی به‌روزرسانی می‌شود
          * که صریحاً ارسال شده، عدد معتبر و نامنفی باشد.
          */
+        // BUG-37: تعریف $table_plans — قبلاً این متغیر فقط داخل handle_review_receipt
+        // تعریف شده بود و $wpdb->update با متغیر تعریف‌نشده بی‌صدا no-op می‌شد
+        // (پاسخ success جعلی برمی‌گشت و هیچ پلنی ذخیره نمی‌شد).
+        $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
+
         $updates = array();
-        if ($title) $updates['title'] = $title;
+        if ($title) {
+            // BUG-37: طول عنوان با ستون varchar(191) هم‌خوان می‌شود
+            if (mb_strlen($title) > 191) {
+                return new WP_Error('title_too_long', 'عنوان پلن حداکثر ۱۹۱ کاراکتر است.', array('status' => 400));
+            }
+            $updates['title'] = $title;
+        }
 
         $price_param = $request->get_param('priceToman');
         if ($price_param !== null && $price_param !== '') {
@@ -215,7 +251,13 @@ class MrDastbaaf_Admin_Controller {
             $updates['price_toman'] = (int) $price_param;
         }
 
-        if ($duration_label) $updates['duration_label'] = $duration_label;
+        if ($duration_label) {
+            // BUG-37: طول برچسب با ستون varchar(50) هم‌خوان می‌شود
+            if (mb_strlen($duration_label) > 50) {
+                return new WP_Error('duration_label_too_long', 'برچسب مدت پلن حداکثر ۵۰ کاراکتر است.', array('status' => 400));
+            }
+            $updates['duration_label'] = $duration_label;
+        }
         if ($description) $updates['description'] = $description;
         if ($is_active !== null) $updates['is_active'] = $is_active;
 
@@ -223,7 +265,19 @@ class MrDastbaaf_Admin_Controller {
             return new WP_Error('no_data', 'داده‌ای برای به‌روزرسانی ارسال نشد.', array('status' => 400));
         }
 
-        $wpdb->update($table_plans, $updates, array('id' => $plan_id));
+        // BUG-37: بررسی نتیجه update — false خطای DB (500) و 0 ردیف یعنی پلن وجود ندارد (404)
+        $updated = $wpdb->update($table_plans, $updates, array('id' => $plan_id));
+        if (false === $updated) {
+            error_log('MrDastbaaf: plan update failed for plan ' . $plan_id . ' — ' . $wpdb->last_error);
+            return new WP_Error('plan_update_failed', 'به‌روزرسانی پلن ناموفق بود؛ لطفاً دوباره تلاش کنید.', array('status' => 500));
+        }
+        if (0 === $updated) {
+            return new WP_Error('plan_not_found', 'پلن یافت نشد.', array('status' => 404));
+        }
+
+        // کش لیست پلن‌های عمومی پس از ویرایش باطل می‌شود
+        delete_transient('mrdastbaaf_plans_cache');
+
         return rest_ensure_response(array('success' => true, 'message' => 'پلن با موفقیت به‌روزرسانی شد.'));
     }
 
@@ -251,11 +305,31 @@ class MrDastbaaf_Admin_Controller {
             $allowed_keys = array('id', 'key', 'title', 'subtitle', 'isEnabled', 'sortOrder', 'configData');
             $valid_section_keys = array('hero', 'categories', 'featured_courses', 'membership_plans', 'artisan_story', 'faq');
             $clean_sections = array();
+            $seen_section_keys = array();
 
             foreach ($raw_sections as $section) {
-                if (!is_array($section)) {
-                    continue;
+                // BUG-37: حداکثر ۱۰ سکشن برای صفحه اصلی مجاز است
+                if (count($clean_sections) >= 10) {
+                    return new WP_Error('too_many_sections', 'حداکثر ۱۰ سکشن برای صفحه اصلی مجاز است.', array('status' => 400));
                 }
+
+                if (!is_array($section)) {
+                    return new WP_Error('invalid_section', 'ساختار سکشن ارسالی معتبر نیست.', array('status' => 400));
+                }
+
+                // BUG-37: سکشن با کلید نامعلوم یا خارج از لیست سفید به‌جای نادیده
+                // گرفته‌شدن بی‌صدا، کل درخواست را با 400 رد می‌کند.
+                $section_key = isset($section['key']) ? sanitize_key((string) $section['key']) : '';
+                if ($section_key === '' || !in_array($section_key, $valid_section_keys, true)) {
+                    return new WP_Error('unknown_section_key', 'کلید سکشن ارسالی معتبر نیست و در لیست سکشن‌های مجاز نیست.', array('status' => 400));
+                }
+
+                // BUG-37: کلید تکراری رد می‌شود
+                if (in_array($section_key, $seen_section_keys, true)) {
+                    return new WP_Error('duplicate_section_key', 'سکشن تکراری با کلید «' . $section_key . '» ارسال شده است.', array('status' => 400));
+                }
+                $seen_section_keys[] = $section_key;
+
                 $clean = array();
 
                 foreach ($allowed_keys as $key) {
@@ -273,13 +347,11 @@ class MrDastbaaf_Admin_Controller {
                             $clean[$key] = (bool) $value;
                             break;
                         case 'sortOrder':
-                            $clean[$key] = (int) $value;
+                            // BUG-37: بازه sortOrder به ۰ تا ۹۹۹ محدود می‌شود
+                            $clean[$key] = max(0, min(999, (int) $value));
                             break;
                         case 'key':
-                            $key_val = sanitize_key((string) $value);
-                            if (in_array($key_val, $valid_section_keys, true)) {
-                                $clean[$key] = $key_val;
-                            }
+                            $clean[$key] = $section_key; // BUG-37: پیش‌تر اعتبارسنجی شده است
                             break;
                         case 'id':
                             $clean[$key] = sanitize_key((string) $value);

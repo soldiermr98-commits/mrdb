@@ -41,10 +41,30 @@ class MrDastbaaf_Membership_Helper {
         }
 
         $table_memberships = $wpdb->prefix . 'mrdastbaaf_user_memberships';
+
+        /**
+         * RACE FIX (BUG-32): الگوی check-then-write (خواندن آخرین اشتراک → تصمیم →
+         * نوشتن) در درخواست‌های هم‌زمان (دو پرداخت موفق هم‌زمان) می‌توانست روزهای
+         * پرداخت‌شده را گم کند یا رکوردهای فعال موازی بسازد. کل محدوده
+         * خواندن-تصمیم-نوشتن با قفل مشورتی MySQL به ازای هر کاربر ایزوله می‌شود.
+         */
+        $lock_name = 'mrd_member_' . (int) $user_id;
+        $lock_acquired = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, %d)', $lock_name, 5));
+        if ('1' !== (string) $lock_acquired) {
+            error_log(sprintf(
+                'MrDastbaaf: grant_or_extend() could not acquire lock "%s" within 5s — aborted for user #%d (order: %s)',
+                $lock_name,
+                (int) $user_id,
+                (string) $order_id
+            ));
+            return false;
+        }
+
         $now_ts = current_time('timestamp');
         $now = date('Y-m-d H:i:s', $now_ts);
         $duration_days = (int) $plan->duration_days;
         $tier = $plan->tier;
+        $result = false;
 
         // آخرین اشتراک فعال کاربر
         $existing = $wpdb->get_row($wpdb->prepare(
@@ -72,44 +92,49 @@ class MrDastbaaf_Membership_Helper {
 
             if (false === $updated) {
                 error_log('MrDastbaaf: membership extend failed (DB error) for user #' . (int) $user_id);
-                return false;
+                $result = false;
+            } else {
+                $result = array(
+                    'id'         => $existing->id,
+                    'mode'       => 'extended', // تمدید شد (بدون ساخت رکورد تکراری)
+                    'expires_at' => $expires_at,
+                );
             }
+        } else {
+            // فعال‌سازی جدید
+            $expires_at = date('Y-m-d H:i:s', strtotime("+{$duration_days} days", $now_ts));
+            $membership_id = 'mem_' . wp_generate_password(12, false);
 
-            return array(
-                'id'         => $existing->id,
-                'mode'       => 'extended', // تمدید شد (بدون ساخت رکورد تکراری)
-                'expires_at' => $expires_at,
+            $inserted = $wpdb->insert(
+                $table_memberships,
+                array(
+                    'id'           => $membership_id,
+                    'user_id'      => $user_id,
+                    'plan_id'      => $plan->id,
+                    'tier'         => $tier,
+                    'status'       => 'active',
+                    'started_at'   => $now,
+                    'expires_at'   => $expires_at,
+                    'last_order_id'=> $order_id,
+                    'auto_renew'   => 0,
+                )
             );
+
+            if (false === $inserted) {
+                error_log('MrDastbaaf: membership insert failed (DB error) for user #' . (int) $user_id);
+                $result = false;
+            } else {
+                $result = array(
+                    'id'         => $membership_id,
+                    'mode'       => 'created', // اشتراک جدید ساخته شد
+                    'expires_at' => $expires_at,
+                );
+            }
         }
 
-        // فعال‌سازی جدید
-        $expires_at = date('Y-m-d H:i:s', strtotime("+{$duration_days} days", $now_ts));
-        $membership_id = 'mem_' . wp_generate_password(12, false);
+        // BUG-32: آزادسازی قفل در تمام مسیرها (موفق/ناموفق)
+        $wpdb->query($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lock_name));
 
-        $inserted = $wpdb->insert(
-            $table_memberships,
-            array(
-                'id'           => $membership_id,
-                'user_id'      => $user_id,
-                'plan_id'      => $plan->id,
-                'tier'         => $tier,
-                'status'       => 'active',
-                'started_at'   => $now,
-                'expires_at'   => $expires_at,
-                'last_order_id'=> $order_id,
-                'auto_renew'   => 0,
-            )
-        );
-
-        if (false === $inserted) {
-            error_log('MrDastbaaf: membership insert failed (DB error) for user #' . (int) $user_id);
-            return false;
-        }
-
-        return array(
-            'id'         => $membership_id,
-            'mode'       => 'created', // اشتراک جدید ساخته شد
-            'expires_at' => $expires_at,
-        );
+        return $result;
     }
 }

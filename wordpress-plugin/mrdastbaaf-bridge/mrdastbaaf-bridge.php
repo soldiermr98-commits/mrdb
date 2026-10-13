@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.0.2
+ * Version: 1.0.3
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,13 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.0.2');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.0.3');
+
+/**
+ * BUG-25: نسخه اسکیمای دیتابیس — با هر تغییر ساختار جداول (آخرین: BUG-26 ایندکس‌ها)
+ * باید افزایش یابد تا چک نسخه در plugins_loaded، dbDelta را مجدداً اجرا کند.
+ */
+define('MRDASTBAAF_DB_VERSION', '1.1.0');
 define('MRDASTBAAF_BRIDGE_PATH', plugin_dir_path(__FILE__));
 define('MRDASTBAAF_BRIDGE_URL', plugin_dir_url(__FILE__));
 define('MRDASTBAAF_API_NAMESPACE', 'mrdastbaaf/v1');
@@ -45,8 +51,10 @@ class MrDastbaaf_Bridge_Plugin {
     }
 
     private function __construct() {
-        // هوک فعال‌سازی افزونه جهت ساخت جداول دیتابیس
-        register_activation_hook(__FILE__, array('MrDastbaaf_Database', 'create_tables'));
+        // BUG-25: هوک فعال‌سازی به سطح فایل افزونه منتقل شد (پایین همین فایل).
+        // در درخواست فعال‌سازی، plugins_loaded «قبل» از include فایل افزونه اجرا
+        // می‌شود و ثبت هوک داخل این سازنده (که فقط روی plugins_loaded ساخته می‌شود)
+        // هرگز فراخوانی نمی‌شد → جداول/seed در نصب تازه ساخته نمی‌شدند.
 
         // ثبت روت‌های REST API
         add_action('rest_api_init', array($this, 'register_rest_routes'));
@@ -118,3 +126,57 @@ class MrDastbaaf_Bridge_Plugin {
 
 // مقداردهی اولیه افزونه
 add_action('plugins_loaded', array('MrDastbaaf_Bridge_Plugin', 'get_instance'));
+
+/**
+ * BUG-25: هوک فعال‌سازی باید در سطح فایل افزونه و خارج از هر کلاس/هوک ثبت شود؛
+ * در درخواست فعال‌سازی، وردپرس فایل افزونه را include می‌کند و بلافاصله هوک
+ * فعال‌سازی را اجرا می‌کند (بدون گذر از plugins_loaded). ساخت جداول + seed پلن‌ها
+ * این‌بار تضمین می‌شود.
+ */
+function mrdastbaaf_bridge_activate() {
+    MrDastbaaf_Database::create_tables();
+    update_option('mrdastbaaf_db_version', MRDASTBAAF_DB_VERSION);
+
+    // BUG-35: زمان‌بندی کرون روزانه ریکنسیلیشن سفارش‌های معلق زیبال
+    mrdastbaaf_bridge_schedule_reconciliation_cron();
+}
+register_activation_hook(__FILE__, 'mrdastbaaf_bridge_activate');
+
+/**
+ * BUG-35: ثبت رویداد روزانه WP-Cron در صورت عدم وجود زمان‌بندی قبلی
+ */
+function mrdastbaaf_bridge_schedule_reconciliation_cron() {
+    if (!wp_next_scheduled('mrdastbaaf_daily_reconciliation')) {
+        wp_schedule_event(time() + HOUR_IN_SECONDS, 'daily', 'mrdastbaaf_daily_reconciliation');
+    }
+}
+
+/**
+ * BUG-25: چک نسخه اسکیمای دیتابیس در هر بارگذاری افزونه — پوشش آپگرید:
+ * اگر نسخه ذخیره‌شده با نسخه جاری فرق داشته باشد (نصب قدیمی ۱.۰.۲)،
+ * dbDelta مجدداً اجرا و نسخه به‌روز می‌شود (مثلاً افزودن ایندکس‌های BUG-26).
+ */
+function mrdastbaaf_bridge_maybe_upgrade_db() {
+    if (get_option('mrdastbaaf_db_version') !== MRDASTBAAF_DB_VERSION) {
+        MrDastbaaf_Database::create_tables();
+        update_option('mrdastbaaf_db_version', MRDASTBAAF_DB_VERSION);
+    }
+
+    // BUG-35: اطمینان از موجود بودن زمان‌بندی کرون پس از ارتقا یا حذف اتفاقی
+    mrdastbaaf_bridge_schedule_reconciliation_cron();
+}
+add_action('plugins_loaded', 'mrdastbaaf_bridge_maybe_upgrade_db', 20);
+
+/**
+ * BUG-35: اجرای روزانه — انقضای سفارش‌های معلق زیبال و ریکنسیلیشن پرداخت‌های
+ * پرداخت‌شده‌ای که کال‌بک‌شان گم شده است (پیاده‌سازی در کنترلر پرداخت).
+ */
+add_action('mrdastbaaf_daily_reconciliation', array('MrDastbaaf_Payment_Controller', 'run_daily_reconciliation'));
+
+/**
+ * BUG-35: پاک‌سازی زمان‌بندی کرون هنگام غیرفعال‌سازی افزونه
+ */
+function mrdastbaaf_bridge_deactivate() {
+    wp_clear_scheduled_hook('mrdastbaaf_daily_reconciliation');
+}
+register_deactivation_hook(__FILE__, 'mrdastbaaf_bridge_deactivate');

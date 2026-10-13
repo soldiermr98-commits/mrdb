@@ -95,6 +95,10 @@ class MrDastbaaf_Payment_Controller {
         global $wpdb;
         $user_id = get_current_user_id();
         $user = get_user_by('ID', $user_id);
+        // BUG-36: گارد کاربر نامعتبر — رقابت با لاگ‌اوت نباید به خطای PHP روی $user ختم شود
+        if (!$user) {
+            return new WP_Error('unauthorized', 'برای شروع پرداخت ابتدا وارد حساب کاربری خود شوید.', array('status' => 401));
+        }
         $plan_id = sanitize_text_field($request->get_param('plan_id'));
 
         $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
@@ -104,9 +108,25 @@ class MrDastbaaf_Payment_Controller {
             return new WP_Error('invalid_plan', 'پلن انتخاب‌شده معتبر نیست.', array('status' => 400));
         }
 
+        // BUG-36: پلن رایگان هرگز نباید به درگاه پرداخت هدایت شود
+        if ((int) $plan->price_toman <= 0) {
+            return new WP_Error('free_plan_no_gateway', 'پلن رایگان نیازی به پرداخت درگاه ندارد.', array('status' => 400));
+        }
+
+        $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
+
+        // BUG-35: حداکثر ۵ سفارش زیبالِ در انتظار برای هر کاربر — جلوگیری از
+        // انباشت سفارش‌های رهاشده پیش از رسیدن به سقف کرون انقضا
+        $pending_count = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM $table_orders WHERE user_id = %d AND gateway = 'zibal' AND status = 'pending'",
+            $user_id
+        ));
+        if ($pending_count >= 5) {
+            return new WP_Error('too_many_pending_orders', 'تعداد سفارش‌های در انتظار پرداخت شما بیش از حد مجاز است؛ ابتدا سفارش‌های باز خود را تکمیل کنید.', array('status' => 429));
+        }
+
         $order_id = 'ord_' . wp_generate_password(12, false);
         $order_number = $this->generate_unique_order_number(); // BUG-15: یکتا
-        $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
 
         // ثبت سفارش اولیه با وضعیت pending — DATA-INTEGRITY FIX (BUG-15): بررسی نتیجه
         $insert_check = $this->insert_order_or_fail(array(
@@ -158,8 +178,11 @@ class MrDastbaaf_Payment_Controller {
 
         $track_id = (string) $body['trackId'];
 
-        // به‌روزرسانی trackId در دیتابیس
-        $wpdb->update($table_orders, array('zibal_track_id' => $track_id), array('id' => $order_id));
+        // به‌روزرسانی trackId در دیتابیس — BUG-36: بررسی نتیجه update و ثبت خطا در لاگ
+        $track_updated = $wpdb->update($table_orders, array('zibal_track_id' => $track_id), array('id' => $order_id));
+        if (false === $track_updated) {
+            error_log('MrDastbaaf: zibal_track_id update failed for order ' . $order_id . ' — ' . $wpdb->last_error);
+        }
 
         return rest_ensure_response(array(
             'orderId' => $order_id,
@@ -196,15 +219,23 @@ class MrDastbaaf_Payment_Controller {
             return rest_ensure_response(array('success' => true, 'message' => 'این تراکنش قبلاً تایید گردیده است.'));
         }
 
-        if ($success !== '1') {
-            $wpdb->update($table_orders, array('status' => 'failed'), array('id' => $order->id));
-            return new WP_Error('cancelled', 'تراکنش توسط کاربر لغو شد یا ناموفق بود.', array('status' => 400));
+        // BUG-33: هسته مشترک تایید — هم از اندپوینت کال‌بک و هم از کرون ریکنسیلیشن استفاده می‌شود
+        $result = $this->verify_zibal_order($order, $success);
+        if (is_wp_error($result)) {
+            return $result;
         }
 
+        return rest_ensure_response($result);
+    }
+
+    /**
+     * BUG-35: فراخوانی HTTP متد verify زیبال — بین اندپوینت کال‌بک و کرون
+     * روزانه ریکنسیلیشن مشترک است.
+     */
+    private function request_zibal_verify($track_id) {
         $merchant = get_option('mrdastbaaf_zibal_merchant', 'zibal');
 
-        // فراخوانی مستقیم متد verify از سرور
-        $verify_response = wp_remote_post('https://gateway.zibal.ir/v1/verify', array(
+        return wp_remote_post('https://gateway.zibal.ir/v1/verify', array(
             'headers' => array('Content-Type' => 'application/json'),
             'body' => json_encode(array(
                 'merchant' => $merchant,
@@ -212,22 +243,99 @@ class MrDastbaaf_Payment_Controller {
             )),
             'timeout' => 15,
         ));
+    }
+
+    /**
+     * BUG-33/BUG-35: هسته مشترک تایید سفارش زیبال — هم از اندپوینت کال‌بک و هم
+     * از کرون روزانه ریکنسیلیشن فراخوانی می‌شود.
+     *
+     * SECURITY FIX (BUG-33a): ادعای اتمیک سفارش «قبل از» هر اثر جانبی انجام
+     * می‌شود (UPDATE مشروط به status='pending'). در رقابت ریدایرکت + کال‌بک
+     * سرور-to-سرور فقط یکی از درخواست‌ها برنده می‌شود و grant دوباره‌گانه رخ
+     * نمی‌دهد. انتقال‌های نهایی completed/failed فقط از وضعیت verifying انجام
+     * می‌شود و نتیجه update نهایی بررسی می‌گردد.
+     *
+     * @param object $order   رکورد سفارش (از جدول orders)
+     * @param string $success وضعیت کال‌بک زیبال ('1' پرداخت‌شده، '2' قبلاً تاییدشده)
+     * @return array|WP_Error داده پاسخ در موفقیت / WP_Error در خطا
+     */
+    public function verify_zibal_order($order, $success) {
+        global $wpdb;
+        $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
+        $track_id = (string) $order->zibal_track_id;
+
+        // BUG-33a: ادعای اتمیک — فقط از وضعیت pending به verifying
+        $claimed = $wpdb->query($wpdb->prepare(
+            "UPDATE $table_orders SET status = 'verifying' WHERE id = %s AND status = 'pending'",
+            $order->id
+        ));
+        if (!$claimed) {
+            $current_status = (string) $wpdb->get_var($wpdb->prepare("SELECT status FROM $table_orders WHERE id = %s", $order->id));
+            if ('completed' === $current_status) {
+                return array('success' => true, 'message' => 'این تراکنش قبلاً تایید گردیده است.');
+            }
+            return new WP_Error('order_processing', 'این سفارش در حال پردازش است.', array('status' => 409));
+        }
+
+        // BUG-33b: success=1 (پرداخت‌شده) و success=2 (قبلاً تاییدشده) هر دو پذیرفته می‌شوند
+        $success = (string) $success;
+        if (!in_array($success, array('1', '2'), true)) {
+            if (in_array($success, array('3', '202', '-1', '-2'), true)) {
+                // کد قطعی شکست (لغو/ریورس توسط کاربر یا پرداخت‌نشده)
+                $wpdb->query($wpdb->prepare(
+                    "UPDATE $table_orders SET status = 'failed' WHERE id = %s AND status = 'verifying'",
+                    $order->id
+                ));
+                return new WP_Error('cancelled', 'تراکنش توسط کاربر لغو شد یا ناموفق بود.', array('status' => 400));
+            }
+
+            // وضعیت نامشخص — برای ریکنسیلیشن دوره‌ای به pending برمی‌گردد (BUG-33b)
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_orders SET status = 'pending' WHERE id = %s AND status = 'verifying'",
+                $order->id
+            ));
+            return new WP_Error('unknown_status', 'وضعیت پرداخت نامشخص است؛ سفارش در انتظار بررسی دوره‌ای باقی ماند.', array('status' => 400));
+        }
+
+        // فراخوانی مستقیم متد verify از سرور
+        $verify_response = $this->request_zibal_verify($track_id);
 
         if (is_wp_error($verify_response)) {
             /**
              * SECURITY FIX (BUG-17): خطای شبکه/تایم‌اوت موقت به زیبال به معنای
-             * «پرداخت ناموفق» نیست — پول کاربر ممکن است کسر شده باشد. قبلاً سفارش
-             * بلافاصله failed می‌شد و مسیر بازیابی نداشت. اکنون سفارش pending می‌ماند
-             * تا کال‌بک بعدی یا ریکنسیلیشن دوره‌ای دوباره verify کند.
+             * «پرداخت ناموفق» نیست — پول کاربر ممکن است کسر شده باشد. اکنون سفارش
+             * به pending برمی‌گردد تا کال‌بک بعدی یا ریکنسیلیشن دوره‌ای دوباره
+             * verify کند.
              */
             error_log('MrDastbaaf: zibal verify unreachable for track ' . $track_id . ' — ' . $verify_response->get_error_message());
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_orders SET status = 'pending' WHERE id = %s AND status = 'verifying'",
+                $order->id
+            ));
             return new WP_Error('verify_unreachable', 'ارتباط سرور با زیبال برقرار نشد؛ سفارش در وضعیت انتظار ماند و دوباره بررسی می‌شود.', array('status' => 502));
         }
 
         $verify_body = json_decode(wp_remote_retrieve_body($verify_response), true);
-        if (!isset($verify_body['result']) || $verify_body['result'] != 100) {
-            $wpdb->update($table_orders, array('status' => 'failed'), array('id' => $order->id));
-            return new WP_Error('verify_rejected', 'تاییدیه پرداخت زیبال صادر نگردید.', array('status' => 400));
+        $verify_result = isset($verify_body['result']) ? (int) $verify_body['result'] : null;
+
+        // BUG-33b: result=100 (تاییدشده) و result=201 (قبلاً تاییدشده) هر دو موفق‌اند؛
+        // فقط کدهای قطعی شکست (202 = پرداخت‌نشده/لغوشده، -1، -2 و ...) failed می‌شوند و
+        // بقیه کدهای ناشناخته برای ریکنسیلیشن دوره‌ای pending می‌مانند.
+        if (!in_array($verify_result, array(100, 201), true)) {
+            if (in_array($verify_result, array(202, -1, -2), true)) {
+                $wpdb->query($wpdb->prepare(
+                    "UPDATE $table_orders SET status = 'failed' WHERE id = %s AND status = 'verifying'",
+                    $order->id
+                ));
+                return new WP_Error('verify_rejected', 'تاییدیه پرداخت زیبال صادر نگردید.', array('status' => 400));
+            }
+
+            // کد ناشناخته — سفارش برای ریکنسیلیشن دوره‌ای در انتظار می‌ماند
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_orders SET status = 'pending' WHERE id = %s AND status = 'verifying'",
+                $order->id
+            ));
+            return new WP_Error('verify_unknown', 'وضعیت تایید پرداخت نامشخص است؛ سفارش برای بررسی دوره‌ای در انتظار ماند.', array('status' => 502));
         }
 
         // SECURITY FIX (BUG-03c): تطبیق مبلغ تاییدشده زیبال با فاکتور.
@@ -236,47 +344,70 @@ class MrDastbaaf_Payment_Controller {
         // مبلغ فاکتور هم اشتراک فعال می‌کرد (partial payment attack).
         $expected_rial = (int) $order->amount_toman * 10;
         if (isset($verify_body['amount']) && (int) $verify_body['amount'] !== $expected_rial) {
-            $wpdb->update($table_orders, array('status' => 'failed'), array('id' => $order->id));
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_orders SET status = 'failed' WHERE id = %s AND status = 'verifying'",
+                $order->id
+            ));
             return new WP_Error('amount_mismatch', 'مبلغ پرداخت‌شده با فاکتور سفارش مطابقت ندارد.', array('status' => 400));
         }
 
         $ref_number = isset($verify_body['refNumber']) ? (string) $verify_body['refNumber'] : '';
-        $now = current_time('mysql');
+
+        return $this->finalize_verified_order($order, $ref_number);
+    }
+
+    /**
+     * BUG-33a: تکمیل سفارش تاییدشده — فعال‌سازی اشتراک قبل از completed (الگوی
+     * BUG-14) و انتقال نهایی فقط از وضعیت verifying با بررسی نتیجه update.
+     */
+    private function finalize_verified_order($order, $ref_number) {
+        global $wpdb;
+        $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
 
         /**
          * SECURITY FIX (BUG-14 caller): فعال‌سازی اشتراک «قبل از» علامت‌گذاری
          * سفارش به‌عنوان completed انجام می‌شود. اگر grant_or_extend شکست بخورد
-         * (پلن حذف‌شده/خطای DB)، سفارش pending می‌ماند تا پشتیبانی دستی بررسی کند
-         * و پول کاربر بدون اشتراک گم نشود.
+         * (پلن حذف‌شده/خطای DB)، سفارش به pending برمی‌گردد تا پشتیبانی دستی
+         * بررسی کند و پول کاربر بدون اشتراک گم نشود.
          */
         $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
         $plan = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_plans WHERE id = %s", $order->plan_id));
 
         $membership_result = MrDastbaaf_Membership_Helper::grant_or_extend($order->user_id, $plan, $order->id);
         if (false === $membership_result) {
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_orders SET status = 'pending' WHERE id = %s AND status = 'verifying'",
+                $order->id
+            ));
             return new WP_Error('membership_grant_failed', 'پرداخت تایید شد اما فعال‌سازی خودکار اشتراک ممکن نشد؛ سفارش برای بررسی دستی پشتیبانی باقی ماند.', array('status' => 409));
         }
 
-        // ثبت موفقیت فاکتور (بعد از فعال‌سازی موفق اشتراک)
-        $wpdb->update($table_orders, array(
+        // ثبت موفقیت فاکتور (بعد از فعال‌سازی موفق اشتراک) — BUG-33a: انتقال نهایی
+        // فقط از verifying؛ false = خطای DB → سفارش در verifying می‌ماند (تلاش مجدد)
+        $completed_updated = $wpdb->update($table_orders, array(
             'status' => 'completed',
             'zibal_ref_number' => $ref_number,
-            'verified_at' => $now,
-        ), array('id' => $order->id));
+            'verified_at' => current_time('mysql'),
+        ), array('id' => $order->id, 'status' => 'verifying'));
+
+        if (false === $completed_updated) {
+            error_log('MrDastbaaf: final completed update failed for order ' . $order->id . ' — ' . $wpdb->last_error);
+            return new WP_Error('completion_update_failed', 'ثبت نهایی پرداخت ناموفق بود؛ سفارش در وضعیت پردازش باقی ماند و دوباره بررسی می‌شود.', array('status' => 500));
+        }
 
         /**
          * TODO: ارسال پیامک تایید خرید/تمدید به هنرجو (الگوی اوتینو)
          */
         do_action('mrdastbaaf_membership_granted', $order->user_id, $membership_result);
 
-        return rest_ensure_response(array(
+        return array(
             'success' => true,
             'orderNumber' => $order->order_number,
             'refNumber' => $ref_number,
             'membershipMode' => $membership_result['mode'], // 'created' یا 'extended'
             'membershipExpiresAt' => $membership_result['expires_at'],
             'message' => 'پرداخت با موفقیت در شاپرک تایید شد و اشتراک فعال گردید.',
-        ));
+        );
     }
 
     /**
@@ -286,6 +417,10 @@ class MrDastbaaf_Payment_Controller {
         global $wpdb;
         $user_id = get_current_user_id();
         $user = get_user_by('ID', $user_id);
+        // BUG-36: گارد کاربر نامعتبر — بدون آن دسترسی به $user->user_login خطای PHP می‌دهد
+        if (!$user) {
+            return new WP_Error('unauthorized', 'برای ثبت فیش واریزی ابتدا وارد حساب کاربری خود شوید.', array('status' => 401));
+        }
         $plan_id = sanitize_text_field($request->get_param('plan_id'));
         $tracking_code = sanitize_text_field($request->get_param('tracking_code'));
         $card_last_four = sanitize_text_field($request->get_param('card_last_four'));
@@ -321,7 +456,8 @@ class MrDastbaaf_Payment_Controller {
         }
 
         $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
-        $plan = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_plans WHERE id = %s", $plan_id));
+        // BUG-36: پرس‌وجوی پلن هم‌سطح initiate باید is_active = 1 را رعایت کند
+        $plan = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_plans WHERE id = %s AND is_active = 1", $plan_id));
         if (!$plan) {
             return new WP_Error('invalid_plan', 'پلن انتخابی معتبر نیست.', array('status' => 400));
         }
@@ -330,6 +466,22 @@ class MrDastbaaf_Payment_Controller {
         $order_number = $this->generate_unique_order_number(); // BUG-15: یکتا
         $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
         $table_transfers = $wpdb->prefix . 'mrdastbaaf_manual_transfers';
+
+        // BUG-27: جلوگیری از ادعای تکراری فیش — اگر همین شماره پیگیری با همین
+        // ۴ رقم کارت روی سفارشی ثبت شده باشد که «رد نشده»، درخواست با 409 رد
+        // می‌شود (یک فیش نمی‌تواند دو بار اشتراک بخرد).
+        $duplicate_transfer = $wpdb->get_var($wpdb->prepare(
+            "SELECT t.order_id
+             FROM $table_transfers t
+             INNER JOIN $table_orders o ON o.id = t.order_id
+             WHERE t.tracking_code = %s AND t.card_last_four = %s AND o.status != 'rejected'
+             LIMIT 1",
+            $tracking_code,
+            $card_last_four
+        ));
+        if ($duplicate_transfer) {
+            return new WP_Error('duplicate_receipt', 'این شماره پیگیری با این کارت قبلاً ثبت شده است؛ در صورت مشکل با پشتیبانی تماس بگیرید.', array('status' => 409));
+        }
 
         // ثبت سفارش در وضعیت معلق — DATA-INTEGRITY FIX (BUG-15): بررسی نتیجه
         $insert_check = $this->insert_order_or_fail(array(
@@ -372,5 +524,58 @@ class MrDastbaaf_Payment_Controller {
             'status' => 'pending',
             'message' => 'فیش واریزی شما ثبت شد و در صف بررسی کارشناسان مالی قرار گرفت.',
         ));
+    }
+
+    /**
+     * BUG-35: کرون روزانه — انقضای سفارش‌های زیبالِ معلق قدیمی (بالای ۲۴ ساعت)
+     * و ریکنسیلیشن سفارش‌های واقعاً پرداخت‌شده‌ای که کال‌بک‌شان گم شده است.
+     * زمان‌بندی و پاک‌سازی این رویداد در فایل اصلی افزونه انجام می‌شود (BUG-25).
+     */
+    public static function run_daily_reconciliation() {
+        global $wpdb;
+        $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
+
+        $cutoff = date('Y-m-d H:i:s', current_time('timestamp') - DAY_IN_SECONDS);
+        $stale_orders = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM $table_orders
+             WHERE gateway = 'zibal' AND status = 'pending' AND created_at < %s
+             ORDER BY created_at ASC
+             LIMIT 50",
+            $cutoff
+        ));
+
+        if (empty($stale_orders)) {
+            return;
+        }
+
+        $controller = new self();
+
+        foreach ($stale_orders as $order) {
+            if (!empty($order->zibal_track_id)) {
+                // یک بار استعلام واقعی از زیبال — سفارشِ پرداخت‌شده کامل می‌شود
+                $result = $controller->verify_zibal_order($order, '1');
+                if (is_wp_error($result)) {
+                    if ('order_processing' === $result->get_error_code()) {
+                        continue; // هم‌اکنون در مسیر کال‌بک پردازش می‌شود — دست نمی‌زنیم
+                    }
+                    error_log('MrDastbaaf: reconciliation attempt for order ' . $order->id . ' — ' . $result->get_error_message());
+                    if ('verify_unreachable' === $result->get_error_code()) {
+                        continue; // شبکه موقتاً قطع بوده — دور بعد کرون دوباره تلاش می‌کند
+                    }
+                }
+            }
+
+            // پس از استعلام، سفارشِ همچنان pending منقضا می‌شود (بالای ۲۴ ساعت)
+            $current_status = (string) $wpdb->get_var($wpdb->prepare("SELECT status FROM $table_orders WHERE id = %s", $order->id));
+            if ('pending' === $current_status) {
+                $expired = $wpdb->query($wpdb->prepare(
+                    "UPDATE $table_orders SET status = 'cancelled' WHERE id = %s AND status = 'pending'",
+                    $order->id
+                ));
+                if ($expired) {
+                    error_log('MrDastbaaf: stale pending zibal order expired to cancelled — order: ' . $order->id);
+                }
+            }
+        }
     }
 }

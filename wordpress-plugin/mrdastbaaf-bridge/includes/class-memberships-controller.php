@@ -28,6 +28,13 @@ class MrDastbaaf_Memberships_Controller {
      */
     public function handle_get_plans() {
         global $wpdb;
+
+        // PERF (فاز ۳): کش ۵ دقیقه‌ای لیست پلن‌ها — باطل‌سازی در ویرایش ادمین (BUG-37) و پس از seed
+        $cached_plans = get_transient('mrdastbaaf_plans_cache');
+        if (is_array($cached_plans)) {
+            return rest_ensure_response($cached_plans);
+        }
+
         $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
 
         $rows = $wpdb->get_results("SELECT * FROM $table_plans WHERE is_active = 1 ORDER BY price_toman ASC");
@@ -49,6 +56,8 @@ class MrDastbaaf_Memberships_Controller {
                 'colorScheme' => $r->color_scheme,
             );
         }
+
+        set_transient('mrdastbaaf_plans_cache', $plans, 5 * MINUTE_IN_SECONDS);
 
         return rest_ensure_response($plans);
     }
@@ -76,7 +85,8 @@ class MrDastbaaf_Memberships_Controller {
             ));
         }
 
-        $diff = strtotime($row->expires_at) - time();
+        // TIMEZONE FIX (فاز ۳): مقایسه با مرجع زمان محلی (current_time) به‌جای time() واقعی UTC
+        $diff = strtotime($row->expires_at) - current_time('timestamp');
         $days_remaining = max(0, ceil($diff / (60 * 60 * 24)));
 
         return rest_ensure_response(array(

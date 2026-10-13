@@ -10,7 +10,8 @@ if (!defined('ABSPATH')) {
 class MrDastbaaf_Database {
 
     /**
-     * ایجاد جداول پایگاه داده هنگام فعال‌سازی افزونه
+     * ایجاد جداول پایگاه داده — BUG-25: هم در فعال‌سازی افزونه و هم در مسیر
+     * ارتقای خودکار (چک نسخه mrdastbaaf_db_version در فایل اصلی) فراخوانی می‌شود.
      */
     public static function create_tables() {
         global $wpdb;
@@ -56,7 +57,9 @@ class MrDastbaaf_Database {
         ) $charset_collate;";
         dbDelta($sql_memberships);
 
-        // ۳. جدول سفارش‌ها و فاکتورها
+        // ۳. جدول سفارش‌ها و فاکتورها — BUG-26: ایندکس‌های zibal_track_id (جست‌وجوی
+        // سریع کال‌بک زیبال) و user_id (گزارش‌های per-user). فرمت dbDelta: KEY داخل
+        // CREATE TABLE و دو فاصله بعد از KEY.
         $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
         $sql_orders = "CREATE TABLE $table_orders (
             id varchar(64) NOT NULL,
@@ -75,11 +78,14 @@ class MrDastbaaf_Database {
             created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
             PRIMARY KEY  (id),
             UNIQUE KEY order_number_idx (order_number),
-            KEY status_gateway_idx (status, gateway)
+            KEY status_gateway_idx (status, gateway),
+            KEY  zibal_track_id (zibal_track_id),
+            KEY  user_id (user_id)
         ) $charset_collate;";
         dbDelta($sql_orders);
 
-        // ۴. جدول بررسی فیش‌های کارت به کارت
+        // ۴. جدول بررسی فیش‌های کارت به کارت — BUG-26: ایندکس tracking_code برای
+        // چک سریع فیش تکراری (BUG-27)
         $table_transfers = $wpdb->prefix . 'mrdastbaaf_manual_transfers';
         $sql_transfers = "CREATE TABLE $table_transfers (
             order_id varchar(64) NOT NULL,
@@ -91,7 +97,8 @@ class MrDastbaaf_Database {
             reviewer_admin_id bigint(20) unsigned NULL,
             admin_review_note text NULL,
             reviewed_at datetime NULL,
-            PRIMARY KEY  (order_id)
+            PRIMARY KEY  (order_id),
+            KEY  tracking_code (tracking_code)
         ) $charset_collate;";
         dbDelta($sql_transfers);
 
@@ -186,5 +193,8 @@ class MrDastbaaf_Database {
         foreach ($default_plans as $p) {
             $wpdb->insert($table_plans, $p);
         }
+
+        // PERF (فاز ۳): کش REST لیست پلن‌ها پس از seed باطل می‌شود
+        delete_transient('mrdastbaaf_plans_cache');
     }
 }
