@@ -43,6 +43,9 @@ export type CourseCategory =
 export interface LessonNote {
   id: string;
   lessonId: string;
+  // BUG-30: یادداشت‌ها per-user هستند؛ ردیف‌های قدیمی بدون userId با '' نشان داده
+  // می‌شوند که عملاً برای هیچ کاربری نمایان نیست (مهاجرت نرم بدون اسکریپت).
+  userId: string;
   timestampSeconds: number;
   content: string;
   createdAt: string;
@@ -110,7 +113,9 @@ export interface MembershipPlan {
 }
 
 export type PaymentGatewayType = 'zibal' | 'card_to_card';
-export type OrderStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'rejected';
+// BUG-34: 'verifying' برای گارد موازی‌سازی verify و BUG-35: 'processing' برای
+// سفارش‌هایی که گرنتشان معلق شده؛ 'cancelled' برای انصراف صریح کاربر.
+export type OrderStatus = 'pending' | 'processing' | 'verifying' | 'completed' | 'failed' | 'rejected' | 'cancelled';
 
 export interface ManualTransferDetails {
   trackingCode: string;
@@ -140,6 +145,10 @@ export interface PaymentOrder {
   zibalTrackId?: string;
   zibalRefNumber?: string;
   manualTransferDetails?: ManualTransferDetails;
+  // BUG-35: یادداشت داخلی برای حالت‌های خاص (مثلاً پلن سفارش یافت نشد)
+  adminNote?: string;
+  // BUG-37: اسنپ‌شات پلن در لحظه خرید تا گرنت به فروشگاه پلن‌ها وابسته نماند
+  planSnapshot?: { tier: MembershipTier; durationDays: number };
 }
 
 export interface HomepageSectionConfig {

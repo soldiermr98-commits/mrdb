@@ -19,12 +19,22 @@ export const videoSecurityService = {
   /**
    * Request a signed temporary streaming ticket for an entitled user
    * Ticket expires after 900 seconds (15 minutes)
+   *
+   * BUG (defense-in-depth): optional `accessDecision` — when the caller
+   * explicitly passes `false` (the courseService.canAccessLesson verdict), the
+   * ticket request is refused. UI wiring comes later; the default (undefined)
+   * keeps current behaviour.
    */
   async requestPlaybackTicket(
     lesson: Lesson,
-    user: UserProfile | null
+    user: UserProfile | null,
+    accessDecision?: boolean
   ): Promise<VideoStreamingTicket> {
     await new Promise((res) => setTimeout(res, 350));
+
+    if (accessDecision === false) {
+      throw new Error('دسترسی به این درس فعال نیست');
+    }
 
     // TICKET FIX (BUG-12): issue absolute timestamps alongside the relative TTL.
     // Without `expiresAt` the client can neither display a live countdown nor
@@ -39,7 +49,10 @@ export const videoSecurityService = {
       : 'نسخه آزمایشی مستر دستباف | مهمان';
 
     return {
-      ticketId: `tkt_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+      // LOW-SEVERITY FIX: `Math.random().toString(36).substring(7)` could yield
+      // an empty/1-char suffix; slice(2, 8).padEnd(6, '0') guarantees a fixed
+      // 6-char suffix alongside the collision-safe Date.now() prefix.
+      ticketId: `tkt_${Date.now()}_${Math.random().toString(36).slice(2, 8).padEnd(6, '0')}`,
       lessonId: lesson.id,
       expiresInSeconds: 900,
       issuedAt: issuedAtDate.toISOString(),

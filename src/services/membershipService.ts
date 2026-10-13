@@ -4,20 +4,85 @@
  */
 
 import { INITIAL_MEMBERSHIP_PLANS } from '../data/mockData';
-import { MembershipPlan, MembershipTier, UserMembership, UserProfile } from '../types';
+import { MembershipPlan, MembershipTier, PaymentOrder, PlanDuration, UserMembership, UserProfile } from '../types';
 import { formatJalali, isLive } from '../utils/format';
+import { hasStringId, readJsonArray } from './storageGuard';
 
 const STORAGE_KEY_PLANS = 'mrdastbaaf_plans';
 
-let inMemoryPlans: MembershipPlan[] = (() => {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY_PLANS);
-    if (saved) return JSON.parse(saved);
-  } catch (e) {
-    // ignore
+// BUG-29: corrupt plans storage no longer crashes the app on boot — the shared
+// storage guard heals the key and quarantines malformed rows.
+const inMemoryPlans: MembershipPlan[] = readJsonArray<MembershipPlan>(
+  STORAGE_KEY_PLANS,
+  INITIAL_MEMBERSHIP_PLANS,
+  hasStringId
+);
+
+/**
+ * BUG-40: افزودن مدت اشتراک به تاریخ مبنا با «کلمپ آخر ماه».
+ *
+ * `Date.setMonth` سرریز دارد: ۳۱ ژانویه + ۱ ماه → ۲/۳ مارس (پرش از اسفند)؛
+ * یعنی هر تمدید در روزهای ۲۹–۳۱، چند روز از اعتبار هنرجو را حذف می‌کرد.
+ * این تابع روز را به آخرین روزِ ماه مقصد محدود می‌کند:
+ *   ۳۱ ژانویه + ۱ ماه → ۲۸/۲۹ فوریه، ۳۱ اوت + ۱ ماه → ۳۰ سپتامبر، ...
+ * هم `grantOrExtend` و هم `createMembershipRecord` از همین مسیر می‌روند.
+ */
+export function addDuration(base: Date, duration: PlanDuration): Date {
+  const expires = new Date(base.getTime());
+  const originalDay = expires.getDate();
+
+  if (duration === '12_months') {
+    expires.setFullYear(expires.getFullYear() + 1);
+  } else {
+    const monthsToAdd = duration === '3_months' ? 3 : duration === '6_months' ? 6 : 1; // '1_month'
+    expires.setMonth(expires.getMonth() + monthsToAdd);
   }
-  return INITIAL_MEMBERSHIP_PLANS;
-})();
+
+  // Overflow detection: if the day-of-month shrank, setMonth/setFullYear rolled
+  // into the next month — clamp back to the last day of the intended month.
+  if (expires.getDate() !== originalDay) {
+    expires.setDate(0); // day 0 = last day of the previous (intended) month
+  }
+  return expires;
+}
+
+/** BUG-37: approximate day counts stamped into order snapshots at purchase time. */
+export function planDurationToDays(duration: PlanDuration): number {
+  switch (duration) {
+    case '3_months':
+      return 90;
+    case '6_months':
+      return 180;
+    case '12_months':
+      return 365;
+    default:
+      return 30; // '1_month'
+  }
+}
+
+/**
+ * BUG-37/BUG-38: بازسازی پلن از اسنپ‌شات ذخیره‌شده روی سفارش — وقتی پلن اصلی از
+ * فروشگاه پلن‌ها حذف/ویرایش شده باشد، گرنت اشتراک نباید شکست بخورد.
+ * Returns `null` when the order carries no snapshot (legacy orders).
+ */
+export function planFromSnapshot(order: PaymentOrder): MembershipPlan | null {
+  if (!order.planSnapshot) return null;
+  const days = order.planSnapshot.durationDays;
+  const duration: PlanDuration =
+    days >= 365 ? '12_months' : days >= 180 ? '6_months' : days >= 90 ? '3_months' : '1_month';
+  return {
+    id: order.itemId,
+    tier: order.planSnapshot.tier,
+    title: order.itemTitle,
+    description: 'بازیابی‌شده از اسنپ‌شات سفارش',
+    priceToman: order.amountToman,
+    duration,
+    durationLabel: `${order.planSnapshot.durationDays} روزه`,
+    features: [],
+    isActive: true,
+    colorScheme: 'stone',
+  };
+}
 
 export const membershipService = {
   /**
@@ -97,28 +162,15 @@ export const membershipService = {
     const existing = user?.membership;
     const isRenewal = this.isMembershipLive(user);
 
+    // BUG-40: shared month-end-clamped duration addition.
     const base = isRenewal && existing ? new Date(existing.expiresAt) : new Date();
-    const expires = new Date(base.getTime());
-
-    if (plan.duration === '1_month') {
-      expires.setMonth(expires.getMonth() + 1);
-    } else if (plan.duration === '3_months') {
-      expires.setMonth(expires.getMonth() + 3);
-    } else if (plan.duration === '6_months') {
-      expires.setMonth(expires.getMonth() + 6);
-    } else if (plan.duration === '12_months') {
-      expires.setFullYear(expires.getFullYear() + 1);
-    }
+    const expires = addDuration(base, plan.duration);
 
     const startedAt = isRenewal && existing ? existing.startedAt : new Date().toISOString();
     const diffDays = Math.max(1, Math.ceil((expires.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
 
-    let jalaliFormatted: string;
-    try {
-      jalaliFormatted = formatJalali(expires.toISOString());
-    } catch (e) {
-      jalaliFormatted = '—';
-    }
+    // formatJalali already returns «—» for invalid input (no throw path needed).
+    const jalaliFormatted = formatJalali(expires.toISOString());
 
     return {
       tier: plan.tier,
@@ -138,37 +190,13 @@ export const membershipService = {
    */
   createMembershipRecord(plan: MembershipPlan): UserMembership {
     const started = new Date();
-    const expires = new Date();
-
-    if (plan.duration === '1_month') {
-      expires.setMonth(expires.getMonth() + 1);
-    } else if (plan.duration === '3_months') {
-      expires.setMonth(expires.getMonth() + 3);
-    } else if (plan.duration === '6_months') {
-      expires.setMonth(expires.getMonth() + 6);
-    } else if (plan.duration === '12_months') {
-      expires.setFullYear(expires.getFullYear() + 1);
-    }
+    // BUG-40: shared addDuration (month-end clamp) instead of the duplicated
+    // setMonth chain, and the shared formatJalali instead of the inline
+    // `getFullYear() - 621` Intl implementation (deleted here).
+    const expires = addDuration(started, plan.duration);
 
     const diffDays = Math.ceil((expires.getTime() - started.getTime()) / (1000 * 60 * 60 * 24));
-
-    // DISPLAY FIX (BUG-10): real Gregorian→Jalali conversion using the Intl
-    // Persian calendar. The old `getFullYear() - 621` arithmetic produced
-    // Gregorian month/day mislabeled as Jalali (off by ~2-3 months).
-    // Fallback keeps the app usable on engines without Persian calendar support.
-    let jalaliFormatted: string;
-    try {
-      jalaliFormatted = new Intl.DateTimeFormat('fa-IR-u-ca-persian-nu-latn', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-      }).format(expires);
-    } catch (e) {
-      const jalaliYear = expires.getFullYear() - 621; // approximate fallback only
-      const jalaliMonth = String(expires.getMonth() + 1).padStart(2, '0');
-      const jalaliDay = String(expires.getDate()).padStart(2, '0');
-      jalaliFormatted = `${jalaliYear}/${jalaliMonth}/${jalaliDay}`;
-    }
+    const jalaliFormatted = formatJalali(expires.toISOString());
 
     return {
       tier: plan.tier,

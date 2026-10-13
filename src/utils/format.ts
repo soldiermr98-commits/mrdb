@@ -23,36 +23,75 @@ export function toEnglishDigits(input: string): string {
   });
 }
 
-/** Format an ISO date(-time) as Jalali (Persian calendar). Returns «—» for invalid input. */
-export function formatJalali(iso: string | null | undefined, withTime = false): string {
+/**
+ * LOW-SEVERITY FIX: inverse of `toEnglishDigits` — convert 0-9 to ۰-۹ so
+ * runtime-formatted dates visually match the Persian-digit seed data.
+ */
+function toPersianDigits(input: string): string {
+  const persian = '۰۱۲۳۴۵۶۷۸۹';
+  return input.replace(/[0-9]/g, (d) => persian[Number(d)]);
+}
+
+export interface FormatJalaliOptions {
+  /**
+   * LOW-SEVERITY FIX: default `true` — اعداد خروجی فارسی (۰۱۲۳…) هستند تا با
+   * داده‌های اولیه seed هم‌خوان باشند. `false` رفتار قدیمی (لاتین) را می‌دهد.
+   */
+  persianDigits?: boolean;
+}
+
+/**
+ * Format an ISO date(-time) as Jalali (Persian calendar). Returns «—» for invalid input.
+ * Backward-compatible: existing 1-2 arg calls keep working; digits are Persian by default.
+ */
+export function formatJalali(
+  iso: string | null | undefined,
+  withTime = false,
+  options?: FormatJalaliOptions
+): string {
+  const usePersianDigits = options?.persianDigits !== false; // default: Persian
   if (!iso) return '—';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '—';
   try {
-    return new Intl.DateTimeFormat(
+    // `nu-latn` keeps the raw output deterministic across engines; the digit
+    // style is applied by our own toPersianDigits below.
+    const formatted = new Intl.DateTimeFormat(
       'fa-IR-u-ca-persian-nu-latn',
       withTime
         ? { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }
         : { year: 'numeric', month: '2-digit', day: '2-digit' }
     ).format(d);
+    return usePersianDigits ? toPersianDigits(formatted) : formatted;
   } catch {
     // approximate fallback for engines without Persian calendar support
     const yy = d.getFullYear() - 621;
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
     const base = `${yy}/${mm}/${dd}`;
-    if (!withTime) return base;
+    if (!withTime) return usePersianDigits ? toPersianDigits(base) : base;
     const hh = String(d.getHours()).padStart(2, '0');
     const mi = String(d.getMinutes()).padStart(2, '0');
-    return `${base} ${hh}:${mi}`;
+    const withHm = `${base} ${hh}:${mi}`;
+    return usePersianDigits ? toPersianDigits(withHm) : withHm;
   }
 }
 
-/** Whole days between now and the given ISO date (negative = in the past). */
-export function daysUntil(iso: string | null | undefined): number {
-  if (!iso) return 0;
+/** LOW-SEVERITY FIX: explicit wrapper — formatJalali با ارقام فارسی (هم‌ارز پیش‌فرض فعلی). */
+export function formatJalaliPersianDigits(iso: string | null | undefined, withTime = false): string {
+  return formatJalali(iso, withTime, { persianDigits: true });
+}
+
+/**
+ * LOW-SEVERITY FIX: previously invalid/missing input returned 0 which read as
+ * «امروز» and masked corrupted dates. It now returns `null` so callers can
+ * render «—» and fail visibly. (Views render `null` as empty in JSX; the
+ * upcoming UI pass should map null → «—».)
+ */
+export function daysUntil(iso: string | null | undefined): number | null {
+  if (!iso) return null;
   const d = new Date(iso).getTime();
-  if (isNaN(d)) return 0;
+  if (isNaN(d)) return null;
   return Math.ceil((d - Date.now()) / (1000 * 60 * 60 * 24));
 }
 

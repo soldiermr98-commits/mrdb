@@ -4,9 +4,9 @@
  */
 
 import { ManualTransferDetails, MembershipPlan, PaymentOrder, UserProfile } from '../types';
-import { authService } from './authService';
-import { membershipService } from './membershipService';
-import { orderStore } from './orderStore';
+import { authService, getUserRegistry, upsertRegistryUser } from './authService';
+import { membershipService, planDurationToDays, planFromSnapshot } from './membershipService';
+import { mutateOrder, orderStore } from './orderStore';
 import { formatJalali } from '../utils/format';
 
 export const transferService = {
@@ -42,6 +42,9 @@ export const transferService = {
       // STALE-DATE FIX (BUG-23): real Jalali conversion instead of «امروز» placeholder
       createdAtJalali: formatJalali(createdAt, true),
       manualTransferDetails: details,
+      // BUG-37: snapshot the plan so admin approval/grant never depends on the
+      // (mutable) plans store.
+      planSnapshot: { tier: plan.tier, durationDays: planDurationToDays(plan.duration) },
     };
 
     orderStore.add(newOrder);
@@ -58,6 +61,25 @@ export const transferService = {
     const order = orderStore.findById(orderId);
     if (!order) throw new Error('سفارش یافت نشد.');
 
+    // BUG-38: idempotent second click — an already-completed order is returned
+    // unchanged instead of re-granting / re-reviewing it.
+    if (order.status === 'completed') {
+      return order;
+    }
+    // BUG-38: only pending receipts are approvable.
+    if (order.status !== 'pending') {
+      throw new Error('این فیش در وضعیت قابل تایید نیست');
+    }
+
+    // BUG-38: resolve the plan BEFORE the status transition so a missing plan
+    // (and no snapshot) leaves the order untouched in 'pending'.
+    const plan = membershipService.getPlanById(order.itemId);
+    // BUG-38: fall back to the snapshot taken at purchase time (BUG-37).
+    const effectivePlan = plan || planFromSnapshot(order);
+    if (!effectivePlan) {
+      throw new Error('پلن مربوط به این سفارش یافت نشد');
+    }
+
     const details: ManualTransferDetails | undefined = order.manualTransferDetails
       ? {
           ...order.manualTransferDetails,
@@ -66,10 +88,11 @@ export const transferService = {
         }
       : undefined;
 
-    const updated = orderStore.update(orderId, {
-      status: 'completed',
-      verifiedAt: new Date().toISOString(),
-      manualTransferDetails: details,
+    // BUG-33c: atomic status transition (write failure propagates as a throw).
+    const updated = mutateOrder(orderId, (o) => {
+      o.status = 'completed';
+      o.verifiedAt = new Date().toISOString();
+      if (details) o.manualTransferDetails = details;
     });
     if (!updated) throw new Error('سفارش یافت نشد.');
 
@@ -77,10 +100,19 @@ export const transferService = {
     // RENEWAL FIX (BUG-19): extend from the current expiry instead of resetting.
     const currentUser = authService.getCurrentUser();
     if (currentUser && currentUser.id === updated.userId) {
-      const plan = membershipService.getPlanById(updated.itemId);
-      if (plan) {
-        const membership = membershipService.grantOrExtend(currentUser, plan);
-        authService.updateCurrentUser({ membership });
+      const membership = membershipService.grantOrExtend(currentUser, effectivePlan);
+      authService.updateCurrentUser({ membership });
+    } else {
+      // BUG-46: the owner is NOT the currently-logged-in user (e.g. admin
+      // approving a receipt while nobody / someone else is logged in). The old
+      // code silently dropped the membership — write it into the persistent
+      // users registry so the owner receives it on their next login.
+      const registry = getUserRegistry();
+      const owner = registry.find((u) => u.id === updated.userId);
+      if (owner) {
+        // grantOrExtend reads the owner's stored membership for renewal logic.
+        const membership = membershipService.grantOrExtend(owner, effectivePlan);
+        upsertRegistryUser({ ...owner, membership });
       }
     }
 
@@ -100,6 +132,11 @@ export const transferService = {
     const order = orderStore.findById(orderId);
     if (!order) throw new Error('سفارش یافت نشد.');
 
+    // BUG-39: a completed (paid & granted) order can never be rejected.
+    if (order.status === 'completed') {
+      throw new Error('سفارش تکمیل‌شده قابل رد نیست');
+    }
+
     const details: ManualTransferDetails | undefined = order.manualTransferDetails
       ? {
           ...order.manualTransferDetails,
@@ -108,9 +145,10 @@ export const transferService = {
         }
       : undefined;
 
-    const updated = orderStore.update(orderId, {
-      status: 'rejected',
-      manualTransferDetails: details,
+    // BUG-33c: atomic status transition (write failure propagates as a throw).
+    const updated = mutateOrder(orderId, (o) => {
+      o.status = 'rejected';
+      if (details) o.manualTransferDetails = details;
     });
     if (!updated) throw new Error('سفارش یافت نشد.');
 

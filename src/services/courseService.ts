@@ -1,7 +1,7 @@
 /**
  * @file services/courseService.ts
  * @description Service for managing courses and lessons, simulating Nias Course WordPress plugin
- * 
+ *
  * TODO: Official Nias Course WordPress database schemas, custom post types, lesson media access
  * tables, and REST endpoints are currently unknown and pending documentation.
  * Do not invent production Nias Course endpoints until documentation is provided.
@@ -9,6 +9,9 @@
 
 import { INITIAL_COURSES } from '../data/mockData';
 import { Course, CourseCategory, Lesson, LessonNote, MembershipTier, UserProfile } from '../types';
+import { authService } from './authService';
+import { hasStringId, readJsonArray } from './storageGuard';
+import { isLive } from '../utils/format';
 
 const STORAGE_KEY_COURSES = 'mrdastbaaf_courses';
 const STORAGE_KEY_NOTES = 'mrdastbaaf_notes';
@@ -20,33 +23,40 @@ const TIER_RANKS: Record<MembershipTier, number> = {
   gold: 3,
 };
 
-let inMemoryCourses: Course[] = (() => {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY_COURSES);
-    if (saved) return JSON.parse(saved);
-  } catch (e) {
-    // ignore
-  }
-  return INITIAL_COURSES;
-})();
+// BUG-29: corrupt courses storage no longer crashes the app on boot — the
+// shared storage guard heals the key and quarantines malformed rows.
+const inMemoryCourses: Course[] = readJsonArray<Course>(
+  STORAGE_KEY_COURSES,
+  INITIAL_COURSES,
+  hasStringId
+);
 
-let inMemoryNotes: LessonNote[] = (() => {
+// BUG-30: seed note belongs to the demo student so the per-user notes demo is
+// visible right away (legacy rows without userId stay hidden — see getNotes).
+const SEED_NOTES: LessonNote[] = [
+  {
+    id: 'note-1',
+    lessonId: 'lsn-carpet-1',
+    userId: 'user-std-1',
+    timestampSeconds: 120,
+    content: 'نکته کلیدی: برای دار تبریز کشش نخ‌های چله باید صدادار شبیه تار موسیقی باشد.',
+    createdAt: '2026-09-25T14:00:00Z',
+  },
+];
+
+let inMemoryNotes: LessonNote[] = readJsonArray<LessonNote>(
+  STORAGE_KEY_NOTES,
+  SEED_NOTES,
+  hasStringId
+);
+
+function persistNotes(): void {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY_NOTES);
-    if (saved) return JSON.parse(saved);
+    localStorage.setItem(STORAGE_KEY_NOTES, JSON.stringify(inMemoryNotes));
   } catch (e) {
     // ignore
   }
-  return [
-    {
-      id: 'note-1',
-      lessonId: 'lsn-carpet-1',
-      timestampSeconds: 120,
-      content: 'نکته کلیدی: برای دار تبریز کشش نخ‌های چله باید صدادار شبیه تار موسیقی باشد.',
-      createdAt: '2026-09-25T14:00:00Z',
-    },
-  ];
-})();
+}
 
 export const courseService = {
   /**
@@ -129,16 +139,18 @@ export const courseService = {
     // and must ALSO be validated here. Previously an expired membership
     // (status still 'active' in localStorage) granted full lesson access.
     const userMembership = user.membership;
-    if (
-      !userMembership ||
-      userMembership.status !== 'active' ||
-      new Date(userMembership.expiresAt).getTime() <= Date.now()
-    ) {
+    // BUG-32: the manual `new Date(...).getTime() <= Date.now()` comparison made
+    // NaN-expiry (corrupted date) evaluate to `NaN <= x` === false → access GRANTED.
+    // The shared isLive() fails closed on invalid dates, matching
+    // membershipService.isMembershipLive.
+    const expiryIsLive = !!userMembership && isLive(userMembership.expiresAt);
+    if (!userMembership || userMembership.status !== 'active' || !expiryIsLive) {
       return {
         canAccess: false,
-        reason: userMembership && new Date(userMembership.expiresAt).getTime() <= Date.now()
-          ? 'اشتراک شما منقضی شده است. برای دسترسی مجدد، اشتراک خود را تمدید کنید.'
-          : `برای مشاهده این درس، نیاز به خرید یا تمدید اشتراک ${lesson.requiredTier === 'gold' ? 'طلایی' : lesson.requiredTier === 'silver' ? 'نقره‌ای' : 'برنزی'} دارید.`,
+        reason:
+          userMembership && !expiryIsLive
+            ? 'اشتراک شما منقضی شده است. برای دسترسی مجدد، اشتراک خود را تمدید کنید.'
+            : `برای مشاهده این درس، نیاز به خرید یا تمدید اشتراک ${lesson.requiredTier === 'gold' ? 'طلایی' : lesson.requiredTier === 'silver' ? 'نقره‌ای' : 'برنزی'} دارید.`,
         requiredTier: lesson.requiredTier,
       };
     }
@@ -165,27 +177,52 @@ export const courseService = {
    * Get notes for a lesson
    */
   getNotes(lessonId: string): LessonNote[] {
-    return inMemoryNotes.filter((n) => n.lessonId === lessonId);
+    // BUG-30: notes are per-user — filter by the current user id.
+    // Legacy rows without `userId` keep userId === '' on load, so they belong
+    // to no one and stay hidden (soft migration, no rewrite script needed).
+    const currentUserId = authService.getCurrentUser()?.id ?? 'guest';
+    return inMemoryNotes.filter((n) => n.lessonId === lessonId && n.userId === currentUserId);
   },
 
   /**
    * Save a note
    */
   addNote(lessonId: string, timestampSeconds: number, content: string): LessonNote {
+    // BUG-31: timestamp must be a finite non-negative number.
+    const ts = Number(timestampSeconds);
+    if (!Number.isFinite(ts) || ts < 0) {
+      throw new Error('ثانیه یادداشت نامعتبر است');
+    }
+    // BUG-31: content must be non-empty after trim and at most 1000 chars.
+    const trimmedContent = (content ?? '').trim();
+    if (trimmedContent.length === 0) {
+      throw new Error('متن یادداشت نمی‌تواند خالی باشد.');
+    }
+    if (trimmedContent.length > 1000) {
+      throw new Error('متن یادداشت حداکثر ۱۰۰۰ کاراکتر است');
+    }
+
     const newNote: LessonNote = {
       id: `note-${Date.now()}`,
       lessonId,
-      timestampSeconds,
-      content,
+      // BUG-30: stamp the author so notes never leak across accounts.
+      userId: authService.getCurrentUser()?.id ?? 'guest',
+      timestampSeconds: ts,
+      content: trimmedContent,
       createdAt: new Date().toISOString(),
     };
     inMemoryNotes.push(newNote);
-    try {
-      localStorage.setItem(STORAGE_KEY_NOTES, JSON.stringify(inMemoryNotes));
-    } catch (e) {
-      // ignore
-    }
+    persistNotes();
     return newNote;
+  },
+
+  /**
+   * BUG-31: delete one note by id (memory + storage). Exported for the
+   * upcoming UI wiring (delete button on each note).
+   */
+  deleteNote(noteId: string): void {
+    inMemoryNotes = inMemoryNotes.filter((n) => n.id !== noteId);
+    persistNotes();
   },
 
   /**

@@ -4,6 +4,16 @@
  */
 
 import { Course, EditorialPage, HomepageSectionConfig, MembershipPlan, PaymentOrder, UserProfile } from '../types';
+import { formatJalali } from '../utils/format';
+
+/**
+ * LOW-SEVERITY FIX: demo membership dates are now RELATIVE to Date.now()
+ * (started 22 days ago, expires in 8 days) so the demo student never shows an
+ * expired subscription no matter when the prototype is opened. The old static
+ * 2026-09-20 → 2026-10-20 window rotted as real time moved on.
+ */
+const DEMO_MEMBERSHIP_STARTED_AT = new Date(Date.now() - 22 * 24 * 60 * 60 * 1000).toISOString();
+const DEMO_MEMBERSHIP_EXPIRES_AT = new Date(Date.now() + 8 * 24 * 60 * 60 * 1000).toISOString();
 
 export const INITIAL_USERS: UserProfile[] = [
   {
@@ -18,14 +28,30 @@ export const INITIAL_USERS: UserProfile[] = [
       planId: 'plan-bronze-1m',
       planName: 'اشتراک برنزی ماهانه',
       status: 'active',
-      startedAt: '2026-09-20T10:00:00Z',
-      expiresAt: '2026-10-20T10:00:00Z',
-      formattedExpireDateJalali: '۱۴۰۵/۰۷/۲۸',
+      startedAt: DEMO_MEMBERSHIP_STARTED_AT,
+      expiresAt: DEMO_MEMBERSHIP_EXPIRES_AT,
+      // LOW-SEVERITY FIX: derived live from the relative expiry (Persian digits,
+      // matching seed-data style) instead of a hardcoded string.
+      formattedExpireDateJalali: formatJalali(DEMO_MEMBERSHIP_EXPIRES_AT),
       daysRemaining: 8,
     },
     completedLessonIds: ['lsn-carpet-1', 'lsn-carpet-2'],
     bookmarkedLessonIds: ['lsn-carpet-3', 'lsn-kilim-1'],
     createdAt: '2026-08-15T12:00:00Z',
+  },
+  {
+    // LOW-SEVERITY FIX: second demo student — owner of the pending receipt
+    // ord-103. Previously ord-103 referenced a user that existed nowhere, so
+    // approving it silently dropped the grant; with this seed the BUG-46
+    // registry-grant path is exercised end-to-end.
+    id: 'user-std-2',
+    phoneNumber: '09121234567',
+    maskedPhone: '۰۹۱۲***۴۵۶۷',
+    fullName: 'نرگس کریمی',
+    role: 'student',
+    completedLessonIds: [],
+    bookmarkedLessonIds: [],
+    createdAt: '2026-09-01T09:00:00Z',
   },
   {
     id: 'user-adm-1',
@@ -579,7 +605,9 @@ export const INITIAL_ORDERS: PaymentOrder[] = [
     userFullName: 'سارا احمدی',
     itemType: 'membership',
     itemId: 'plan-bronze-1m',
-    itemTitle: 'اشتراک برنزی ۱ ماهه',
+    // LOW-SEVERITY FIX: derived from the ACTUAL plan title («اشتراک برنزی»)
+    // instead of the invented «اشتراک برنزی ۱ ماهه».
+    itemTitle: 'اشتراک برنزی',
     amountToman: 99000,
     gateway: 'zibal',
     status: 'completed',
@@ -615,7 +643,9 @@ export const INITIAL_ORDERS: PaymentOrder[] = [
     id: 'ord-103',
     orderNumber: 'MD-84912',
     userId: 'user-std-2',
-    userPhone: '09351112233',
+    // LOW-SEVERITY FIX: aligned with the seeded user-std-2 phone so the ledger
+    // row and the registry entry describe the same person.
+    userPhone: '09121234567',
     userFullName: 'نرگس کریمی',
     itemType: 'membership',
     itemId: 'plan-gold-12m',
