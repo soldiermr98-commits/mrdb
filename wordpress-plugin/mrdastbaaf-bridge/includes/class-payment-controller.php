@@ -49,6 +49,46 @@ class MrDastbaaf_Payment_Controller {
     }
 
     /**
+     * DATA-INTEGRITY FIX (BUG-15): order_number دارای UNIQUE KEY است اما قبلاً با
+     * wp_rand(10000, 99999) تولید می‌شد (فضای ۹۰هزار عددی). در برخورد،
+     * $wpdb->insert بی‌صدا شکست می‌خورد و کد ادامه می‌یافت: کاربر پیام موفقیت
+     * می‌گرفت در حالی که سفارشی در دیتابیس ثبت نشده بود (پرداخت بدون فاکتور).
+     * این هلپر شماره یکتا تولید می‌کند و برخورد را با تلاش مجدد حل می‌کند.
+     */
+    private function generate_unique_order_number() {
+        global $wpdb;
+        $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
+
+        for ($i = 0; $i < 5; $i++) {
+            $candidate = 'MD-' . wp_rand(10000, 99999);
+            $exists = $wpdb->get_var(
+                $wpdb->prepare("SELECT id FROM $table_orders WHERE order_number = %s LIMIT 1", $candidate)
+            );
+            if (null === $exists) {
+                return $candidate;
+            }
+        }
+
+        // fallback تقریباً غیرقابل‌تصور: پسوند زمانی (در محدوده varchar(30))
+        return 'MD-' . wp_rand(10000, 99999) . '-' . base_convert((string) time(), 10, 36);
+    }
+
+    /**
+     * DATA-INTEGRITY FIX (BUG-15): ثبت سفارش با بررسی نتیجه insert.
+     * اگر ثبت به هر دلیل شکست بخورد، به هیچ عنوان پاسخ موفقیت برگردانده نمی‌شود.
+     */
+    private function insert_order_or_fail(array $order_data) {
+        global $wpdb;
+        $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
+        $inserted = $wpdb->insert($table_orders, $order_data);
+        if (false === $inserted) {
+            error_log('MrDastbaaf: order insert failed — ' . $wpdb->last_error);
+            return new WP_Error('db_error', 'ثبت سفارش در پایگاه داده ناموفق بود. لطفاً دوباره تلاش کنید.', array('status' => 500));
+        }
+        return true;
+    }
+
+    /**
      * ایجاد فاکتور و درخواست شناسه پرداخت از زیبال (Server-to-Server Request)
      */
     public function handle_zibal_initiate(WP_REST_Request $request) {
@@ -65,11 +105,11 @@ class MrDastbaaf_Payment_Controller {
         }
 
         $order_id = 'ord_' . wp_generate_password(12, false);
-        $order_number = 'MD-' . wp_rand(10000, 99999);
+        $order_number = $this->generate_unique_order_number(); // BUG-15: یکتا
         $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
 
-        // ثبت سفارش اولیه با وضعیت pending
-        $wpdb->insert($table_orders, array(
+        // ثبت سفارش اولیه با وضعیت pending — DATA-INTEGRITY FIX (BUG-15): بررسی نتیجه
+        $insert_check = $this->insert_order_or_fail(array(
             'id' => $order_id,
             'order_number' => $order_number,
             'user_id' => $user_id,
@@ -81,6 +121,9 @@ class MrDastbaaf_Payment_Controller {
             'gateway' => 'zibal',
             'status' => 'pending',
         ));
+        if (is_wp_error($insert_check)) {
+            return $insert_check;
+        }
 
         /**
          * درخواست اتصال مستقیم از سرور به درگاه زیبال
@@ -171,7 +214,14 @@ class MrDastbaaf_Payment_Controller {
         ));
 
         if (is_wp_error($verify_response)) {
-            return new WP_Error('verify_failed', 'خطا در اعتبارسنجی سروری زیبال.', array('status' => 500));
+            /**
+             * SECURITY FIX (BUG-17): خطای شبکه/تایم‌اوت موقت به زیبال به معنای
+             * «پرداخت ناموفق» نیست — پول کاربر ممکن است کسر شده باشد. قبلاً سفارش
+             * بلافاصله failed می‌شد و مسیر بازیابی نداشت. اکنون سفارش pending می‌ماند
+             * تا کال‌بک بعدی یا ریکنسیلیشن دوره‌ای دوباره verify کند.
+             */
+            error_log('MrDastbaaf: zibal verify unreachable for track ' . $track_id . ' — ' . $verify_response->get_error_message());
+            return new WP_Error('verify_unreachable', 'ارتباط سرور با زیبال برقرار نشد؛ سفارش در وضعیت انتظار ماند و دوباره بررسی می‌شود.', array('status' => 502));
         }
 
         $verify_body = json_decode(wp_remote_retrieve_body($verify_response), true);
@@ -193,18 +243,26 @@ class MrDastbaaf_Payment_Controller {
         $ref_number = isset($verify_body['refNumber']) ? (string) $verify_body['refNumber'] : '';
         $now = current_time('mysql');
 
-        // ثبت موفقیت فاکتور
+        /**
+         * SECURITY FIX (BUG-14 caller): فعال‌سازی اشتراک «قبل از» علامت‌گذاری
+         * سفارش به‌عنوان completed انجام می‌شود. اگر grant_or_extend شکست بخورد
+         * (پلن حذف‌شده/خطای DB)، سفارش pending می‌ماند تا پشتیبانی دستی بررسی کند
+         * و پول کاربر بدون اشتراک گم نشود.
+         */
+        $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
+        $plan = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_plans WHERE id = %s", $order->plan_id));
+
+        $membership_result = MrDastbaaf_Membership_Helper::grant_or_extend($order->user_id, $plan, $order->id);
+        if (false === $membership_result) {
+            return new WP_Error('membership_grant_failed', 'پرداخت تایید شد اما فعال‌سازی خودکار اشتراک ممکن نشد؛ سفارش برای بررسی دستی پشتیبانی باقی ماند.', array('status' => 409));
+        }
+
+        // ثبت موفقیت فاکتور (بعد از فعال‌سازی موفق اشتراک)
         $wpdb->update($table_orders, array(
             'status' => 'completed',
             'zibal_ref_number' => $ref_number,
             'verified_at' => $now,
         ), array('id' => $order->id));
-
-        // فعال‌سازی/تمدید اشتراک کاربر — LOGIC FIX (BUG-04): تابع مشترک تمدید
-        $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
-        $plan = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_plans WHERE id = %s", $order->plan_id));
-
-        $membership_result = MrDastbaaf_Membership_Helper::grant_or_extend($order->user_id, $plan, $order->id);
 
         /**
          * TODO: ارسال پیامک تایید خرید/تمدید به هنرجو (الگوی اوتینو)
@@ -234,6 +292,34 @@ class MrDastbaaf_Payment_Controller {
         $deposit_date = sanitize_text_field($request->get_param('deposit_date'));
         $notes = sanitize_textarea_field($request->get_param('notes'));
 
+        /**
+         * INPUT VALIDATION FIX (BUG-16): قبلاً هر رشته‌ای بدون اعتبارسنجی ثبت می‌شد
+         * و رکوردهای مالی نامعتبر در صف بررسی ادمین جمع می‌شد. الگوها اکنون با
+         * نسخه کلاینت (فاز ۲) هم‌خوان است.
+         */
+        if (!preg_match('/^[0-9A-Za-z\\-]{4,30}$/', $tracking_code)) {
+            return new WP_Error('invalid_tracking_code', 'شماره پیگیری باید ۴ تا ۳۰ کاراکتر و فقط شامل عدد یا حرف انگلیسی باشد.', array('status' => 400));
+        }
+        if (!preg_match('/^[0-9]{4}$/', $card_last_four)) {
+            return new WP_Error('invalid_card_last_four', 'چهار رقم آخر کارت باید دقیقاً ۴ رقم عددی باشد.', array('status' => 400));
+        }
+        if ($deposit_date !== '' && !preg_match('/^[0-9\\x{0600}-\\x{06FF}\\/\\-\\. ]{4,20}$/u', $deposit_date)) {
+            return new WP_Error('invalid_deposit_date', 'تاریخ واریز وارد شده معتبر نیست.', array('status' => 400));
+        }
+        if (mb_strlen($notes) > 500) {
+            return new WP_Error('notes_too_long', 'توضیحات حداکثر ۵۰۰ کاراکتر است.', array('status' => 400));
+        }
+
+        /**
+         * RATE LIMIT FIX (BUG-16): حداکثر ۵ فیش در ساعت برای هر کاربر — جلوگیری
+         * از اسپم صف بررسی مالی توسط حساب‌های آلوده یا اسکریپت‌ها.
+         */
+        $rl_key = 'mrdastbaaf_transfer_rl_' . (int) $user_id;
+        $submitted_count = (int) get_transient($rl_key);
+        if ($submitted_count >= 5) {
+            return new WP_Error('rate_limited', 'تعداد فیش‌های ثبت‌شده در یک ساعت بیش از حد مجاز است. لطفاً کمی بعد دوباره تلاش کنید.', array('status' => 429));
+        }
+
         $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
         $plan = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_plans WHERE id = %s", $plan_id));
         if (!$plan) {
@@ -241,12 +327,12 @@ class MrDastbaaf_Payment_Controller {
         }
 
         $order_id = 'ord_' . wp_generate_password(12, false);
-        $order_number = 'MD-' . wp_rand(10000, 99999);
+        $order_number = $this->generate_unique_order_number(); // BUG-15: یکتا
         $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
         $table_transfers = $wpdb->prefix . 'mrdastbaaf_manual_transfers';
 
-        // ثبت سفارش در وضعیت معلق
-        $wpdb->insert($table_orders, array(
+        // ثبت سفارش در وضعیت معلق — DATA-INTEGRITY FIX (BUG-15): بررسی نتیجه
+        $insert_check = $this->insert_order_or_fail(array(
             'id' => $order_id,
             'order_number' => $order_number,
             'user_id' => $user_id,
@@ -258,14 +344,26 @@ class MrDastbaaf_Payment_Controller {
             'gateway' => 'card_to_card',
             'status' => 'pending', // هیچ‌گاه مستقیماً فعال نمی‌شود!
         ));
+        if (is_wp_error($insert_check)) {
+            return $insert_check;
+        }
 
-        $wpdb->insert($table_transfers, array(
+        $transfer_inserted = $wpdb->insert($table_transfers, array(
             'order_id' => $order_id,
             'tracking_code' => $tracking_code,
             'card_last_four' => $card_last_four,
             'deposit_date_jalali' => $deposit_date,
             'sender_notes' => $notes,
         ));
+        if (false === $transfer_inserted) {
+            // سفارش یتیم نمی‌ماند — رکورد سفارش تازه‌ثبت‌شده حذف می‌شود
+            $wpdb->delete($table_orders, array('id' => $order_id));
+            error_log('MrDastbaaf: manual transfer insert failed — ' . $wpdb->last_error);
+            return new WP_Error('db_error', 'ثبت فیش واریزی ناموفق بود. لطفاً دوباره تلاش کنید.', array('status' => 500));
+        }
+
+        // شمارنده rate-limit فقط بعد از ثبت موفق افزایش می‌یابد
+        set_transient($rl_key, $submitted_count + 1, HOUR_IN_SECONDS);
 
         return rest_ensure_response(array(
             'success' => true,

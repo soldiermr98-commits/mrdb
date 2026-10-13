@@ -7,6 +7,7 @@ import { ManualTransferDetails, MembershipPlan, PaymentOrder, UserProfile } from
 import { authService } from './authService';
 import { membershipService } from './membershipService';
 import { orderStore } from './orderStore';
+import { formatJalali } from '../utils/format';
 
 export const transferService = {
   /**
@@ -20,8 +21,10 @@ export const transferService = {
   ): Promise<PaymentOrder> {
     await new Promise((res) => setTimeout(res, 500));
 
-    const orderId = `ord-${Date.now()}`;
-    const orderNumber = `MD-${Math.floor(10000 + Math.random() * 90000)}`;
+    // DATA-INTEGRITY FIX (BUG-20): collision-safe identifiers for the financial ledger
+    const orderId = orderStore.nextOrderId();
+    const orderNumber = orderStore.nextOrderNumber();
+    const createdAt = new Date().toISOString();
 
     const newOrder: PaymentOrder = {
       id: orderId,
@@ -35,8 +38,9 @@ export const transferService = {
       amountToman: plan.priceToman,
       gateway: 'card_to_card',
       status: 'pending', // NEVER mark paid automatically!
-      createdAt: new Date().toISOString(),
-      createdAtJalali: 'امروز',
+      createdAt,
+      // STALE-DATE FIX (BUG-23): real Jalali conversion instead of «امروز» placeholder
+      createdAtJalali: formatJalali(createdAt, true),
       manualTransferDetails: details,
     };
 
@@ -70,11 +74,12 @@ export const transferService = {
     if (!updated) throw new Error('سفارش یافت نشد.');
 
     // If current logged in user is the owner of this order, update their membership
+    // RENEWAL FIX (BUG-19): extend from the current expiry instead of resetting.
     const currentUser = authService.getCurrentUser();
     if (currentUser && currentUser.id === updated.userId) {
       const plan = membershipService.getPlanById(updated.itemId);
       if (plan) {
-        const membership = membershipService.createMembershipRecord(plan);
+        const membership = membershipService.grantOrExtend(currentUser, plan);
         authService.updateCurrentUser({ membership });
       }
     }

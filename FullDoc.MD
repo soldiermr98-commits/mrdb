@@ -386,4 +386,55 @@ npm run build
 4. `expiresAt` اشتراک در کلاینت فقط برای UX است؛ **منبع حقیقت** همیشه پاسخ `/auth/me` و `/memberships/my-status` سرور است.
 
 ---
+## ۱۱. گزارش فاز دوم: رفع باگ‌های High (High-Severity Bug Fixes — Phase 2)
+
+**نسخه اعمال‌شده:** افزونه وردپرس `1.0.2` — وب‌اپ PWA (پروتوتایپ)
+**نتیجه صحت‌سنجی:** `tsc --noEmit` بدون خطا؛ `vite build` + تولید Service Worker موفق؛ بازبینی دستی فایل‌های PHP (PHP CLI در محیط توسعه در دسترس نبود).
+
+### ۱۱-۱. باگ‌های سمت افزونه وردپرس (PHP)
+
+| شناسه | شدت | شرح باگ | فیکس اعمال‌شده | فایل |
+|---|---|---|---|---|
+| BUG-13 | High (مالی) | در `PUT /admin/plans/{id}` مقدار `intval(null) === 0` بود و شرط `($price >= 0)` برقرار می‌شد؛ هر درخواست ویرایشی که پارامتر `priceToman` را ارسال نمی‌کرد، **قیمت پلن را بی‌صدا صفر می‌کرد** (فروش رایگان). | قیمت فقط وقتی به‌روزرسانی می‌شود که پارامتر صریحاً ارسال شده باشد؛ اعتبارسنجی `is_numeric` و نامنفی بودن با پیام خطای 400 در غیر این صورت. | `class-admin-controller.php` |
+| BUG-14 | High (منطق مالی) | `grant_or_extend()` با `$plan = null` (مثلاً پلن حذف‌شده) **بی‌صدا اشتراک پیش‌فرض برنزی ۳۰ روزه** می‌ساخت/تمدید می‌کرد — پول اشتراک طلایی هدر می‌رفت. ضمناً ترتیب عملیات غلط بود: سفارش اول `completed` می‌شد و اگر فعال‌سازی شکست می‌خورد، کاربر پول داده و اشتراک نداشت. | هلپر با پلن نامعتبر یا خطای DB مقدار `false` برمی‌گرداند (با error_log)؛ هر دو فراخواننده (verify زیبال، تایید فیش ادمین) **اول** `grant_or_extend` را اجرا می‌کنند و فقط در صورت موفقیت سفارش را `completed` می‌کنند؛ در شکست خطای 409 با پیام «بررسی دستی پشتیبانی» برمی‌گردد و سفارش در صف باقی می‌ماند. | `class-membership-helper.php`، `class-payment-controller.php`، `class-admin-controller.php` |
+| BUG-15 | High (یکپارچگی مالی) | `order_number` دارای UNIQUE KEY است اما با `wp_rand(10000,99999)` تولید می‌شد؛ در برخورد، `$wpdb->insert` بی‌صدا شکست می‌خورد، کد ادامه می‌یافت و کاربر **پیام موفقیت می‌گرفت بدون سفارش ثبت‌شده** (در زیبال: پرداخت انجام می‌شود ولی verify سفارش را پیدا نمی‌کند). | هلپر `generate_unique_order_number()` با ۵ بار retry و fallback پسوند زمانی؛ هلپر `insert_order_or_fail()` که نتیجه insert را بررسی و در شکست خطای 500 برمی‌گرداند؛ در ثبت فیش، اگر درج رکورد فیش شکست بخورد سفارش یتیم حذف می‌شود (بدون رکورد نیمه‌کاره). | `class-payment-controller.php` |
+| BUG-16 | High (اعتبارسنجی مالی) | ثبت فیش کارت‌به‌کارت **بدون هیچ اعتبارسنجی و Rate-Limit** بود؛ هر رشته‌ای به‌عنوان tracking code / ۴ رقم کارت ثبت می‌شد و صف بررسی مالی قابل اسپم شدن بود. | اعتبارسنجی سرور-side: tracking_code مطابق `^[0-9A-Za-z\-]{4,30}$`، card_last_four دقیقاً `^[0-9]{4}$`، deposit_date با الگوی ارقام فارسی/انگلیسی، سقف ۵۰۰ کاراکتر توضیحات؛ **Rate-Limit ۵ فیش در ساعت** برای هر کاربر با transient (فقط پس از ثبت موفق افزایش می‌یابد). | `class-payment-controller.php` |
+| BUG-17 | High (منطق پرداخت) | در verify، خطای شبکه/تایم‌اوت موقت به زیبال (`is_wp_error`) سفارش را بلافاصله `failed` می‌کرد — در حالی که پول ممکن است کسر شده باشد و verify بعدی موفق شود؛ مسیر بازیابی وجود نداشت. | خطای ارتباطی (network/timeout) سفارش را **pending نگه می‌دارد** و 502 با پیام «دوباره بررسی می‌شود» برمی‌گرداند (کال‌بک بعدی یا ریکنسیلیشن دوره‌ای verify را تکرار می‌کند)؛ فقط ردِ صریح زیبال (`result != 100`) یا عدم تطابق مبلغ، سفارش را failed می‌کند. | `class-payment-controller.php` |
+
+### ۱۱-۲. باگ‌های سمت وب‌اپلیکیشن (TypeScript)
+
+| شناسه | شدت | شرح باگ | فیکس اعمال‌شده | فایل |
+|---|---|---|---|---|
+| BUG-18 | High (کنترل دسترسی) | فیلتر «دوره‌های در دسترس» داشبورد و بنر وضعیت اشتراک فقط `status === 'active'` را چک می‌کردند (فیکس BUG-08 فقط در گیت درس‌ها اعمال شده بود)؛ **اشتراک منقضی همچنان «فعال» نمایش داده می‌شد** و دوره‌های هم‌سطح را باز نشان می‌داد. | هلپر مشترک `membershipService.isMembershipLive(user)` (status=active **و** `expiresAt` در آینده)؛ استفاده در داشبورد هنرجو (فیلتر + بج وضعیت) و صفحه عضویت (بنر با حالت منقضی کهربایی و پیام تمدید). | `membershipService.ts`، `UserDashboardView.tsx`، `MembershipView.tsx` |
+| BUG-19 | High (منطق تمدید) | آینه کلاینت BUG-04: `createMembershipRecord` همیشه از «همین لحظه» انقضا را می‌ساخت؛ هنرجویی که ۲۰ روز قبل از انقضا تمدید می‌کرد، آن ۲۰ روز را از دست می‌داد (فقط سمت سرور فیکس شده بود). | متد مشترک `membershipService.grantOrExtend(user, plan)` — اگر اشتراک فعلی زنده باشد انقضای جدید از انقضای قبلی محاسبه می‌شود (حفظ روزها، حفظ startedAt)؛ در هر دو مسیر پرداخت کلاینت (verify زیبال + تایید فیش ادمین) جایگزین شد. | `membershipService.ts`، `paymentService.ts`، `transferService.ts` |
+| BUG-20 | High (یکپارچگی مالی) | شناسه سفارش `ord-${Date.now()}` (برخورد در دو سفارش هم‌میلی‌ثانیه/دو تب) و شماره سفارش ۵ رقمی تصادفی (برخورد پس از چند صد سفارش — فضای ۹۰هزار)؛ برای دفتر مالی خطرناک. | مولدهای مرکزی در `orderStore`: `nextOrderId()` (شمارنده درون‌پردازه + base36 زمان + رشته تصادفی) و `nextOrderNumber()` (`MD-XXXXX-XXXXX` با کنترل یکتایی نسبت به سفارش‌های موجود)؛ استفاده در هر دو سرویس. | `orderStore.ts`، `paymentService.ts`، `transferService.ts` |
+| BUG-21 | High (IDOR آینه‌ای) | `verifyZibalPayment` کلاینت، سفارش هر کاربری را بدون گارد مالکیت می‌پذیرفت — آینه حفره IDOR سرور که در فاز ۱ بسته شد. | بررسی `order.userId === currentUser.id` پیش از هر تغییر وضعیت؛ در عدم تطابق، خطای صریح «این سفارش متعلق به حساب فعلی نیست». | `paymentService.ts` |
+| BUG-22 | High (اعتبارسنجی) | فرم فیش کارت‌به‌کارت بدون اعتبارسنجی بود (حروف فارسی/کاراکتر نامربوط در شماره پیگیری و ۴ رقم آخر کارت پذیرفته می‌شد) — ناسازگار با اعتبارسنجی جدید سرور (BUG-16). | نرمال‌سازی ارقام فارسی→انگلیسی (`toEnglishDigits`) + اعتبارسنجی کلاینت دقیقاً هم‌الگوی سرور برای tracking code، ۴ رقم کارت و تاریخ واریز؛ پیام‌های خطای مشخص. | `ManualTransferModal.tsx`، `utils/format.ts` |
+| BUG-23 | High (داده نمایش) | روی سفارش‌ها placeholder جعلی ذخیره می‌شد (`createdAtJalali: 'هم‌اکنون'` / `'امروز'`) که برای همیشه در تاریخچه می‌ماند؛ ماژول‌های مختلف هم تبدیل جلالی خودشان را داشتند. | ماژول مشترک `src/utils/format.ts` (تبدیل جلالی Intl + fallback، `daysUntil`، `isLive`، `toEnglishDigits`، `formatToman`)؛ هنگام ثبت، تاریخ جلالی واقعی ذخیره و هنگام نمایش، زنده از `createdAt` رندر می‌شود (fallback رکوردهای قدیمی). | `utils/format.ts` (جدید)، `paymentService.ts`، `transferService.ts`، `UserDashboardView.tsx` |
+| BUG-24 | High (پنل ادمین) | ویرایش قیمت پلن در داشبورد ادمین بدون اعتبارسنجی بود (NaN/منفی ارسال می‌شد — آینه سرور BUG-13)؛ همچنین `daysRemaining` و تاریخ انقضای اشتراک مقادیر **منجمد زمان خرید** بودند. | اعتبارسنجی قیمت در `handleSavePlan` (رد NaN/منفی با دیالوگ خطا) + نرمال‌سازی ارقام فارسی در input + پیش‌نمایش زنده قیمت؛ نمایش روز باقی‌مانده و تاریخ انقضا به‌صورت زنده با `daysUntil`/`formatJalali`. | `AdminDashboardView.tsx`، `UserDashboardView.tsx`، `MembershipView.tsx`، `utils/format.ts` |
+
+### ۱۱-۳. فایل‌های تغییر یافته / ایجاد شده (فاز ۲)
+
+**ایجاد شده:**
+- `src/utils/format.ts` — util مشترک تاریخ جلالی/ارقام/روز باقی‌مانده (BUG-22/23/24)
+
+**اصلاح شده — PHP:**
+- `wordpress-plugin/mrdastbaaf-bridge/mrdastbaaf-bridge.php` (بامپ نسخه ۱.۰.۲)
+- `includes/class-membership-helper.php` (BUG-14) · `includes/class-payment-controller.php` (BUG-14/15/16/17) · `includes/class-admin-controller.php` (BUG-13/14)
+- `wordpress-plugin/README.md` (چنج‌لاگ ۱.۰.۲)
+
+**اصلاح شده — PWA:**
+- `src/services/orderStore.ts` (BUG-20) · `src/services/membershipService.ts` (BUG-18/19) · `src/services/paymentService.ts` (BUG-19/20/21/23) · `src/services/transferService.ts` (BUG-19/20/23)
+- `src/views/UserDashboardView.tsx` (BUG-18/23/24) · `src/views/MembershipView.tsx` (BUG-18/24) · `src/views/AdminDashboardView.tsx` (BUG-24)
+- `src/components/payment/ManualTransferModal.tsx` (BUG-22) · `CHANGELOG.md` (نسخه ۱.۰.۲)
+
+### ۱۱-۴. نکات مهاجرت برای استقرار (فاز ۲)
+
+1. **Reconciliation زیبال:** با BUG-17، سفارش‌هایی که در خطای شبکه pending می‌مانند نیاز به بررسی دوره‌ای دارند — یک کرون‌جاب پیشنهاد می‌شود که هر ۱۰ دقیقه سفارش‌های `pending` با `zibal_track_id` را دوباره verify کند (اندپوینت موجود با `cb_token` قابل فراخوانی است).
+2. **Rate-Limit فیش:** سقف ۵ فیش در ساعت برای هر کاربر با transient اعمال شده؛ اگر فرآیند بررسی فیش در ساعات کاری سنگین‌تر شد، این سقف را از طریق Option قابل تنظیم کنید.
+3. **ترتیب عملیات جدید:** از این پس اگر پلن یک سفارش حذف شده باشد، سفارش completed نمی‌شود و در صف با خطای «membership_grant_failed» می‌ماند — پنل ادمین باید این حالت را ببیند (در پروتوتایپ پیام خطا نمایش داده می‌شود).
+4. **هم‌خوانی اعتبارسنجی کلاینت/سرور:** الگوهای فیش (tracking code، ۴ رقم کارت، تاریخ) در `ManualTransferModal.tsx` و `class-payment-controller.php` باید هنگام تغییر هم‌زمان به‌روز شوند.
+5. رکوردهای قدیمی سفارش با `createdAtJalali` جعلی (هم‌اکنون/امروز) به‌طور خودکار در نمایش با تاریخ واقعی `createdAt` جایگزین می‌شوند؛ نیازی به migration داده نیست.
+
+---
 **توسعه‌یافته با بالاترین استانداردهای مهندسی نرم‌افزار برای مجموعه مستر دستباف**

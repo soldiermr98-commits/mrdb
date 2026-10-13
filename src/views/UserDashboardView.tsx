@@ -24,6 +24,8 @@ import {
 import { Course, PaymentOrder, UserProfile } from '../types';
 import { paymentService } from '../services/paymentService';
 import { courseService } from '../services/courseService';
+import { membershipService } from '../services/membershipService';
+import { formatJalali, daysUntil, formatToman } from '../utils/format';
 
 interface UserDashboardViewProps {
   currentUser: UserProfile;
@@ -52,12 +54,16 @@ export const UserDashboardView: React.FC<UserDashboardViewProps> = ({
       setOrders(ords);
 
       // Filter courses where user can access lessons
+      // ACCESS GATE FIX (BUG-18): mirrors courseService.canAccessLesson — the
+      // previous filter only checked membership.status, so an EXPIRED membership
+      // (status still 'active' in localStorage) listed all tier courses here.
+      const membershipIsLive = membershipService.isMembershipLive(currentUser);
       const accessible = allCourses.filter((c) => {
         if (currentUser.role === 'admin') return true;
-        if (!currentUser.membership || currentUser.membership.status !== 'active') return false;
-        if (currentUser.membership.tier === 'gold') return true;
-        if (currentUser.membership.tier === 'silver') return c.requiredTier !== 'gold';
-        if (currentUser.membership.tier === 'bronze') return c.requiredTier === 'bronze';
+        if (!membershipIsLive) return false;
+        if (currentUser.membership!.tier === 'gold') return true;
+        if (currentUser.membership!.tier === 'silver') return c.requiredTier !== 'gold';
+        if (currentUser.membership!.tier === 'bronze') return c.requiredTier === 'bronze';
         return false;
       });
 
@@ -67,9 +73,12 @@ export const UserDashboardView: React.FC<UserDashboardViewProps> = ({
   }, [currentUser]);
 
   const membership = currentUser.membership;
-  const isMembershipActive = membership?.status === 'active';
+  // LIVE STATUS FIX (BUG-18/BUG-24): «فعال» فقط وقتی status=active و انقضا در آینده باشد؛
+  // و روز باقی‌مانده به‌جای مقدار منجمدِ زمان خرید، زنده محاسبه می‌شود.
+  const isMembershipActive = membershipService.isMembershipLive(currentUser);
+  const liveDaysRemaining = membership ? daysUntil(membership.expiresAt) : 0;
 
-  const formatPrice = (p: number) => p.toLocaleString('fa-IR');
+  const formatPrice = (p: number) => formatToman(p);
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 space-y-6 pb-28">
@@ -135,10 +144,10 @@ export const UserDashboardView: React.FC<UserDashboardViewProps> = ({
               <div className="flex flex-wrap items-center gap-4 text-xs text-stone-300 pt-1">
                 <span className="flex items-center gap-1.5">
                   <Calendar className="w-3.5 h-3.5 text-amber-400" />
-                  اعتبار تا: {membership.formattedExpireDateJalali}
+                  اعتبار تا: {formatJalali(membership.expiresAt)}
                 </span>
                 <span className="text-amber-300 font-bold">
-                  ({membership.daysRemaining} روز باقی‌مانده)
+                  ({liveDaysRemaining} روز باقی‌مانده)
                 </span>
               </div>
             )}
@@ -250,7 +259,9 @@ export const UserDashboardView: React.FC<UserDashboardViewProps> = ({
                     </div>
 
                     <div className="flex items-center gap-3 text-[11px] text-stone-500">
-                      <span>{ord.createdAtJalali}</span>
+                      {/* LIVE-DATE FIX (BUG-23): render from the ISO timestamp; the
+                          stored createdAtJalali is only a fallback for legacy records. */}
+                      <span>{ord.createdAt ? formatJalali(ord.createdAt, true) : ord.createdAtJalali}</span>
                       <span>·</span>
                       <span>
                         روش: {ord.gateway === 'zibal' ? 'درگاه زیبال' : 'کارت به کارت'}

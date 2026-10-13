@@ -9,6 +9,7 @@ import { Modal } from '../common/Modal';
 import { MOCK_COMPANY_BANK_INFO } from '../../data/mockData';
 import { MembershipPlan, PaymentOrder, UserProfile } from '../../types';
 import { transferService } from '../../services/transferService';
+import { toEnglishDigits } from '../../utils/format';
 
 interface ManualTransferModalProps {
   isOpen: boolean;
@@ -47,17 +48,33 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
     e.preventDefault();
     setErrorMsg(null);
 
-    if (!trackingCode.trim() || !lastFour.trim()) {
-      setErrorMsg('لطفاً شماره پیگیری و ۴ رقم آخر کارت را وارد نمایید.');
+    /**
+     * INPUT VALIDATION FIX (BUG-22): قبلاً هر رشته‌ای (حروف فارسی، کاراکترهای
+     * نامربوط، طول غلط) بدون کنترل به سرور ارسال می‌شد و رکوردهای مالی نامعتبر
+     * در صف بررسی ادمین جمع می‌شد. الگوها دقیقاً با نسخه سرور (فاز ۲) هم‌خوان است.
+     */
+    const normalizedTracking = toEnglishDigits(trackingCode).trim();
+    const normalizedLastFour = toEnglishDigits(lastFour).trim();
+
+    if (!/^[0-9A-Za-z\-]{4,30}$/.test(normalizedTracking)) {
+      setErrorMsg('شماره پیگیری باید ۴ تا ۳۰ کاراکتر و فقط شامل عدد یا حرف انگلیسی باشد.');
+      return;
+    }
+    if (!/^[0-9]{4}$/.test(normalizedLastFour)) {
+      setErrorMsg('چهار رقم آخر کارت باید دقیقاً ۴ رقم عددی باشد (مثال: 4589).');
+      return;
+    }
+    if (depositDate.trim() && !/^[0-9\u0600-\u06FF\/\-\. ]{4,20}$/.test(depositDate.trim())) {
+      setErrorMsg('تاریخ واریز وارد شده معتبر نیست (مثال: ۱۴۰۵/۰۷/۲۰).');
       return;
     }
 
     setIsSubmitting(true);
     try {
       const order = await transferService.submitTransferReceipt(currentUser, plan, {
-        trackingCode: trackingCode.trim(),
-        sourceCardLastFour: lastFour.trim(),
-        depositDateJalali: depositDate,
+        trackingCode: normalizedTracking,
+        sourceCardLastFour: normalizedLastFour,
+        depositDateJalali: depositDate.trim(),
         receiptImageName,
         senderNotes: notes.trim(),
       });

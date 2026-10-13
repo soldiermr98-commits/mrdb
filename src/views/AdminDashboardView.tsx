@@ -45,6 +45,7 @@ import { transferService } from '../services/transferService';
 import { membershipService } from '../services/membershipService';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
 import { Modal } from '../components/common/Modal';
+import { toEnglishDigits, formatToman } from '../utils/format';
 
 interface AdminDashboardViewProps {
   currentUser: UserProfile;
@@ -172,6 +173,18 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const handleSavePlan = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingPlan) return;
+    // PRICE VALIDATION FIX (BUG-24): previously NaN/negative prices passed straight
+    // through to updatePlan (mirrors the server-side BUG-13 fix).
+    if (!Number.isFinite(editingPlan.priceToman) || editingPlan.priceToman < 0) {
+      setConfirmDialog({
+        isOpen: true,
+        title: 'قیمت نامعتبر است',
+        description: 'شهریه پلن باید عددی نامنفی باشد. لطفاً مقدار صحیح وارد کنید.',
+        variant: 'warning',
+        action: async () => setConfirmDialog((prev) => ({ ...prev, isOpen: false })),
+      });
+      return;
+    }
     await membershipService.updatePlan(editingPlan.id, editingPlan);
     setEditingPlan(null);
     loadData();
@@ -744,13 +757,26 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 <label className="block font-semibold text-stone-700 mb-1">شهریه (تومان):</label>
                 <input
                   type="number"
-                  value={editingPlan.priceToman}
-                  onChange={(e) =>
-                    setEditingPlan({ ...editingPlan, priceToman: Number(e.target.value) })
-                  }
+                  min={0}
+                  step={1000}
+                  value={Number.isFinite(editingPlan.priceToman) ? editingPlan.priceToman : ''}
+                  onChange={(e) => {
+                    // BUG-24: normalize Persian digits and reject non-numeric input
+                    const normalized = toEnglishDigits(e.target.value);
+                    const parsed = Number(normalized);
+                    setEditingPlan({ ...editingPlan, priceToman: normalized === '' || isNaN(parsed) ? NaN : parsed });
+                  }}
                   className="w-full p-2 bg-stone-50 border border-stone-200 rounded-xl font-mono"
                   required
                 />
+                {(!Number.isFinite(editingPlan.priceToman) || editingPlan.priceToman < 0) && (
+                  <p className="text-[10px] text-red-600 mt-1">شهریه باید عددی نامنفی باشد.</p>
+                )}
+                {Number.isFinite(editingPlan.priceToman) && editingPlan.priceToman >= 0 && (
+                  <p className="text-[10px] text-stone-400 mt-1">
+                    نمایشی: {formatToman(editingPlan.priceToman)} تومان
+                  </p>
+                )}
               </div>
               <div>
                 <label className="block font-semibold text-stone-700 mb-1">برچسب مدت:</label>

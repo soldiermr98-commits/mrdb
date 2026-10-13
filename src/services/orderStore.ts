@@ -40,6 +40,31 @@ function writeOrders(orders: PaymentOrder[]): void {
   }
 }
 
+/**
+ * DATA-INTEGRITY FIX (BUG-20, Phase 2): قبلاً شناسه سفارش `ord-${Date.now()}`
+ * و شماره سفارش یک عدد ۵ رقمی تصادفی بود. دو سفارش در همان میلی‌ثانیه (یا دو تب
+ * همزمان) شناسه یکسان می‌گرفتند و شماره ۵ رقمی بعد از چند صد سفارش برخورد
+ * می‌کرد — برای دفتر مالی غیرقابل قبول است. مولدهای مرکزی زیر یکتایی را تضمین
+ * می‌کنند (شمارنده درون-پردازه + پسوند زمانی base36 + کنترل تکراری بودن شماره
+ * در میان سفارش‌های موجود).
+ */
+let orderSeq = 0;
+
+function generateOrderId(): string {
+  orderSeq = (orderSeq + 1) % 10000;
+  return `ord-${Date.now().toString(36)}-${orderSeq.toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function generateOrderNumber(): string {
+  const used = new Set(readOrders().map((o) => o.orderNumber));
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const candidate = `MD-${Math.floor(10000 + Math.random() * 90000)}-${Date.now().toString(36).slice(-5).toUpperCase()}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  // practically unreachable fallback
+  return `MD-${Date.now().toString(36).toUpperCase()}`;
+}
+
 export const orderStore = {
   /** Return all orders, always read-through from localStorage. */
   getAll(): PaymentOrder[] {
@@ -80,5 +105,15 @@ export const orderStore = {
   /** Find one order by Zibal track id (read-through). */
   findByTrackId(trackId: string): PaymentOrder | null {
     return readOrders().find((o) => o.zibalTrackId === trackId) || null;
+  },
+
+  /** BUG-20: collision-safe order identifier for the financial ledger. */
+  nextOrderId(): string {
+    return generateOrderId();
+  },
+
+  /** BUG-20: collision-safe human-readable order number. */
+  nextOrderNumber(): string {
+    return generateOrderNumber();
   },
 };

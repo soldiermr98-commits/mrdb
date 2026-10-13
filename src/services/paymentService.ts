@@ -18,6 +18,7 @@ import { MembershipPlan, PaymentOrder, UserProfile } from '../types';
 import { authService } from './authService';
 import { membershipService } from './membershipService';
 import { orderStore } from './orderStore';
+import { formatJalali } from '../utils/format';
 
 export const paymentService = {
   /**
@@ -46,9 +47,11 @@ export const paymentService = {
   ): Promise<{ order: PaymentOrder; zibalTrackId: string; gatewayUrl: string }> {
     await new Promise((res) => setTimeout(res, 400));
 
-    const orderId = `ord-${Date.now()}`;
-    const orderNumber = `MD-${Math.floor(10000 + Math.random() * 90000)}`;
-    const trackId = `TRK-ZIBAL-${Date.now().toString().slice(-6)}`;
+    // DATA-INTEGRITY FIX (BUG-20): collision-safe identifiers for the financial ledger
+    const orderId = orderStore.nextOrderId();
+    const orderNumber = orderStore.nextOrderNumber();
+    const trackId = `TRK-ZIBAL-${Date.now().toString().slice(-6)}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+    const createdAt = new Date().toISOString();
 
     const newOrder: PaymentOrder = {
       id: orderId,
@@ -62,8 +65,10 @@ export const paymentService = {
       amountToman: plan.priceToman,
       gateway: 'zibal',
       status: 'pending',
-      createdAt: new Date().toISOString(),
-      createdAtJalali: 'هم‌اکنون',
+      createdAt,
+      // STALE-DATE FIX (BUG-23): real Jalali conversion instead of the fake
+      // «هم‌اکنون» placeholder that stayed forever in the order history.
+      createdAtJalali: formatJalali(createdAt, true),
       zibalTrackId: trackId,
     };
 
@@ -95,6 +100,16 @@ export const paymentService = {
     const order = orderStore.findById(orderId);
     if (!order) {
       throw new Error('سفارش مورد نظر در پایگاه داده یافت نشد.');
+    }
+
+    /**
+     * OWNERSHIP GUARD (BUG-21): mirror of the production IDOR protection —
+     * verify فقط برای سفارشی مجاز است که متعلق به کاربر لاگین فعلی باشد؛
+     * وگرنه هر کاربر لاگین‌شده می‌توانست سفارش pending دیگری را تکمیل کند.
+     */
+    const actingUser = authService.getCurrentUser();
+    if (!actingUser || actingUser.id !== order.userId) {
+      throw new Error('این سفارش متعلق به حساب کاربری فعلی شما نیست و امکان تایید آن وجود ندارد.');
     }
 
     if (simulatedOutcome === 'user_cancelled') {
@@ -136,10 +151,10 @@ export const paymentService = {
       zibalRefNumber: refNum,
     });
 
-    // Update current user's membership
+    // RENEWAL FIX (BUG-19): extend from the current expiry instead of resetting.
     const plan = membershipService.getPlanById(order.itemId);
     if (plan) {
-      const membershipRecord = membershipService.createMembershipRecord(plan);
+      const membershipRecord = membershipService.grantOrExtend(actingUser, plan);
       authService.updateCurrentUser({ membership: membershipRecord });
     }
 

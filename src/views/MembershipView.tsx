@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { Crown, CheckCircle, ShieldCheck, HelpCircle, ArrowLeft, AlertCircle, RefreshCw } from 'lucide-react';
 import { MembershipPlan, UserProfile } from '../types';
 import { membershipService } from '../services/membershipService';
+import { formatJalali, daysUntil } from '../utils/format';
 
 interface MembershipViewProps {
   onSelectPlan: (plan: MembershipPlan) => void;
@@ -74,14 +75,26 @@ export const MembershipView: React.FC<MembershipViewProps> = ({
       {currentUser?.membership && (
         <div className="bg-white border border-stone-200 rounded-2xl p-4 flex items-center justify-between shadow-xs">
           <div className="flex items-center gap-3">
-            <span className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
+            {/* LIVE STATUS FIX (BUG-18): expired memberships no longer show a
+                pulsing green dot and «فعال» — they show an amber expired state. */}
+            {membershipService.isMembershipLive(currentUser) ? (
+              <span className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
+            ) : (
+              <span className="w-3 h-3 rounded-full bg-amber-500" />
+            )}
             <div>
               <p className="font-bold text-xs text-stone-900">
                 اشتراک فعلی شما: <span className="text-amber-800">{currentUser.membership.planName}</span>
               </p>
-              <p className="text-[11px] text-stone-500">
-                تاریخ انقضا: {currentUser.membership.formattedExpireDateJalali} ({currentUser.membership.daysRemaining} روز باقی‌مانده)
-              </p>
+              {membershipService.isMembershipLive(currentUser) ? (
+                <p className="text-[11px] text-stone-500">
+                  تاریخ انقضا: {formatJalali(currentUser.membership.expiresAt)} ({daysUntil(currentUser.membership.expiresAt)} روز باقی‌مانده)
+                </p>
+              ) : (
+                <p className="text-[11px] text-amber-700 font-semibold">
+                  این اشتراک منقضی شده است — برای دسترسی مجدد تمدید کنید.
+                </p>
+              )}
             </div>
           </div>
           <button

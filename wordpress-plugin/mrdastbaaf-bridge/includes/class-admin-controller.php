@@ -149,6 +149,20 @@ class MrDastbaaf_Admin_Controller {
         }
 
         if ($decision === 'approve') {
+            /**
+             * SECURITY FIX (BUG-14 caller): فعال‌سازی اشتراک «قبل از» completed شدن
+             * سفارش انجام می‌شود. اگر grant_or_extend شکست بخورد (پلن حذف‌شده یا
+             * خطای DB)، سفارش در صف باقی می‌ماند تا مشکل رفع شود — پول کاربر بدون
+             * اشتراک گم نمی‌شود و مدیر خطا را می‌بیند.
+             */
+            $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
+            $plan = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_plans WHERE id = %s", $order->plan_id));
+
+            $membership_result = MrDastbaaf_Membership_Helper::grant_or_extend($order->user_id, $plan, $order->id);
+            if (false === $membership_result) {
+                return new WP_Error('membership_grant_failed', 'تایید انجام شد اما فعال‌سازی اشتراک ناموفق بود؛ سفارش در صف بررسی باقی ماند. لطفاً پلن متناظر سفارش را بررسی کنید.', array('status' => 409));
+            }
+
             $wpdb->update($table_orders, array(
                 'status' => 'completed',
                 'verified_at' => $now,
@@ -159,12 +173,6 @@ class MrDastbaaf_Admin_Controller {
                 'reviewer_admin_id' => $reviewer_id,
                 'reviewed_at' => $now,
             ), array('order_id' => $order_id));
-
-            // فعال‌سازی اشتراک کاربر — LOGIC FIX (BUG-04): تمدید به‌جای رکورد تکراری
-            $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
-            $plan = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_plans WHERE id = %s", $order->plan_id));
-
-            $membership_result = MrDastbaaf_Membership_Helper::grant_or_extend($order->user_id, $plan, $order->id);
 
             do_action('mrdastbaaf_membership_granted', $order->user_id, $membership_result);
 
@@ -186,15 +194,27 @@ class MrDastbaaf_Admin_Controller {
         global $wpdb;
         $plan_id = sanitize_text_field($request->get_param('id'));
         $title = sanitize_text_field($request->get_param('title'));
-        $price = intval($request->get_param('priceToman'));
         $duration_label = sanitize_text_field($request->get_param('durationLabel'));
         $description = sanitize_textarea_field($request->get_param('description'));
         $is_active = $request->get_param('isActive') !== null ? (int)(bool)$request->get_param('isActive') : null;
 
-        $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
+        /**
+         * SECURITY FIX (BUG-13): قبلاً intval(null) === 0 و چون شرط ($price >= 0)
+         * برقرار بود، هر درخواستی که priceToman را ارسال نمی‌کرد، قیمت پلن را
+         * بی‌صدا صفر می‌کرد (فروش رایگان!). اکنون قیمت فقط وقتی به‌روزرسانی می‌شود
+         * که صریحاً ارسال شده، عدد معتبر و نامنفی باشد.
+         */
         $updates = array();
         if ($title) $updates['title'] = $title;
-        if ($price >= 0) $updates['price_toman'] = $price;
+
+        $price_param = $request->get_param('priceToman');
+        if ($price_param !== null && $price_param !== '') {
+            if (!is_numeric($price_param) || (int) $price_param < 0) {
+                return new WP_Error('invalid_price', 'قیمت پلن باید عددی و نامنفی باشد.', array('status' => 400));
+            }
+            $updates['price_toman'] = (int) $price_param;
+        }
+
         if ($duration_label) $updates['duration_label'] = $duration_label;
         if ($description) $updates['description'] = $description;
         if ($is_active !== null) $updates['is_active'] = $is_active;
