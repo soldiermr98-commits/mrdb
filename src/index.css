@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Vazirmatn', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  html {
+    direction: rtl;
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background-color: #fdfbf7;
+    color: #1e293b;
+    font-family: var(--font-sans);
+    overflow-x: hidden;
+  }
+}
+
+/* Subtle textile loom thread pattern */
+.bg-artisan-pattern {
+  background-color: #fdfbf7;
+  background-image: radial-gradient(#d97706 0.65px, transparent 0.65px), radial-gradient(#9a3412 0.65px, #fdfbf7 0.65px);
+  background-size: 26px 26px;
+  background-position: 0 0, 13px 13px;
+  background-opacity: 0.05;
+}
+
+/* Subtle kilim geometric weave accent */
+.bg-kilim-subtle {
+  background: 
+    linear-gradient(135deg, rgba(154, 52, 18, 0.03) 25%, transparent 25%) -20px 0,
+    linear-gradient(225deg, rgba(154, 52, 18, 0.03) 25%, transparent 25%) -20px 0,
+    linear-gradient(315deg, rgba(154, 52, 18, 0.03) 25%, transparent 25%),
+    linear-gradient(45deg, rgba(154, 52, 18, 0.03) 25%, transparent 25%);
+  background-size: 40px 40px;
+  background-color: #fdfbf7;
+}
+
+/* Watermark floating animation for lesson player */
+@keyframes watermarkFloat {
+  0% {
+    transform: translate(0, 0) rotate(-12deg);
+  }
+  25% {
+    transform: translate(60px, 40px) rotate(-8deg);
+  }
+  50% {
+    transform: translate(20px, 80px) rotate(-14deg);
+  }
+  75% {
+    transform: translate(80px, 20px) rotate(-10deg);
+  }
+  100% {
+    transform: translate(0, 0) rotate(-12deg);
+  }
+}
+
+.animate-watermark {
+  animation: watermarkFloat 18s ease-in-out infinite;
+}
+
+/* Mobile Safe Areas for Notch / Bottom navigation */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 1rem);
+}
+
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 1rem);
+}

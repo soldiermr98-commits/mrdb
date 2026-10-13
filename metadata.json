@@ -1,0 +1,6 @@
+{
+  "name": "مستر دستباف | پلتفرم آموزش صنایع دستی",
+  "description": "پلتفرم آموزشی و وب‌اپلیکیشن پیش‌رونده (PWA) تخصصی آموزش صنایع دستی، بافندگی، قالی‌بافی و گلیم‌بافی مستر دستباف",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
