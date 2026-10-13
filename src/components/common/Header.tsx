@@ -29,7 +29,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Brand identity */}
         <button
           onClick={() => onNavigate('home')}
-          className="flex items-center gap-2.5 text-right group focus:outline-none"
+          className="flex items-center gap-2.5 text-right group focus-visible:ring-2 focus-visible:ring-amber-600 focus-visible:outline-none rounded-xl"
         >
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-700 to-amber-900 flex items-center justify-center shadow-sm text-amber-100 group-hover:scale-105 transition transform">
             <svg
@@ -139,6 +139,8 @@ export const Header: React.FC<HeaderProps> = ({
               onClick={() => onNavigate('dashboard')}
               className="flex items-center gap-2 bg-stone-100 hover:bg-stone-200/80 text-stone-800 px-3 py-1.5 rounded-xl text-xs font-medium transition border border-stone-200"
               title="مشاهده داشبورد"
+              // BUG-67: icon-only on mobile (avatar) — needs an accessible name.
+              aria-label={`مشاهده داشبورد ${currentUser.fullName}`}
             >
               <div className="w-6 h-6 rounded-full bg-amber-800 text-white flex items-center justify-center text-[10px] font-bold">
                 {currentUser.fullName.slice(0, 1)}
@@ -149,6 +151,7 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               onClick={onOpenLogin}
               className="flex items-center gap-1.5 bg-amber-800 hover:bg-amber-900 text-white px-3.5 py-1.5 rounded-xl text-xs font-semibold transition shadow-xs"
+              aria-label="ورود با شماره موبایل"
             >
               <LogIn className="w-3.5 h-3.5" />
               <span>ورود با شماره موبایل</span>

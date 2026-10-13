@@ -36,6 +36,8 @@ import {
   EditorialPage,
   HomepageSectionConfig,
   MembershipPlan,
+  OrderStatus,
+  PaymentGatewayType,
   PaymentOrder,
   UserProfile,
 } from '../types';
@@ -72,6 +74,15 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [sections, setSections] = useState<HomepageSectionConfig[]>([]);
   const [editorialPages, setEditorialPages] = useState<EditorialPage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  // BUG-43e: loadData had no catch — one rejected service call left the whole
+  // admin panel silently empty. An explicit error banner + retry closes that.
+  const [loadError, setLoadError] = useState(false);
+
+  // DEV-16: orders/receipts filters — status, gateway and free-text search over
+  // buyer name / order number / item title (client-side, on the loaded orders).
+  const [orderStatusFilter, setOrderStatusFilter] = useState<'all' | OrderStatus>('all');
+  const [orderGatewayFilter, setOrderGatewayFilter] = useState<'all' | PaymentGatewayType>('all');
+  const [orderSearchQuery, setOrderSearchQuery] = useState('');
 
   // Modal / Confirm Dialog States
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -103,19 +114,28 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
   const loadData = async () => {
     setIsLoading(true);
-    const [ana, ords, pls, secs, pgs] = await Promise.all([
-      adminService.getAnalyticsSummary(),
-      paymentService.getAllOrders(),
-      membershipService.getAllPlans(),
-      adminService.getHomepageSections(),
-      adminService.getEditorialPages(),
-    ]);
-    setAnalytics(ana);
-    setOrders(ords);
-    setPlans(pls);
-    setSections(secs);
-    setEditorialPages(pgs);
-    setIsLoading(false);
+    setLoadError(false);
+    // BUG-43e: try/catch — previously an unhandled rejection inside Promise.all
+    // killed loadData mid-way (spinner state stuck, stale tables) with no
+    // recovery path. Now: error banner with a retry button.
+    try {
+      const [ana, ords, pls, secs, pgs] = await Promise.all([
+        adminService.getAnalyticsSummary(),
+        paymentService.getAllOrders(),
+        membershipService.getAllPlans(),
+        adminService.getHomepageSections(),
+        adminService.getEditorialPages(),
+      ]);
+      setAnalytics(ana);
+      setOrders(ords);
+      setPlans(pls);
+      setSections(secs);
+      setEditorialPages(pgs);
+    } catch (e) {
+      setLoadError(true);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -123,6 +143,37 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   }, []);
 
   const pendingReceipts = orders.filter((o) => o.gateway === 'card_to_card' && o.status === 'pending');
+
+  // DEV-16: Persian labels for every OrderStatus (the old table only knew
+  // completed/pending/«رد شده» and collapsed the new statuses together).
+  const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
+    pending: 'در انتظار بررسی',
+    completed: 'تایید شده',
+    failed: 'ناموفق',
+    cancelled: 'لغو شده',
+    verifying: 'در حال بررسی',
+    processing: 'در حال پردازش',
+    rejected: 'رد شده',
+  };
+
+  const orderStatusBadgeClass = (status: OrderStatus): string => {
+    if (status === 'completed') return 'bg-emerald-100 text-emerald-800';
+    if (status === 'pending') return 'bg-amber-100 text-amber-800';
+    if (status === 'verifying' || status === 'processing') return 'bg-stone-100 text-stone-700';
+    return 'bg-red-100 text-red-800';
+  };
+
+  // DEV-16: client-side filtering over the loaded orders
+  const filteredOrders = orders.filter((o) => {
+    if (orderStatusFilter !== 'all' && o.status !== orderStatusFilter) return false;
+    if (orderGatewayFilter !== 'all' && o.gateway !== orderGatewayFilter) return false;
+    if (orderSearchQuery.trim() !== '') {
+      const q = orderSearchQuery.trim().toLowerCase();
+      const haystack = `${o.userFullName} ${o.orderNumber} ${o.itemTitle}`.toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    return true;
+  });
 
   const handleApproveReceipt = (order: PaymentOrder) => {
     setConfirmDialog({
@@ -225,6 +276,28 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           <strong>الزام معماری امنیت سرور:</strong> دسترسی به این بخش در پروتوتایپ باز است. در نسخه نهایی وردپرس، تمامی فراخوانی‌ها باید با مجوزهای سطح ادمین (<code className="font-mono text-white">manage_options</code>) در بک‌اند اعتبارسنجی شوند.
         </div>
       </div>
+
+      {/* BUG-43e: load-error banner with retry */}
+      {loadError && (
+        <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 text-red-600 shrink-0" />
+            <div>
+              <p className="font-bold text-xs text-red-900">بارگذاری داده‌های مدیریت با خطا مواجه شد</p>
+              <p className="text-[11px] text-red-700 mt-0.5">
+                سفارش‌ها، پلن‌ها یا سکشن‌ها به‌روز نشدند؛ لطفاً دوباره تلاش کنید.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={loadData}
+            className="bg-red-700 hover:bg-red-800 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition flex items-center gap-1.5 min-h-11"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>تلاش مجدد</span>
+          </button>
+        </div>
+      )}
 
       {/* Analytics Metric Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -598,7 +671,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   <h3 className="font-bold text-stone-900 text-sm">{page.title}</h3>
                   <p className="text-stone-500 text-[11px] mt-1">{page.excerpt}</p>
                   <span className="text-[10px] text-stone-400 mt-1 block">
-                    آخرین به‌روزرسانی: {page.lastUpdatedJalali} · پیوند: /{page.slug}
+                    آخرین به‌روزرسانی: {page.lastUpdatedJalali} · پیوند: #/{page.slug}
                   </span>
                 </div>
 
@@ -628,6 +701,56 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         <div className="bg-white rounded-3xl p-5 border border-stone-200/90 shadow-xs space-y-4">
           <h2 className="text-sm sm:text-base font-bold text-amber-950">دفتر کل سفارش‌ها و تراکنش‌ها</h2>
 
+          {/* DEV-16: status / gateway filters + free-text search (buyer name,
+              order number, item title) — client-side over the loaded orders. */}
+          <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2">
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={orderSearchQuery}
+                onChange={(e) => setOrderSearchQuery(e.target.value)}
+                placeholder="جستجوی خریدار، شماره سفارش یا عنوان..."
+                className="w-full pr-9 pl-3 py-3 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-700/30 focus:border-amber-700 transition"
+              />
+              <Search className="w-4 h-4 text-stone-400 absolute right-3 top-3.5" />
+            </div>
+
+            <select
+              value={orderStatusFilter}
+              onChange={(e) => setOrderStatusFilter(e.target.value as 'all' | OrderStatus)}
+              className="bg-stone-50 border border-stone-200 rounded-xl text-xs px-3 py-3 text-stone-800 focus:outline-none focus:border-amber-700"
+            >
+              <option value="all">همه وضعیت‌ها</option>
+              <option value="pending">در انتظار بررسی</option>
+              <option value="completed">تایید شده</option>
+              <option value="failed">ناموفق</option>
+              <option value="cancelled">لغو شده</option>
+              <option value="verifying">در حال بررسی</option>
+              <option value="processing">در حال پردازش</option>
+            </select>
+
+            <select
+              value={orderGatewayFilter}
+              onChange={(e) => setOrderGatewayFilter(e.target.value as 'all' | PaymentGatewayType)}
+              className="bg-stone-50 border border-stone-200 rounded-xl text-xs px-3 py-3 text-stone-800 focus:outline-none focus:border-amber-700"
+            >
+              <option value="all">همه درگاه‌ها</option>
+              <option value="zibal">درگاه زیبال</option>
+              <option value="card_to_card">کارت به کارت</option>
+            </select>
+          </div>
+
+          <p className="text-[11px] text-stone-500">
+            نمایش {filteredOrders.length.toLocaleString('fa-IR')} سفارش از {orders.length.toLocaleString('fa-IR')} سفارش ثبت‌شده
+          </p>
+
+          {filteredOrders.length === 0 ? (
+            <div className="py-10 text-center text-stone-400 space-y-1">
+              <Search className="w-8 h-8 mx-auto" />
+              <p className="font-bold text-stone-700 text-xs">سفارشی با این فیلترها یافت نشد.</p>
+              <p className="text-[11px]">عبارت جستجو یا فیلترها را تغییر دهید.</p>
+            </div>
+          ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-right">
               <thead>
@@ -641,7 +764,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100 text-stone-700">
-                {orders.map((ord) => (
+                {filteredOrders.map((ord) => (
                   <tr key={ord.id}>
                     <td className="py-2.5 font-mono text-stone-900 font-bold">{ord.orderNumber}</td>
                     <td className="py-2.5">
@@ -656,19 +779,11 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     </td>
                     <td className="py-2.5">
                       <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          ord.status === 'completed'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : ord.status === 'pending'
-                            ? 'bg-amber-100 text-amber-800'
-                            : 'bg-red-100 text-red-800'
-                        }`}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${orderStatusBadgeClass(ord.status)}`}
                       >
-                        {ord.status === 'completed'
-                          ? 'تایید شده'
-                          : ord.status === 'pending'
-                          ? 'در انتظار بررسی'
-                          : 'رد شده'}
+                        {/* DEV-16: full Persian label map (includes cancelled/
+                            verifying/processing instead of a blanket «رد شده») */}
+                        {ORDER_STATUS_LABELS[ord.status]}
                       </span>
                     </td>
                   </tr>
@@ -676,6 +791,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               </tbody>
             </table>
           </div>
+          )}
         </div>
       )}
 

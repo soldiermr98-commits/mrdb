@@ -28,6 +28,8 @@ export const BottomNav: React.FC<BottomNavProps> = ({
         {/* 1. Home */}
         <button
           onClick={() => onNavigate('home')}
+          aria-label="خانه"
+          aria-current={activeView === 'home' ? 'page' : undefined}
           className={`flex flex-col items-center justify-center py-1.5 px-3 rounded-xl transition min-w-[60px] min-h-[48px] ${
             activeView === 'home'
               ? 'text-amber-800 font-bold'
@@ -41,6 +43,8 @@ export const BottomNav: React.FC<BottomNavProps> = ({
         {/* 2. Courses Catalogue */}
         <button
           onClick={() => onNavigate('catalogue')}
+          aria-label="دوره‌ها"
+          aria-current={activeView === 'catalogue' ? 'page' : undefined}
           className={`flex flex-col items-center justify-center py-1.5 px-3 rounded-xl transition min-w-[60px] min-h-[48px] ${
             activeView === 'catalogue'
               ? 'text-amber-800 font-bold'
@@ -54,6 +58,8 @@ export const BottomNav: React.FC<BottomNavProps> = ({
         {/* 3. Membership */}
         <button
           onClick={() => onNavigate('membership')}
+          aria-label="عضویت"
+          aria-current={activeView === 'membership' ? 'page' : undefined}
           className={`flex flex-col items-center justify-center py-1.5 px-3 rounded-xl transition min-w-[60px] min-h-[48px] ${
             activeView === 'membership'
               ? 'text-amber-800 font-bold'
@@ -73,6 +79,8 @@ export const BottomNav: React.FC<BottomNavProps> = ({
               onOpenLogin();
             }
           }}
+          aria-label={isLoggedIn ? 'داشبورد من' : 'ورود به حساب'}
+          aria-current={activeView === 'dashboard' ? 'page' : undefined}
           className={`flex flex-col items-center justify-center py-1.5 px-3 rounded-xl transition min-w-[60px] min-h-[48px] ${
             activeView === 'dashboard'
               ? 'text-amber-800 font-bold'
@@ -87,6 +95,8 @@ export const BottomNav: React.FC<BottomNavProps> = ({
         {userRole === 'admin' && (
           <button
             onClick={() => onNavigate('admin')}
+            aria-label="پنل مدیریت"
+            aria-current={activeView === 'admin' ? 'page' : undefined}
             className={`flex flex-col items-center justify-center py-1.5 px-3 rounded-xl transition min-w-[60px] min-h-[48px] ${
               activeView === 'admin'
                 ? 'text-red-700 font-bold'

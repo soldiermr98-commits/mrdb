@@ -3,7 +3,7 @@
  * @description Course overview, instructor details, learning outcomes, and syllabus access lock
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   ArrowRight,
   Clock,
@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Course, Lesson, UserProfile } from '../types';
 import { courseService } from '../services/courseService';
+import { AsyncState } from '../components/common/AsyncState';
 
 interface CourseDetailViewProps {
   courseId: string;
@@ -38,23 +39,73 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
 }) => {
   const [course, setCourse] = useState<Course | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [lockedModalLesson, setLockedModalLesson] = useState<Lesson | null>(null);
 
-  useEffect(() => {
-    courseService.getCourseById(courseId).then((c) => {
-      setCourse(c);
-      setIsLoading(false);
-    });
+  const loadCourse = useCallback(() => {
+    setIsLoading(true);
+    setLoadError(false);
+    // BUG-43a: the old effect had no catch — a rejected load spun forever. Also
+    // a `null` course (unknown courseId) fell into the same spinner branch.
+    courseService
+      .getCourseById(courseId)
+      .then((c) => {
+        setCourse(c);
+        setIsLoading(false);
+      })
+      .catch(() => {
+        setLoadError(true);
+        setIsLoading(false);
+      });
   }, [courseId]);
 
-  if (isLoading || !course) {
+  useEffect(() => {
+    loadCourse();
+  }, [loadCourse]);
+
+  if (isLoading) {
     return (
-      <div className="max-w-4xl mx-auto px-4 py-20 text-center text-xs text-stone-500">
-        <div className="w-8 h-8 border-3 border-amber-800 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-        در حال بارگذاری اطلاعات دوره...
+      <AsyncState status="loading" loadingLabel="در حال بارگذاری اطلاعات دوره..." />
+    );
+  }
+
+  if (loadError) {
+    // BUG-43a: explicit error card with retry
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-6">
+        <AsyncState
+          status="error"
+          error="اطلاعات دوره بارگذاری نشد. لطفاً دوباره تلاش کنید."
+          onRetry={loadCourse}
+        />
       </div>
     );
   }
+
+  if (!course) {
+    // BUG-43a: unknown courseId no longer spins forever — explicit not-found
+    // card with a way back to the catalogue.
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-6 space-y-4">
+        <button
+          onClick={() => onNavigate('catalogue')}
+          className="flex items-center gap-1.5 text-xs font-semibold text-stone-600 hover:text-amber-850 transition"
+        >
+          <ArrowRight className="w-4 h-4" />
+          <span>بازگشت به لیست دوره‌ها</span>
+        </button>
+        <AsyncState
+          status="empty"
+          emptyTitle="دوره یافت نشد"
+          emptyDescription="دوره‌ای با این نشانی وجود ندارد یا حذف شده است. از فهرست دوره‌ها گزینه دیگری را انتخاب کنید."
+        />
+      </div>
+    );
+  }
+
+  // DEV-4: completed-lesson checkmarks (live — currentUser comes from App state
+  // and refreshes whenever the player marks a lesson complete).
+  const completedLessonIds = currentUser?.completedLessonIds ?? [];
 
   const handleLessonClick = (lesson: Lesson) => {
     const access = courseService.canAccessLesson(currentUser, lesson);
@@ -217,18 +268,30 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
               <div className="divide-y divide-stone-100">
                 {section.lessons.map((lesson) => {
                   const access = courseService.canAccessLesson(currentUser, lesson);
+                  // DEV-4: ✓ mark for lessons already completed by this user
+                  const isCompleted = completedLessonIds.includes(lesson.id);
 
                   return (
                     <div
                       key={lesson.id}
-                      className="p-3.5 flex items-center justify-between gap-3 hover:bg-stone-50/60 transition"
+                      className={`p-3.5 flex items-center justify-between gap-3 hover:bg-stone-50/60 transition ${
+                        isCompleted ? 'bg-emerald-50/40' : ''
+                      }`}
                     >
                       <div className="flex items-center gap-3">
                         <span className="w-6 h-6 rounded-full bg-stone-100 text-stone-600 text-xs font-mono font-bold flex items-center justify-center shrink-0">
                           {lesson.order}
                         </span>
                         <div>
-                          <p className="text-xs font-bold text-stone-800">{lesson.title}</p>
+                          <p className="text-xs font-bold text-stone-800 flex items-center gap-1.5">
+                            <span>{lesson.title}</span>
+                            {isCompleted && (
+                              <CheckCircle
+                                className="w-3.5 h-3.5 text-emerald-600 shrink-0"
+                                aria-label="تکمیل شده"
+                              />
+                            )}
+                          </p>
                           <div className="flex items-center gap-3 text-[11px] text-stone-500 mt-0.5">
                             <span className="flex items-center gap-1 font-mono">
                               <Clock className="w-3 h-3" />

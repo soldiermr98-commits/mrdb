@@ -9,17 +9,16 @@ import {
   ArrowLeft,
   Crown,
   BookOpen,
-  Award,
   CheckCircle,
-  HelpCircle,
   ChevronDown,
-  Layers,
   HeartHandshake,
   Play,
   Flame,
 } from 'lucide-react';
+// BUG-52: unused icon imports removed (Award, HelpCircle, Layers). BookOpen
+// stays — it is used by the DEV/BUG-53 featured empty-state card.
 import { Course, CourseCategory, HomepageSectionConfig, MembershipPlan } from '../types';
-import { INITIAL_HOMEPAGE_SECTIONS, INITIAL_MEMBERSHIP_PLANS } from '../data/mockData';
+import { INITIAL_HOMEPAGE_SECTIONS } from '../data/mockData';
 import { adminService } from '../services/adminService';
 import { courseService } from '../services/courseService';
 import { membershipService } from '../services/membershipService';
@@ -38,20 +37,67 @@ export const HomeView: React.FC<HomeViewProps> = ({
 }) => {
   const [sections, setSections] = useState<HomepageSectionConfig[]>(INITIAL_HOMEPAGE_SECTIONS);
   const [featuredCourses, setFeaturedCourses] = useState<Course[]>([]);
-  const [plans, setPlans] = useState<MembershipPlan[]>(INITIAL_MEMBERSHIP_PLANS);
+  // BUG-53: the full course list feeds the derived category counts (no more
+  // hardcoded cat.count values drifting from the real catalogue).
+  const [allCourses, setAllCourses] = useState<Course[]>([]);
+  const [plans, setPlans] = useState<MembershipPlan[]>([]);
+  const [isCoursesLoading, setIsCoursesLoading] = useState(true);
+  const [isPlansLoading, setIsPlansLoading] = useState(true);
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
 
   useEffect(() => {
-    adminService.getHomepageSections().then(setSections);
-    courseService.getCourses().then((c) => setFeaturedCourses(c.filter((item) => item.featured)));
-    membershipService.getActivePlans().then(setPlans);
+    let stale = false;
+    // BUG-43f: all three home loads previously ran bare (unhandled rejection on
+    // failure, no loading flags). Each now has .catch + minimal skeletons.
+    adminService
+      .getHomepageSections()
+      .then((s) => {
+        if (!stale) setSections(s);
+      })
+      .catch(() => {
+        // graceful: the INITIAL_HOMEPAGE_SECTIONS fallback stays on screen
+      });
+
+    courseService
+      .getCourses()
+      .then((c) => {
+        if (stale) return;
+        setAllCourses(c);
+        setFeaturedCourses(c.filter((item) => item.featured));
+        setIsCoursesLoading(false);
+      })
+      .catch(() => {
+        if (!stale) setIsCoursesLoading(false);
+      });
+
+    membershipService
+      .getActivePlans()
+      .then((p) => {
+        if (!stale) {
+          setPlans(p);
+          setIsPlansLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!stale) setIsPlansLoading(false);
+      });
+
+    return () => {
+      stale = true;
+    };
   }, []);
 
+  // BUG-53: live per-category counts derived from courseService data
+  const categoryCountByTitle = new Map<string, number>();
+  allCourses.forEach((c) => {
+    categoryCountByTitle.set(c.category, (categoryCountByTitle.get(c.category) ?? 0) + 1);
+  });
+
   const categories: Array<{ title: CourseCategory; desc: string; icon: string; count: number }> = [
-    { title: 'قالی‌بافی و گلیم', desc: 'گره ترکی، چله‌کشی تبریز و نقوش ایلیاتی', icon: '🧶', count: 4 },
-    { title: 'رودوزی‌های سنتی', desc: 'پته‌دوزی کرمان و سوزن‌دوزی‌های اصیل', icon: '🪡', count: 2 },
-    { title: 'مکرمه و منسوجات', desc: 'گره‌بافی مدرن و دکوراتیو دست‌ساز', icon: '🧵', count: 3 },
-    { title: 'رنگرزی طبیعی', desc: 'استخراج رنگ گیاهی از روناس و پوست گردو', icon: '🌿', count: 2 },
+    { title: 'قالی‌بافی و گلیم', desc: 'گره ترکی، چله‌کشی تبریز و نقوش ایلیاتی', icon: '🧶', count: categoryCountByTitle.get('قالی‌بافی و گلیم') ?? 0 },
+    { title: 'رودوزی‌های سنتی', desc: 'پته‌دوزی کرمان و سوزن‌دوزی‌های اصیل', icon: '🪡', count: categoryCountByTitle.get('رودوزی‌های سنتی') ?? 0 },
+    { title: 'مکرمه و منسوجات', desc: 'گره‌بافی مدرن و دکوراتیو دست‌ساز', icon: '🧵', count: categoryCountByTitle.get('مکرمه و منسوجات') ?? 0 },
+    { title: 'رنگرزی طبیعی', desc: 'استخراج رنگ گیاهی از روناس و پوست گردو', icon: '🌿', count: categoryCountByTitle.get('رنگرزی طبیعی') ?? 0 },
   ];
 
   const faqs = [
@@ -179,7 +225,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
                       {cat.desc}
                     </p>
                     <span className="inline-block mt-2 text-[10px] text-amber-800 font-medium">
-                      {cat.count} دوره تخصصی
+                      {/* BUG-53: derived from live courseService data — an empty
+                          category reads «به‌زودی» instead of a wrong «۰ دوره». */}
+                      {cat.count > 0 ? `${cat.count.toLocaleString('fa-IR')} دوره تخصصی` : 'به‌زودی'}
                     </span>
                   </button>
                 ))}
@@ -212,7 +260,29 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {isCoursesLoading ? (
+                // BUG-43f: minimal skeleton while the featured courses load
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {[0, 1, 2].map((i) => (
+                    <div key={i} className="bg-white rounded-2xl border border-stone-200/90 overflow-hidden shadow-xs">
+                      <div className="aspect-video bg-stone-200 animate-pulse" />
+                      <div className="p-4 space-y-2">
+                        <div className="h-3 w-1/3 bg-stone-200 rounded animate-pulse" />
+                        <div className="h-4 w-3/4 bg-stone-200 rounded animate-pulse" />
+                        <div className="h-3 w-2/3 bg-stone-200 rounded animate-pulse" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : featuredCourses.length === 0 ? (
+                // BUG-53: explicit empty-state card instead of an empty grid
+                <div className="bg-white rounded-2xl p-10 text-center border border-stone-200 text-stone-500 space-y-2">
+                  <BookOpen className="w-10 h-10 text-stone-300 mx-auto" />
+                  <h3 className="font-bold text-sm text-stone-800">هنوز دوره ویژه‌ای منتشر نشده است</h3>
+                  <p className="text-xs text-stone-500">به‌زودی مسترکلاس‌های ویژه در این بخش قرار می‌گیرند.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 {featuredCourses.map((course) => (
                   <div
                     key={course.id}
@@ -280,7 +350,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
                     </div>
                   </div>
                 ))}
-              </div>
+                </div>
+              )}
             </section>
           );
         }
@@ -324,6 +395,29 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 <p className="text-xs text-stone-500 mt-1">{sec.subtitle}</p>
               </div>
 
+              {isPlansLoading ? (
+                // BUG-43f: minimal skeleton while the plans load
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  {[0, 1, 2, 3].map((i) => (
+                    <div
+                      key={i}
+                      className="rounded-2xl p-4 border border-stone-200 bg-white space-y-3"
+                    >
+                      <div className="h-4 w-2/3 bg-stone-200 rounded animate-pulse" />
+                      <div className="h-3 w-full bg-stone-100 rounded animate-pulse" />
+                      <div className="h-3 w-4/5 bg-stone-100 rounded animate-pulse" />
+                      <div className="h-8 bg-stone-100 rounded-xl animate-pulse" />
+                    </div>
+                  ))}
+                </div>
+              ) : plans.length === 0 ? (
+                // BUG-53: explicit empty-state card instead of an empty grid
+                <div className="bg-white rounded-2xl p-10 text-center border border-stone-200 text-stone-500 space-y-2 max-w-md mx-auto">
+                  <Crown className="w-10 h-10 text-stone-300 mx-auto" />
+                  <h3 className="font-bold text-sm text-stone-800">پلنی برای نمایش وجود ندارد</h3>
+                  <p className="text-xs text-stone-500">به‌زودی پلن‌های عضویت اعلام می‌شوند.</p>
+                </div>
+              ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 {plans.map((p) => (
                   <div
@@ -378,6 +472,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   </div>
                 ))}
               </div>
+              )}
             </section>
           );
         }

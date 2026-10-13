@@ -1,4 +1,7 @@
 @import "tailwindcss";
+/* BUG-51: tailwindcss-animate نصب نبود و کلاس‌های animate-in / fade-in /
+   zoom-in-95 / slide-in-from-* عملاً no-op بودند — معادل رسمی Tailwind 4 افزوده شد. */
+@import "tw-animate-css";
 
 @layer base {
   :root {
@@ -26,7 +29,7 @@
   background-image: radial-gradient(#d97706 0.65px, transparent 0.65px), radial-gradient(#9a3412 0.65px, #fdfbf7 0.65px);
   background-size: 26px 26px;
   background-position: 0 0, 13px 13px;
-  background-opacity: 0.05;
+  /* BUG-50: خاصیت نامعتبر background-opacity حذف شد؛ شفافیت از خودِ rgba گرادیان‌ها می‌آید. */
 }
 
 /* Subtle kilim geometric weave accent */
@@ -70,4 +73,22 @@
 
 .pt-safe {
   padding-top: env(safe-area-inset-top, 1rem);
+}
+
+/* BUG-50: نوارهای اسکرول افقی نوار فیلترها (کاتالوگ و ادمین) پنهان می‌شوند. */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* BUG-50: حلقه فوکوس سراسری برای ناوبری با کیبورد (دسترس‌پذیری). */
+@layer base {
+  :focus-visible {
+    outline: 2px solid #d97706; /* amber-600 */
+    outline-offset: 2px;
+  }
 }

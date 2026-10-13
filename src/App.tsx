@@ -8,16 +8,19 @@
  * @description Main application shell for Mr. Dastbaaf Handicraft Learning Platform PWA
  */
 
-import React, { useState, useEffect } from 'react';
-import { Course, Lesson, MembershipPlan, PaymentGatewayType, PaymentOrder, UserProfile } from './types';
+import React, { useState, useEffect, useRef } from 'react';
+import { X } from 'lucide-react';
+import { Course, CourseCategory, Lesson, MembershipPlan, PaymentGatewayType, PaymentOrder, UserProfile } from './types';
 import { authService } from './services/authService';
 import { courseService } from './services/courseService';
 import { paymentService } from './services/paymentService';
+import { mutateOrder, orderStore } from './services/orderStore';
 
 // Common Components
 import { Header } from './components/common/Header';
 import { BottomNav } from './components/common/BottomNav';
 import { OfflineIndicator } from './components/common/OfflineIndicator';
+import { PWAUpdatePrompt } from './components/common/PWAUpdatePrompt';
 
 // Modals
 import { PhoneLoginModal } from './components/auth/PhoneLoginModal';
@@ -35,10 +38,98 @@ import { UserDashboardView } from './views/UserDashboardView';
 import { AdminDashboardView } from './views/AdminDashboardView';
 import { EditorialPageView } from './views/EditorialPageView';
 
+// BUG-52: typed navigation params instead of `any`
+interface AppViewParams {
+  category?: CourseCategory | 'all';
+  courseId?: string;
+  slug?: string;
+}
+
+// DEV-2: lightweight hash router (no new deps) — view ⇄ URL mapping.
+// Route map: #/ → home · #/catalogue[?cat={category}] → catalogue ·
+//   #/course/{courseId} → course_detail · #/membership → membership ·
+//   #/dashboard → dashboard · #/admin → admin ·
+//   #/page/{slug} → editorial page · #/editorial → editorial (about-us).
+// Unknown/invalid routes fall back to home. Modals (player/checkout/gateway)
+// are intentionally NOT routed — future work.
+const serializeRoute = (view: string, params: AppViewParams): string => {
+  switch (view) {
+    case 'catalogue': {
+      const cat =
+        params.category && params.category !== 'all'
+          ? `?cat=${encodeURIComponent(params.category)}`
+          : '';
+      return `#/catalogue${cat}`;
+    }
+    case 'course_detail':
+      return params.courseId ? `#/course/${encodeURIComponent(params.courseId)}` : '#/catalogue';
+    case 'membership':
+      return '#/membership';
+    case 'dashboard':
+      return '#/dashboard';
+    case 'admin':
+      return '#/admin';
+    case 'editorial':
+      return params.slug ? `#/page/${encodeURIComponent(params.slug)}` : '#/editorial';
+    default:
+      return '#/';
+  }
+};
+
+const parseRoute = (hash: string): { view: string; params: AppViewParams } => {
+  const [path, query = ''] = hash.replace(/^#/, '').split('?');
+  const segments = path.split('/').filter(Boolean);
+
+  switch (segments[0]) {
+    case 'catalogue': {
+      const cat = new URLSearchParams(query).get('cat');
+      return { view: 'catalogue', params: cat ? { category: cat as CourseCategory } : {} };
+    }
+    case 'course':
+      return segments[1]
+        ? { view: 'course_detail', params: { courseId: decodeURIComponent(segments[1]) } }
+        : { view: 'catalogue', params: {} };
+    case 'membership':
+      return { view: 'membership', params: {} };
+    case 'dashboard':
+      return { view: 'dashboard', params: {} };
+    case 'admin':
+      return { view: 'admin', params: {} };
+    case 'page':
+      return segments[1]
+        ? { view: 'editorial', params: { slug: decodeURIComponent(segments[1]) } }
+        : { view: 'editorial', params: {} };
+    case 'editorial':
+      return { view: 'editorial', params: {} };
+    default:
+      // DEV-2: empty/unknown hash → home.
+      return { view: 'home', params: {} };
+  }
+};
+
+// BUG-44: toast variants with distinct, palette-safe colors
+// (success=emerald, error=red, info=amber — no blue/indigo in this project).
+type ToastVariant = 'success' | 'error' | 'info';
+
+const TOAST_STYLES: Record<ToastVariant, string> = {
+  success: 'bg-emerald-800 text-emerald-50 border-emerald-700',
+  error: 'bg-red-800 text-red-50 border-red-700',
+  info: 'bg-stone-900 text-amber-100 border-stone-800',
+};
+
+interface ToastState {
+  id: number;
+  message: string;
+  variant: ToastVariant;
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(authService.getCurrentUser());
   const [activeView, setActiveView] = useState<string>('home');
-  const [viewParams, setViewParams] = useState<any>({});
+  const [viewParams, setViewParams] = useState<AppViewParams>({});
+  // DEV-2: last applied route key — dedupes the popstate/hashchange echo of a
+  // pushState-driven navigation (and redundant renders of the same route).
+  const routeKeyRef = useRef<string>('');
 
   // Modals state
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
@@ -56,23 +147,80 @@ export default function App() {
   const [activePlayerLesson, setActivePlayerLesson] = useState<Lesson | null>(null);
 
   // Toast feedback message
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 4000);
+  // BUG-44: the old setTimeout was never cleared, so toast B was killed early
+  // by toast A's pending timer. Timer now lives in a ref and is reset on every
+  // call; container is a polite live region and toasts are dismissible.
+  const showToast = (msg: string, variant: ToastVariant = 'info') => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    setToast({ id: Date.now(), message: msg, variant });
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 4000);
   };
 
-  const handleNavigate = (view: string, params: any = {}) => {
-    setActiveView(view);
-    setViewParams(params);
+  const dismissToast = () => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+    setToast(null);
+  };
+
+  // DEV-2: parse a hash into view+params and apply it — used by the mount boot
+  // (deep links like #/course/carpetry) and by popstate/hashchange (browser
+  // back/forward). Redundant applications of the same route are skipped.
+  const applyRoute = (hash: string) => {
+    const route = parseRoute(hash);
+    // DEV-2: protected views need a live session — deep links to #/dashboard
+    // or #/admin while logged out fall back to home (same guard the UI had).
+    if ((route.view === 'dashboard' || route.view === 'admin') && !authService.getCurrentUser()) {
+      route.view = 'home';
+      route.params = {};
+    }
+    const key = serializeRoute(route.view, route.params);
+    if (routeKeyRef.current === key) return;
+    routeKeyRef.current = key;
+    setActiveView(route.view);
+    setViewParams(route.params);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+
+  // DEV-2: navigate now mirrors into the URL as a shareable deep link —
+  // history.pushState + manual render (pushState does not fire hashchange, so
+  // there is no double render); back/forward is handled by the listeners in
+  // the mount effect below.
+  const handleNavigate = (view: string, params: AppViewParams = {}) => {
+    const hash = serializeRoute(view, params);
+    if (window.location.hash !== hash) {
+      window.history.pushState(null, '', hash);
+    }
+    applyRoute(hash);
+  };
+
+  // DEV-2: boot from the current hash, then re-parse on back/forward. Both
+  // listeners are kept (history traversal fires both); the route-key guard in
+  // applyRoute makes the double fire a no-op.
+  useEffect(() => {
+    applyRoute(window.location.hash);
+    const onHashRouteChange = () => applyRoute(window.location.hash);
+    window.addEventListener('popstate', onHashRouteChange);
+    window.addEventListener('hashchange', onHashRouteChange);
+    return () => {
+      window.removeEventListener('popstate', onHashRouteChange);
+      window.removeEventListener('hashchange', onHashRouteChange);
+    };
+  }, []);
 
   const handleSwitchRole = (role: 'student' | 'admin') => {
     const switched = authService.switchRole(role);
     setCurrentUser(switched);
-    showToast(`نقش به عنوان «${role === 'admin' ? 'مدیر ارشد' : 'هنرجو (سارا احمدی)'}» تغییر یافت.`);
+    showToast(`نقش به عنوان «${role === 'admin' ? 'مدیر ارشد' : 'هنرجو (سارا احمدی)'}» تغییر یافت.`, 'info');
     if (role === 'admin' && activeView !== 'admin') {
       handleNavigate('admin');
     } else if (role === 'student' && activeView === 'admin') {
@@ -83,7 +231,7 @@ export default function App() {
   const handleLogout = () => {
     authService.logout();
     setCurrentUser(null);
-    showToast('با موفقیت از حساب کاربری خارج شدید.');
+    showToast('با موفقیت از حساب کاربری خارج شدید.', 'info');
     handleNavigate('home');
   };
 
@@ -106,10 +254,13 @@ export default function App() {
     if (plan.priceToman === 0) {
       // Free plan instant activation
       if (!currentUser) {
+        // BUG-46: keep the plan in state so a successful login resumes this
+        // flow (see PhoneLoginModal.onSuccess) instead of silently dropping it.
+        setSelectedPlanForCheckout(plan);
         setIsLoginModalOpen(true);
         return;
       }
-      showToast('اشتراک رایگان شما فعال است و درس‌های پیش‌نمایش در دسترس هستند.');
+      showToast('اشتراک رایگان شما فعال است و درس‌های پیش‌نمایش در دسترس هستند.', 'success');
       handleNavigate('catalogue');
       return;
     }
@@ -122,6 +273,9 @@ export default function App() {
     setIsCheckoutModalOpen(false);
 
     if (!currentUser) {
+      // BUG-46: previously the checkout context was lost here — the modal
+      // closed, login opened and nothing resumed. selectedPlanForCheckout now
+      // stays set and PhoneLoginModal.onSuccess re-opens checkout automatically.
       setIsLoginModalOpen(true);
       return;
     }
@@ -129,42 +283,139 @@ export default function App() {
     if (gateway === 'zibal') {
       try {
         const { order } = await paymentService.initiateZibalPayment(currentUser, plan);
+        // BUG-45: the active zibal order is tracked in App state so an outcome-
+        // less close of the gateway can be swept to 'cancelled'.
         setCurrentZibalOrder(order);
         setIsZibalModalOpen(true);
       } catch (e: any) {
-        showToast(e.message || 'خطا در اتصال به درگاه زیبال');
+        showToast(e.message || 'خطا در اتصال به درگاه زیبال', 'error');
       }
     } else {
       setIsManualTransferModalOpen(true);
     }
   };
 
+  // BUG-45: closing the Zibal gateway without any outcome no longer leaves the
+  // order pending forever — the order is cancelled with an admin note and the
+  // user is informed. Handler for the optional onAbandon prop of
+  // ZibalSimulatorModal (the prop itself landed via agent 3-b / BUG-65 and is
+  // wired at the JSX call site).
+  const handleZibalAbandon = () => {
+    const orderId = currentZibalOrder?.id;
+    if (!orderId) return;
+    try {
+      const order = orderStore.findById(orderId);
+      // only an outcome-less PENDING order may be swept — a completed/failed
+      // order already has its final state.
+      if (order && order.status === 'pending') {
+        mutateOrder(orderId, (draft) => {
+          draft.status = 'cancelled';
+          draft.adminNote = 'درگاه بدون نتیجه بسته شد';
+        });
+        showToast('سفارش لغو شد', 'info');
+      }
+    } catch (e: any) {
+      showToast(e?.message || 'لغو سفارش با خطا مواجه شد', 'error');
+    }
+  };
+
+  // DEV-13: on mount, sweep pending zibal orders older than 24h → 'cancelled'
+  // (client-side mirror of the server-side daily reconciliation cron).
+  useEffect(() => {
+    try {
+      const dayAgoMs = Date.now() - 24 * 60 * 60 * 1000;
+      orderStore
+        .getAll()
+        .filter(
+          (o) =>
+            o.gateway === 'zibal' &&
+            o.status === 'pending' &&
+            new Date(o.createdAt).getTime() < dayAgoMs
+        )
+        .forEach((o) => {
+          mutateOrder(o.id, (draft) => {
+            draft.status = 'cancelled';
+            draft.adminNote = 'سفارش پرداخت‌نشده پس از ۲۴ ساعت به‌صورت خودکار لغو شد';
+          });
+        });
+    } catch (e) {
+      // DEV-13: mutateOrder throws on storage failure — the boot sweep is
+      // best-effort and must never block the app from rendering.
+    }
+  }, []);
+
   const handleZibalPaymentComplete = (order: PaymentOrder, success: boolean) => {
+    setCurrentZibalOrder(null);
     setCurrentUser(authService.getCurrentUser());
     if (success) {
-      showToast('پرداخت زیبال تایید شد و اشتراک با موفقیت فعال گردید.');
+      // BUG-46 hygiene: the purchase finished — clear the pending plan so a
+      // later login cannot spuriously resume a completed checkout.
+      setSelectedPlanForCheckout(null);
+      showToast('پرداخت زیبال تایید شد و اشتراک با موفقیت فعال گردید.', 'success');
       handleNavigate('dashboard');
     } else {
-      showToast('تراکنش ناموفق بود یا لغو گردید.');
+      showToast('تراکنش ناموفق بود یا لغو گردید.', 'error');
     }
   };
 
   const handleManualTransferSubmitted = (order: PaymentOrder) => {
-    showToast('فیش واریزی ثبت شد و پس از تایید مدیر، اشتراک فعال خواهد شد.');
+    // BUG-46 hygiene: receipt registered — nothing left to resume after login.
+    setSelectedPlanForCheckout(null);
+    showToast('فیش واریزی ثبت شد و پس از تایید مدیر، اشتراک فعال خواهد شد.', 'success');
     handleNavigate('dashboard');
+  };
+
+  // DEV-4/3-b: parent-owned completion handler — persists through the
+  // whitelisted updater AND refreshes App state (setUser) so the dashboard /
+  // CourseDetailView re-render live (player icon state derives from props).
+  const handleCompleteLesson = (lessonId: string) => {
+    const user = authService.getCurrentUser();
+    if (!user) return;
+    const next = user.completedLessonIds.includes(lessonId)
+      ? user.completedLessonIds
+      : [...user.completedLessonIds, lessonId];
+    setCurrentUser(authService.updateCurrentUser({ completedLessonIds: next }));
+    showToast('این جلسه با موفقیت تکمیل شد!', 'success');
+  };
+
+  // DEV-5/3-b: bookmark toggle — same parent-owned pattern (updateCurrentUser +
+  // setUser) so the dashboard «نشان‌شده‌ها» section updates live.
+  const handleToggleBookmark = (lessonId: string) => {
+    const user = authService.getCurrentUser();
+    if (!user) return;
+    const next = user.bookmarkedLessonIds.includes(lessonId)
+      ? user.bookmarkedLessonIds.filter((id) => id !== lessonId)
+      : [...user.bookmarkedLessonIds, lessonId];
+    setCurrentUser(authService.updateCurrentUser({ bookmarkedLessonIds: next }));
   };
 
   return (
     <div className="min-h-screen flex flex-col bg-[#fdfbf7] text-stone-800 font-sans antialiased">
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div className="fixed top-14 left-4 right-4 md:left-auto md:right-4 z-50 bg-stone-900 text-stone-100 text-xs px-4 py-2.5 rounded-xl shadow-xl border border-stone-800 animate-in fade-in slide-in-from-top-2">
-          {toastMessage}
+      {/* Toast Notification — BUG-44: polite live region + variant colors + dismiss */}
+      {toast && (
+        <div
+          key={toast.id}
+          role="status"
+          aria-live="polite"
+          className={`fixed top-14 left-4 right-4 md:left-auto md:right-4 z-50 text-xs px-4 py-2.5 rounded-xl shadow-xl border flex items-center justify-between gap-2 animate-in fade-in slide-in-from-top-2 ${TOAST_STYLES[toast.variant]}`}
+        >
+          <span className="leading-relaxed">{toast.message}</span>
+          <button
+            onClick={dismissToast}
+            aria-label="بستن پیام"
+            className="shrink-0 w-11 h-11 -m-2 flex items-center justify-center rounded-lg hover:bg-white/10 transition"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
       {/* Offline Connectivity Status */}
       <OfflineIndicator />
+
+      {/* DEV-7: PWA update prompt — fixed bottom card when a new service
+          worker is waiting in prompt mode (no scroll lock, dismissible). */}
+      <PWAUpdatePrompt />
 
       {/* Top Header */}
       <Header
@@ -300,7 +551,21 @@ export default function App() {
         onClose={() => setIsLoginModalOpen(false)}
         onSuccess={(user) => {
           setCurrentUser(user);
-          showToast(`خوش آمدید، ${user.fullName}`);
+          showToast(`خوش آمدید، ${user.fullName}`, 'success');
+          // BUG-46: resume the interrupted purchase flow after a successful
+          // login — selectedPlanForCheckout survived the modal switch (both the
+          // paid-checkout path and the free-plan path keep it in state).
+          const pendingPlan = selectedPlanForCheckout;
+          if (pendingPlan) {
+            if (pendingPlan.priceToman === 0) {
+              // free plan: instant-activation path (same as handleSelectPlan)
+              showToast('اشتراک رایگان شما فعال است و درس‌های پیش‌نمایش در دسترس هستند.', 'success');
+              handleNavigate('catalogue');
+            } else {
+              setIsCheckoutModalOpen(true);
+              showToast('ادامه خرید…', 'info');
+            }
+          }
         }}
       />
 
@@ -315,11 +580,15 @@ export default function App() {
       />
 
       {/* 3. Zibal Gateway Simulator */}
+      {/* BUG-45: onAbandon is wired (agent 3-b landed the prop as BUG-65) —
+          closing the gateway without an outcome parks the pending order as
+          'cancelled' + adminNote + info toast via handleZibalAbandon. */}
       <ZibalSimulatorModal
         isOpen={isZibalModalOpen}
         onClose={() => setIsZibalModalOpen(false)}
         order={currentZibalOrder}
         onPaymentComplete={handleZibalPaymentComplete}
+        onAbandon={handleZibalAbandon}
       />
 
       {/* 4. Manual Bank Transfer (کارت به کارت) Modal */}
@@ -332,6 +601,12 @@ export default function App() {
       />
 
       {/* 5. Custom Branded Lesson Video Player */}
+      {/* DEV-4/DEV-5: onCompleteLesson + onToggleBookmark are wired (agent 3-b
+          landed both props as BUG-59). Both handlers persist through
+          authService.updateCurrentUser and refresh App's currentUser state so
+          dashboard / CourseDetailView re-render live. The legacy
+          onLessonCompleted prop is intentionally NOT passed — the player
+          prefers onCompleteLesson and the legacy slot was toast-only. */}
       {isPlayerOpen && activePlayerCourse && activePlayerLesson && (
         <LessonPlayerModal
           isOpen={isPlayerOpen}
@@ -340,9 +615,8 @@ export default function App() {
           currentLesson={activePlayerLesson}
           onSelectLesson={(l) => setActivePlayerLesson(l)}
           currentUser={currentUser}
-          onLessonCompleted={(lessonId) => {
-            showToast('این جلسه با موفقیت تکمیل شد!');
-          }}
+          onCompleteLesson={handleCompleteLesson}
+          onToggleBookmark={handleToggleBookmark}
         />
       )}
     </div>

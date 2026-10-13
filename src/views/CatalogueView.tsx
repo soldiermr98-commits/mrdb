@@ -3,10 +3,11 @@
  * @description Course catalogue view with search, category filters, and access status badges
  */
 
-import React, { useState, useEffect } from 'react';
-import { Search, Filter, BookOpen, Clock, User, Play, ArrowLeft, Layers, X } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, Filter, BookOpen, Clock, User, Play, ArrowLeft, Layers, X, AlertTriangle } from 'lucide-react';
 import { Course, CourseCategory, UserProfile } from '../types';
 import { courseService } from '../services/courseService';
+import { membershipService } from '../services/membershipService';
 
 interface CatalogueViewProps {
   initialCategory?: CourseCategory | 'all';
@@ -26,6 +27,11 @@ export const CatalogueView: React.FC<CatalogueViewProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<CourseCategory | 'all'>(initialCategory);
   const [selectedLevel, setSelectedLevel] = useState<string>('all');
   const [isLoading, setIsLoading] = useState(true);
+  // BUG-42: explicit error state + retry tick (the old effect had no catch →
+  // an rejected getCourses left the spinner spinning forever)
+  const [loadError, setLoadError] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
+  const requestSeqRef = useRef(0);
 
   const categories: Array<CourseCategory | 'all'> = [
     'all',
@@ -37,19 +43,35 @@ export const CatalogueView: React.FC<CatalogueViewProps> = ({
 
   const levels = ['all', 'مقدماتی', 'متوسط', 'پیشرفته'];
 
+  // BUG-42: the old effect fired getCourses on every keystroke (200ms artificial
+  // delay each) with no catch and no stale-response guard. Now: a 300ms debounce
+  // timer (cleaned up on re-render), a request counter so a slower older response
+  // can never overwrite a newer one, and try/catch → error card with retry.
   useEffect(() => {
-    setIsLoading(true);
-    courseService
-      .getCourses({
-        category: selectedCategory,
-        searchTerm,
-        level: selectedLevel,
-      })
-      .then((res) => {
-        setCourses(res);
-        setIsLoading(false);
-      });
-  }, [selectedCategory, searchTerm, selectedLevel]);
+    const myRequest = ++requestSeqRef.current;
+    const timer = window.setTimeout(() => {
+      setIsLoading(true);
+      setLoadError(false);
+      courseService
+        .getCourses({
+          category: selectedCategory,
+          searchTerm,
+          level: selectedLevel,
+        })
+        .then((res) => {
+          if (requestSeqRef.current !== myRequest) return; // stale response
+          setCourses(res);
+          setIsLoading(false);
+        })
+        .catch(() => {
+          if (requestSeqRef.current !== myRequest) return; // stale failure
+          setLoadError(true);
+          setIsLoading(false);
+        });
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [selectedCategory, searchTerm, selectedLevel, reloadTick]);
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6 pb-20">
@@ -129,6 +151,19 @@ export const CatalogueView: React.FC<CatalogueViewProps> = ({
           <div className="w-8 h-8 border-3 border-amber-800 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
           در حال بارگذاری دوره‌ها...
         </div>
+      ) : loadError ? (
+        // BUG-42: rejection is no longer an infinite spinner — error card + retry
+        <div className="bg-white rounded-2xl p-12 text-center border border-red-200 text-stone-500 space-y-3">
+          <AlertTriangle className="w-12 h-12 text-red-400 mx-auto" />
+          <h3 className="font-bold text-sm text-stone-800">بارگذاری دوره‌ها با خطا مواجه شد</h3>
+          <p className="text-xs text-stone-500">لطفاً اتصال خود را بررسی کنید و دوباره تلاش کنید.</p>
+          <button
+            onClick={() => setReloadTick((t) => t + 1)}
+            className="inline-flex min-h-11 items-center gap-1.5 bg-amber-800 hover:bg-amber-900 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition"
+          >
+            تلاش مجدد
+          </button>
+        </div>
       ) : courses.length === 0 ? (
         <div className="bg-white rounded-2xl p-12 text-center border border-stone-200 text-stone-500 space-y-3">
           <BookOpen className="w-12 h-12 text-stone-300 mx-auto" />
@@ -146,14 +181,23 @@ export const CatalogueView: React.FC<CatalogueViewProps> = ({
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="space-y-3">
+          {/* BUG-42: results count (Persian digits) */}
+          <p className="text-[11px] text-stone-500">
+            {courses.length.toLocaleString('fa-IR')} دوره یافت شد
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {courses.map((course) => {
+            // BUG-41: «دسترسی کامل فعال» previously only checked membership.status —
+            // an EXPIRED membership still showed the green badge. The shared
+            // isMembershipLive() (status + live expiry date) closes that gap.
             const userHasAccess =
               currentUser?.role === 'admin' ||
-              (currentUser?.membership?.status === 'active' &&
+              (membershipService.isMembershipLive(currentUser) &&
                 (course.requiredTier === 'bronze' ||
-                  (course.requiredTier === 'silver' && currentUser.membership.tier !== 'bronze') ||
-                  (course.requiredTier === 'gold' && currentUser.membership.tier === 'gold')));
+                  (course.requiredTier === 'silver' && currentUser?.membership?.tier !== 'bronze') ||
+                  (course.requiredTier === 'gold' && currentUser?.membership?.tier === 'gold')));
 
             return (
               <div
@@ -244,6 +288,7 @@ export const CatalogueView: React.FC<CatalogueViewProps> = ({
               </div>
             );
           })}
+          </div>
         </div>
       )}
     </div>

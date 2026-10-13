@@ -4,9 +4,10 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Smartphone, KeyRound, ArrowRight, ShieldAlert, Sparkles, Check, RefreshCw } from 'lucide-react';
+import { Smartphone, KeyRound, ShieldAlert, RefreshCw } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { authService } from '../../services/authService';
+import { toEnglishDigits } from '../../utils/format';
 import { UserProfile } from '../../types';
 
 interface PhoneLoginModalProps {
@@ -78,6 +79,22 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
       onClose();
     } catch (err: any) {
       setErrorMessage(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // BUG-63: resend actually re-requests the OTP from authService (and restarts
+  // the 90-second timer) instead of only resetting the countdown.
+  const handleResendOtp = async () => {
+    setErrorMessage(null);
+    setIsLoading(true);
+    try {
+      await authService.requestOtp(phone);
+      setTimer(90);
+      setOtp('12345'); // Pre-fill mock code again for demo convenience
+    } catch (err: any) {
+      setErrorMessage(err.message || 'خطا در ارسال مجدد کد تایید');
     } finally {
       setIsLoading(false);
     }
@@ -163,7 +180,8 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleQuickLogin('09123456789')}
-                  className="p-2 rounded-xl border border-stone-200 hover:border-amber-700 hover:bg-amber-50/50 text-right transition"
+                  disabled={isLoading}
+                  className="p-2 rounded-xl border border-stone-200 hover:border-amber-700 hover:bg-amber-50/50 text-right transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <p className="font-bold text-amber-900">سارا احمدی</p>
                   <p className="text-[10px] text-stone-500">هنرجو (اشتراک برنزی)</p>
@@ -171,7 +189,8 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleQuickLogin('09998887766')}
-                  className="p-2 rounded-xl border border-stone-200 hover:border-red-700 hover:bg-red-50/50 text-right transition"
+                  disabled={isLoading}
+                  className="p-2 rounded-xl border border-stone-200 hover:border-red-700 hover:bg-red-50/50 text-right transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <p className="font-bold text-red-900">علیرضا بافنده</p>
                   <p className="text-[10px] text-stone-500">مدیر ارشد پلتفرم</p>
@@ -201,7 +220,10 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
                   type="text"
                   dir="ltr"
                   value={otp}
-                  onChange={(e) => setOtp(e.target.value)}
+                  // BUG-63: numeric keypad on mobile + Persian/Arabic digits are
+                  // normalized to English on every change (OTP store is ASCII).
+                  inputMode="numeric"
+                  onChange={(e) => setOtp(toEnglishDigits(e.target.value).slice(0, 5))}
                   placeholder="12345"
                   maxLength={5}
                   className="w-full text-center tracking-widest text-lg font-mono py-2 bg-stone-50 border border-stone-200 rounded-xl text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-700/30 focus:border-amber-700 transition"
@@ -218,8 +240,9 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
               ) : (
                 <button
                   type="button"
-                  onClick={() => setTimer(90)}
-                  className="text-amber-800 hover:underline font-medium"
+                  onClick={handleResendOtp}
+                  disabled={isLoading}
+                  className="text-amber-800 hover:underline font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   ارسال مجدد کد تایید
                 </button>

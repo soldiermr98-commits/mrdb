@@ -3,13 +3,13 @@
  * @description Manual bank transfer (کارت به کارت / پایا) submission modal
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Landmark, Upload, CheckCircle, AlertCircle, Copy, Check, FileText } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { MOCK_COMPANY_BANK_INFO } from '../../data/mockData';
 import { MembershipPlan, PaymentOrder, UserProfile } from '../../types';
 import { transferService } from '../../services/transferService';
-import { toEnglishDigits } from '../../utils/format';
+import { formatJalali, toEnglishDigits } from '../../utils/format';
 
 interface ManualTransferModalProps {
   isOpen: boolean;
@@ -28,20 +28,100 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
 }) => {
   const [trackingCode, setTrackingCode] = useState('');
   const [lastFour, setLastFour] = useState('');
-  const [depositDate, setDepositDate] = useState('۱۴۰۵/۰۷/۲۰');
-  const [receiptImageName, setReceiptImageName] = useState('fish-variz.jpg');
+  // BUG-64c: default deposit date is TODAY's Jalali date (was hardcoded «۱۴۰۵/۰۷/۲۰»).
+  const [depositDate, setDepositDate] = useState(() => formatJalali(new Date().toISOString()));
+  // BUG-64a: real optional receipt image — only the file NAME is stored.
+  const [receiptImageName, setReceiptImageName] = useState('');
+  const [receiptError, setReceiptError] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [successOrder, setSuccessOrder] = useState<PaymentOrder | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // BUG-64d: track the «کپی شد» timeout so it is cleared on unmount.
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    },
+    []
+  );
+
+  // BUG-64b: reset ALL form state whenever the modal is (re)opened — a previous
+  // submission attempt must never leak into the next one.
+  useEffect(() => {
+    if (!isOpen) return;
+    setTrackingCode('');
+    setLastFour('');
+    setDepositDate(formatJalali(new Date().toISOString()));
+    setReceiptImageName('');
+    setReceiptError(null);
+    setNotes('');
+    setErrorMsg(null);
+    setSuccessOrder(null);
+    setCopiedField(null);
+    setIsSubmitting(false);
+  }, [isOpen]);
+
   if (!isOpen || !plan || !currentUser) return null;
 
-  const copyToClipboard = (text: string, field: string) => {
-    navigator.clipboard?.writeText(text);
-    setCopiedField(field);
-    setTimeout(() => setCopiedField(null), 2000);
+  // BUG-64a: validate the selected receipt image (≤ 5MB, image/*) with an
+  // inline Persian error; only the file name is kept in state.
+  const handleReceiptChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      setReceiptImageName('');
+      setReceiptError(null);
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      setReceiptError('فقط فایل تصویری (JPG، PNG و...) پذیرفته می‌شود.');
+      e.target.value = '';
+      setReceiptImageName('');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setReceiptError('حجم تصویر فیش باید حداکثر ۵ مگابایت باشد.');
+      e.target.value = '';
+      setReceiptImageName('');
+      return;
+    }
+    setReceiptError(null);
+    setReceiptImageName(file.name);
+  };
+
+  // BUG-64d: clipboard write with async Clipboard API + textarea fallback;
+  // «کپی شد» feedback only on success, timeout tracked in a ref.
+  const copyToClipboard = async (text: string, field: string) => {
+    let ok = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      }
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch {
+        ok = false;
+      }
+    }
+    if (ok) {
+      setCopiedField(field);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopiedField(null), 2000);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -160,7 +240,7 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
                   className="p-1.5 bg-stone-700 hover:bg-stone-600 rounded-lg text-stone-200 text-[10px] flex items-center gap-1 transition"
                 >
                   {copiedField === 'card' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>کپی</span>
+                  <span>{copiedField === 'card' ? 'کپی شد' : 'کپی'}</span>
                 </button>
               </div>
 
@@ -226,12 +306,25 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
 
               <div>
                 <label className="block font-semibold text-stone-700 mb-1">
-                  فایل تصویر فیش (نمادین)
+                  فایل تصویر فیش (اختیاری)
                 </label>
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-600">
+                {/* BUG-64a: real optional file picker (replaces the fake hardcoded
+                    «fish-variz.jpg») — validated ≤ 5MB and image/* on change. */}
+                <label className="flex items-center gap-2 px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-600 cursor-pointer hover:border-amber-700/50 transition">
                   <Upload className="w-4 h-4 text-stone-400 shrink-0" />
-                  <span className="truncate font-mono text-[11px]">{receiptImageName}</span>
-                </div>
+                  <span className="truncate font-mono text-[11px]">
+                    {receiptImageName || 'انتخاب تصویر فیش واریزی...'}
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleReceiptChange}
+                    className="hidden"
+                  />
+                </label>
+                {receiptError && (
+                  <p className="text-[11px] text-red-700 mt-1">{receiptError}</p>
+                )}
               </div>
             </div>
 

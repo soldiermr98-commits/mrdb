@@ -3,16 +3,19 @@
  * @description Configurable membership plans view with manual renewal transparency and tier matrix
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Crown, CheckCircle, ShieldCheck, HelpCircle, ArrowLeft, AlertCircle, RefreshCw } from 'lucide-react';
 import { MembershipPlan, UserProfile } from '../types';
 import { membershipService } from '../services/membershipService';
 import { formatJalali, daysUntil } from '../utils/format';
+import { AsyncState } from '../components/common/AsyncState';
 
 interface MembershipViewProps {
   onSelectPlan: (plan: MembershipPlan) => void;
   currentUser: UserProfile | null;
-  onNavigate: (view: string) => void;
+  // BUG-47: widened so editorial navigation can carry a slug param
+  // (onNavigate('editorial', { slug: 'guide-membership' })).
+  onNavigate: (view: string, params?: { slug?: string }) => void;
 }
 
 export const MembershipView: React.FC<MembershipViewProps> = ({
@@ -22,13 +25,28 @@ export const MembershipView: React.FC<MembershipViewProps> = ({
 }) => {
   const [plans, setPlans] = useState<MembershipPlan[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+
+  const loadPlans = useCallback(() => {
+    setIsLoading(true);
+    setLoadError(false);
+    // BUG-43c: a rejected load previously left the plans section blank forever
+    // (no catch) — now it lands on an error card with a retry button.
+    membershipService
+      .getActivePlans()
+      .then((res) => {
+        setPlans(res);
+        setIsLoading(false);
+      })
+      .catch(() => {
+        setLoadError(true);
+        setIsLoading(false);
+      });
+  }, []);
 
   useEffect(() => {
-    membershipService.getActivePlans().then((res) => {
-      setPlans(res);
-      setIsLoading(false);
-    });
-  }, []);
+    loadPlans();
+  }, [loadPlans]);
 
   const formatPrice = (p: number) => p.toLocaleString('fa-IR');
 
@@ -64,7 +82,9 @@ export const MembershipView: React.FC<MembershipViewProps> = ({
           </div>
         </div>
         <button
-          onClick={() => onNavigate('editorial')}
+          // BUG-47: «مطالعه راهنما» previously navigated to the bare 'editorial'
+          // view (defaulting to about-us). It now carries the correct slug.
+          onClick={() => onNavigate('editorial', { slug: 'guide-membership' })}
           className="text-xs font-semibold text-amber-900 underline whitespace-nowrap"
         >
           مطالعه راهنما
@@ -88,7 +108,9 @@ export const MembershipView: React.FC<MembershipViewProps> = ({
               </p>
               {membershipService.isMembershipLive(currentUser) ? (
                 <p className="text-[11px] text-stone-500">
-                  تاریخ انقضا: {formatJalali(currentUser.membership.expiresAt)} ({daysUntil(currentUser.membership.expiresAt)} روز باقی‌مانده)
+                  {/* BUG-48: daysUntil returns number|null — null renders as «—»,
+                      never as «۰ روز». */}
+                  تاریخ انقضا: {formatJalali(currentUser.membership.expiresAt)} ({daysUntil(currentUser.membership.expiresAt) ?? '—'} روز باقی‌مانده)
                 </p>
               ) : (
                 <p className="text-[11px] text-amber-700 font-semibold">
@@ -108,7 +130,21 @@ export const MembershipView: React.FC<MembershipViewProps> = ({
 
       {/* Plans Grid */}
       {isLoading ? (
-        <div className="py-12 text-center text-xs text-stone-500">در حال بارگذاری پلن‌ها...</div>
+        <AsyncState status="loading" loadingLabel="در حال بارگذاری پلن‌ها..." />
+      ) : loadError ? (
+        // BUG-43c: explicit error card with retry
+        <AsyncState
+          status="error"
+          error="بارگذاری پلن‌های عضویت با خطا مواجه شد."
+          onRetry={loadPlans}
+        />
+      ) : plans.length === 0 ? (
+        // BUG-43c: an empty plans store is an explicit empty state, not a blank page
+        <AsyncState
+          status="empty"
+          emptyTitle="در حال حاضر پلنی فعال نیست"
+          emptyDescription="پلن‌های عضویت به‌زودی اعلام می‌شوند؛ لطفاً بعداً مراجعه کنید یا با پشتیبانی در تماس باشید."
+        />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {plans.map((plan) => {

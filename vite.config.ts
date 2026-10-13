@@ -10,7 +10,10 @@ export default defineConfig(() => {
       react(),
       tailwindcss(),
       VitePWA({
-        registerType: 'autoUpdate',
+        // DEV-7: prompt mode — a new waiting service worker no longer activates
+        // silently; PWAUpdatePrompt (virtual:pwa-register/react) surfaces the
+        // update and only reloads when the user confirms.
+        registerType: 'prompt',
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon.svg'],
         manifest: {
           id: '/',

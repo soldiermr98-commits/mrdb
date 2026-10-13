@@ -14,6 +14,9 @@ interface ZibalSimulatorModalProps {
   onClose: () => void;
   order: PaymentOrder | null;
   onPaymentComplete: (order: PaymentOrder, success: boolean) => void;
+  /** BUG-65: fired when the gateway is abandoned while still idle (X / backdrop /
+   * Esc) — no outcome was chosen yet, so App can park the order accordingly. */
+  onAbandon?: () => void;
 }
 
 export const ZibalSimulatorModal: React.FC<ZibalSimulatorModalProps> = ({
@@ -21,6 +24,7 @@ export const ZibalSimulatorModal: React.FC<ZibalSimulatorModalProps> = ({
   onClose,
   order,
   onPaymentComplete,
+  onAbandon,
 }) => {
   const [isVerifying, setIsVerifying] = useState(false);
   const [outcomeState, setOutcomeState] = useState<'idle' | 'success' | 'failed' | 'cancelled'>('idle');
@@ -60,6 +64,17 @@ export const ZibalSimulatorModal: React.FC<ZibalSimulatorModalProps> = ({
     setOutcomeState('idle');
   };
 
+  // BUG-65: close path while the simulator is still idle (X button, backdrop
+  // click, Esc → Modal onClose) — the user abandoned the gateway without
+  // choosing an outcome. onAbandon is NOT called once an outcome was chosen
+  // (success/failed/cancelled flows report through onPaymentComplete).
+  const handleClose = () => {
+    if (outcomeState === 'idle') {
+      onAbandon?.();
+    }
+    onClose();
+  };
+
   const formatPrice = (price: number) => {
     return price.toLocaleString('fa-IR');
   };
@@ -67,7 +82,7 @@ export const ZibalSimulatorModal: React.FC<ZibalSimulatorModalProps> = ({
   return (
     <Modal
       isOpen={isOpen}
-      onClose={outcomeState === 'idle' ? onClose : handleFinish}
+      onClose={outcomeState === 'idle' ? handleClose : handleFinish}
       title="درگاه آزمایشی پرداخت زیبال (Zibal Simulator)"
       subtitle="محیط تست تراکنش‌های مالی - بدون برداشت وجه واقعی"
       maxWidth="md"
