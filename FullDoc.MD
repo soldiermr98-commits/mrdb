@@ -1,7 +1,7 @@
 # مستندات جامع فنی و راهنمای توسعه پلتفرم «مستر دستباف» (Full Technical Documentation)
 **نام پروژه:** پلتفرم آموزش آنلاین صنایع دستی مستر دستباف (Mr. Dastbaaf)
 **آدرس دامنه:** [mrdastbaaf.com](https://mrdastbaaf.com)
-**نگارش مستند:** ۱.۰.۰ (اکتبر ۲۰۲۶)
+**نگارش مستند:** ۱.۱.۰ (اکتبر ۲۰۲۶ — پس از فاز سوم)
 **مخاطب مستند:** توسعه‌دهندگان فرانت‌اند، برنامه‌نویسان بک‌اند/وردپرس، مدیران فنی و تیم تست و نگهداری
 
 ---
@@ -17,6 +17,8 @@
 8. [راهنمای راه‌اندازی سریع برای توسعه‌دهندگان (Developer Quickstart)](#۸-راهنمای-راه‌اندازی-سریع-برای-توسعه‌دهندگان-developer-quickstart)
 9. [چک‌لیست انتقال به محیط تجاری (Production Checklist)](#۹-چک‌لیست-انتقال-به-محیط-تجاری-production-checklist)
 10. [گزارش فاز اول: رفع باگ‌های بحرانی (Critical Bug Fixes — Phase 1)](#۱۰-گزارش-فاز-اول-رفع-باگ‌های-بحرانی-critical-bug-fixes--phase-1)
+11. [گزارش فاز دوم: رفع باگ‌های High (High-Severity Bug Fixes — Phase 2)](#۱۱-گزارش-فاز-دوم-رفع-باگ‌های-high-high-severity-bug-fixes--phase-2)
+12. [گزارش فاز سوم و توسعه: رفع باگ‌های Medium + فیچرهای جدید (Phase 3 & Development)](#۱۲-گزارش-فاز-سوم-و-توسعه-رفع-باگ‌های-medium--فیچرهای-جدید-phase-3--development)
 
 ---
 
@@ -435,6 +437,113 @@ npm run build
 3. **ترتیب عملیات جدید:** از این پس اگر پلن یک سفارش حذف شده باشد، سفارش completed نمی‌شود و در صف با خطای «membership_grant_failed» می‌ماند — پنل ادمین باید این حالت را ببیند (در پروتوتایپ پیام خطا نمایش داده می‌شود).
 4. **هم‌خوانی اعتبارسنجی کلاینت/سرور:** الگوهای فیش (tracking code، ۴ رقم کارت، تاریخ) در `ManualTransferModal.tsx` و `class-payment-controller.php` باید هنگام تغییر هم‌زمان به‌روز شوند.
 5. رکوردهای قدیمی سفارش با `createdAtJalali` جعلی (هم‌اکنون/امروز) به‌طور خودکار در نمایش با تاریخ واقعی `createdAt` جایگزین می‌شوند؛ نیازی به migration داده نیست.
+
+---
+
+## ۱۲. گزارش فاز سوم و توسعه: رفع باگ‌های Medium + فیچرهای جدید (Phase 3 & Development)
+
+**نسخه اعمال‌شده:** افزونه وردپرس `1.0.3` — وب‌اپ PWA `1.0.3` (پروتوتایپ)
+**نتیجه صحت‌سنجی:** `tsc --noEmit` بدون خطا؛ `vite build` + تولید Service Worker (حالت prompt) موفق؛ تست مرورگری ۱۳ سناریوی طلایی (ورود با ارقام فارسی، تایید فیش برای خریدار آفلاین + بازیابی اشتراک از رجیستری، پلیر/یادداشت/تکمیل درس، لغو سفارش رهاشده، فیلترهای ادمین، دیپ‌لینک و دکمه Back، پارامیت آپدیت PWA) — همگی موفق.
+
+### ۱۲-۱. باگ‌های سمت افزونه وردپرس (PHP) — نسخه 1.0.3
+
+| شناسه | شدت | شرح باگ | فیکس اعمال‌شده | فایل |
+|---|---|---|---|---|
+| BUG-25 | Medium (نصب/استقرار) | `register_activation_hook` داخل Singleton سازنده که فقط روی `plugins_loaded` اجرا می‌شود ثبت شده بود؛ در درخواست فعال‌سازی، `plugins_loaded` **قبل از** include فایل افزونه fire می‌شود → جداول/seed در نصب تازه هرگز ساخته نمی‌شد (افزونه عملاً غیرفعال). | هوک فعال‌سازی به سطح فایل منتقل شد + مکانیزم چک نسخه اسکیما (`mrdastbaaf_db_version`) روی `plugins_loaded` که با هر تغییر ساختار، `dbDelta` را دوباره اجرا می‌کند (پوشش آپگرید از ۱.۰.۲). | `mrdastbaaf-bridge.php` |
+| BUG-26 | Medium (کارایی) | جداول مالی بدون ایندکس روی `zibal_track_id` و `user_id` (و `tracking_code`) — هر کال‌بک زیبال Full Table Scan می‌زد. | ایندکس‌های `KEY zibal_track_id`، `KEY user_id`، `KEY tracking_code` + `KEY status_gateway` به schema اضافه شد (dbDelta در آپگرید خودکار اعمال می‌کند). | `class-database.php` |
+| BUG-27 | Medium (یکپارچگی مالی) | ثبت فیش تکراری با همان tracking_code + ۴ رقم کارت ممکن بود (صف مالی آلوده می‌شد). | بررسی سرور-side قبل از insert: در صورت وجود فیش غیر-ردشده با همان tracking_code/card_last_four پاسخ 409. | `class-payment-controller.php` |
+| BUG-28 | Medium (امنیت) | شمارنده تلاش OTP از الگوی غیراتمیک check-then-set استفاده می‌کرد؛ درخواست‌های هم‌زمان بودجه ۵ تلاشی را دور می‌زدند. | افزایش «اتمیک» شمارنده با `wp_cache_incr` (در نبود object cache، fallback به transient با قفل) + پاک‌سازی شمارنده پس از مصرف. | `class-auth-controller.php` |
+| BUG-29 | Medium (سوءاستفاده) | Rate-limit درخواست کد فقط per-phone بود؛ مهاجم با چرخش شماره‌ها پیامک نامحدود (هزینه درگاه SMS / آزار شماره‌ها) می‌فرستاد. | سقف ساعتی per-IP (transient روی hash IP) + شمارنده سراسری ساعتی (Option) پیش از dispatch پیامک؛ پاسخ 429 با پیام فارسی. | `class-auth-controller.php` |
+| BUG-30 | Medium (پایداری) | `/auth/me` با کوکی معتبر کاربرِ حذف‌شده Fatal 500 می‌داد (`get_user_by` → false). | گارد null-user → 401 تمیز. | `class-auth-controller.php` |
+| BUG-31 | Low (API) | خطای `wp_create_user` بدون status → 500 و نشت پیام داخلی. | نگاشت به 409 با پیام فارسی + error_log کد اصلی. | `class-auth-controller.php` |
+| BUG-32 | Medium (مالی) | `grant_or_extend()` بدون قفل — دو پرداخت هم‌زمان (کال‌بک + ریدایرکت) روزهای خریدار را حذف یا ردیف‌های موازی active می‌ساخت. | قفل `GET_LOCK('mrd_member_{user_id}', 5)` / `RELEASE_LOCK` دور کل read-decide-write؛ تایم‌اوت قفل → false با error_log. | `class-membership-helper.php` |
+| BUG-33 | Medium (مالی) | verify زیبال ادعای اتمیک نداشت؛ رقابت ریدایرکت/کال‌بک باعث grant دوباره می‌شد و نتیجه UPDATE نهایی بررسی نمی‌شد. | الگوی ادعای اتمیک: `UPDATE ... SET status='verifying' WHERE id=%s AND status='pending'` — فقط برنده grant می‌کند؛ وضعیت completed → پاسخ idempotent؛ انتقال‌های نهایی فقط از verifying + بررسی نتیجه نوشتن. | `class-payment-controller.php` |
+| BUG-34 | Medium (مالی) | پاسخ‌های «قبلاً تاییدشده» زیبال (`success=2`, `result=201`) به‌عنوان شکست تلقی و سفارشِ پرداخت‌شده failed می‌شد. | Whitelist وضعیت‌های ترمینال: ۱/۲ و 100/201 = تایید؛ فقط کدهای قطعی شکست (202 و...) → failed؛ بقیه → pending برای ریکنسیلیشن. | `class-payment-controller.php` |
+| BUG-35 | Medium (بهبودسازی) | هیچ ریکنسیلیشن/پاک‌سازی برای سفارش‌های pending وجود نداشت (رشد بی‌پایان جدول + پولِ پرداخت‌شده بدون verify گم می‌شد)؛ initiate هم سقف نداشت. | کرون روزانه `mrdastbaaf_daily_reconciliation`: انقضای سفارش‌های زیبالِ بالای ۲۴ ساعت (→cancelled) + verify دوباره سفارش‌های دارای track_id؛ ثبت در فعال‌سازی + پاک‌سازی در deactivation؛ سقف ۵ سفارش pending per-user (429). | `class-payment-controller.php`، `mrdastbaaf-bridge.php` |
+| BUG-36 | Low (پایداری) | `initiate` بدون گارد null-user و مبلغ صفر (پلن رایگان وارد درگاه می‌شد)؛ `submit` فیش بدون گارد null-user و با پلن غیرفعال؛ نتیجه update `zibal_track_id` نادیده گرفته می‌شد. | گاردهای 401/400 + `is_active = 1` در هر دو مسیر + بررسی نتیجه update با error_log. | `class-payment-controller.php` |
+| BUG-37 | Medium (عملکردی — خاموش) | در `PUT /admin/plans/{id}` متغیر `$table_plans` **تعریف‌نشده** بود (فقط در متد دیگر تعریف می‌شد) → `$wpdb->update(null,...)` خطای SQL می‌داد ولی پاسخ `success:true` برمی‌گشت: هر ویرایش پلن ادمین یک no-op خاموش بود. + صف فیش بدون LIMIT + سکشن‌های صفحه اصلی بدون اعتبارسنجی ساختاری. | تعریف `$table_plans` + بررسی نتیجه update (false→500، 0rows→404) + اعتبارسنجی طول (title≤191، durationLabel≤50)؛ گاردهای review فیش (فقط `card_to_card` + `pending`؛ ادعای اتمیک approve؛ ریورث به pending در شکست grant)؛ صف فیش LIMIT 100 + تعداد کل؛ سکشن‌ها: clamp sortOrder (0..999)، رد کلید نامعتبر/تکراری، سقف ۱۰ سکشن. | `class-admin-controller.php` |
+| — (کش) | Low (کارایی) | کوئری عمومی پلن‌ها روی مسیر داغ بدون کش. | Transient ۵ دقیقه‌ای `mrdastbaaf_plans_cache` با ابطال در ویرایش پلن/seed. | `class-memberships-controller.php` |
+| — (منطقه زمانی) | Low (نمایش) | مقایسه `strtotime(مقدار محلی) - time()` (UTC) انحراف ساعت‌های ایران (+3:30) در روزهای مرزی می‌ساخت. | مقایسه با `current_time('timestamp')` در تمام محاسبات روزهای باقی‌مانده. | `class-auth-controller.php`، `class-memberships-controller.php` |
+
+### ۱۲-۲. باگ‌های سمت لایه داده PWA (TypeScript)
+
+| شناسه | شدت | شرح باگ | فیکس اعمال‌شده | فایل |
+|---|---|---|---|---|
+| BUG-25 | Medium (داده — مهم‌ترین باگ فاز) | ورود مجدد کاربرِ خریدار، **کل عضویت/پیشرفت/سفارش‌ها را پاک می‌کرد**: `verifyOtp` فقط `INITIAL_USERS` را می‌شناخت و هر شماره دیگری را با id تازه (برخوردپذیر) می‌ساخت. | رجیستری پایدار کاربران `mrdastbaaf_users` (localStorage) با seed اولیه؛ `verifyOtp`/`switchRole` از طریق `findOrRegisterUser(phone)` رزولو می‌کنند (عضویت/پیشرفت حفظ می‌شود)؛ `updateCurrentUser` تغییرات را در رجیستری هم منعکس می‌کند؛ مولد id برخوردناپذیر. | `authService.ts` |
+| BUG-26 | Medium (i18n) | ارقام فارسی در OTP/شماره موبایل نرمال نمی‌شد → کاربر موبایل فارسی‌کیبورد «کد نامعتبر» می‌گرفت. | متد مشترک `normalizeIranPhone` (toEnglishDigits + `^09\d{9}$`) در requestOtp **و** verifyOtp + نرمال‌سازی کد OTP. | `authService.ts`، `PhoneLoginModal.tsx` |
+| BUG-28 | Low | `switchRole` با نقش ناشناخته بی‌صدا به کاربر اول fallback می‌کرد؛ `updateCurrentUser` هر Partial (حتی id/role) را merge می‌کرد. | خطای «نقش نامعتبر است» + whitelist فیلدها (`fullName/avatarUrl/membership/completedLessonIds/bookmarkedLessonIds`). | `authService.ts` |
+| BUG-29 | Medium (پایداری) | localStorage خراب (غیرآرایه) روی `courses/notes/plans/sections/pages` → کرش در بوت (صفحه سفید). | ماژول مشترک `storageGuard.readJsonArray` (چک Array.isArray + اعتبارسنجی آیتم + ترمیم خودکار کلید با seed) در هر ۵ سرویس؛ orderStore ردیف‌های معیوب را قرنطینه می‌کند. | `storageGuard.ts` (جدید) + همه سرویس‌ها |
+| BUG-30 | Medium (حریم خصوصی) | یادداشت‌های درس **سراسری** بودند نه per-user — کاربر B یادداشت‌های کاربر A را می‌دید/ویرایش می‌کرد. | فیلد `userId` روی `LessonNote` + stamp در `addNote` + فیلتر در `getNotes`. | `courseService.ts`، `types/index.ts` |
+| BUG-31 | Low | `addNote` بدون اعتبارسنجی/سقف؛ هیچ مسیر حذفی وجود نداشت (رشد بی‌پایان). | اعتبارسنجی ثانیه (≥0) و متن (۱..۱۰۰۰ کاراکتر) + متد جدید `deleteNote(noteId)`. | `courseService.ts` |
+| BUG-32 | Medium (دسترسی) | در `canAccessLesson` مقایسه دستی تاریخ برای `expiresAt` خراب (NaN) fail-open بود (در حالی که `isLive()` درست کار می‌کرد) — دو گیت drift کرده بودند. | استفاده از `isLive()` مشترک در `canAccessLesson` (fail-closed). | `courseService.ts` |
+| BUG-33 | Medium (هم‌زمانی) | orderStore: رقابت خواندن-نوشتن بین تب‌ها (آخرین نوشتن برنده، سفارش/پرداخت تب دیگر گم می‌شد) + آیتم‌های خراب کرش می‌کردند + شکست بی‌صدای write باعث «ناپدید شدن» سفارش تازه می‌شد. | شنونده `storage` برای re-hydrate بین‌تبی + `subscribeToOrders` + اعتبارسنجی آیتم در خواندن + `writeOrders` نتیجه برمی‌گرداند (شکست → خطای صریح «فضای ذخیره‌سازی پر است») + متد اتمیک `mutateOrder(orderId, fn)` با mutex درون‌پردازه‌ای. | `orderStore.ts` |
+| BUG-34 | Medium (مالی) | `verifyZibalPayment` درگاه/وضعیت سفارش را چک نمی‌کرد — سفارش `card_to_card`ِ در انتظار بررسی می‌توانست با verify جعلی زیبال مستقیم completed شود (دور زدن صف ادمین). | گارد `gateway === 'zibal'` + گارد وضعیت (completed → idempotent، verifying → خطا، غیر آن → خطای صریح) + انتقال وضعیت فقط از طریق `mutateOrder`. | `paymentService.ts` |
+| BUG-35 | Medium (مالی) | پلنِ گم‌شده در verify → پاسخ «موفق» بدون ساخت عضویت (کاربر پول داده و هیچ). | سفارش → `processing` + `adminNote` و خطای صریح «با پشتیبانی تماس بگیرید»؛ هرگز success جعلی. | `paymentService.ts` |
+| BUG-36 | Low | مولد TrackId شبیه‌ساز ضعیف (برخوردپذیر). | مولد برخوردناپذیر هم‌الگوی orderStore (base36 زمان + شمارنده + تصادفی). | `paymentService.ts` |
+| BUG-37 | Medium (بقای داده) | فعال‌سازی اشتراک به زنده بودن رکورد پلن وابسته بود؛ حذف/ریست پلن‌ها = فعال‌سازی ناموفق. | اسنپ‌شات `{tier, durationDays}` روی سفارش هنگام ثبت (`planSnapshot`) + مسیر fallback grant از اسنپ‌شات در verify/تایید ادمین. | `paymentService.ts`، `transferService.ts`، `types/index.ts` |
+| BUG-38 | Medium (مالی) | تایید ادمین فیش بدون گارد idempotency — دابل‌کلیک/دو تب = تمدید دوبرابر عضویت. | گارد وضعیت (completed → بازگرداندن همان سفارش، غیر pending → خطا) + ادعای اتمیک با `mutateOrder`. | `transferService.ts` |
+| BUG-39 | Medium (مالی) | رد کردن سفارش completed ممکن بود (عضویت فعال می‌ماند ولی دفتر «ردشده» می‌شد). | گارد «سفارش تکمیل‌شده قابل رد نیست». | `transferService.ts` |
+| BUG-40 | Medium (مالی) | فیکس BUG-46: تایید فیش وقتی خریدار آنلاین نبود، اعتبار را **بی‌صدا دور می‌ریخت** (فقط اگر خریدار همان کاربر جاری بود ثبت می‌شد). | فعال‌سازی از طریق رجیستری کاربران: اعتبارِ کاربرِ آفلاین در رکورد رجیستری‌اش نوشته و هنگام ورود بعدی بازیابی می‌شود (تست مرورگری: نرگس/اشتراک طلایی ✅). | `transferService.ts`، `authService.ts` |
+| BUG-40b | Medium (انسجام) | membershipService: پیاده‌سازی تکراری تبدیل جلالی (سال−۶۲۱) و منطق مدت (دو نسخه drift شده) + سرریز پایان ماه در `setMonth` (۳۱ دی + ۱ ماه → ۲ بهمن؛ ۲ روز هدر). | حذف نسخه تکراری → `formatJalali` مشترک (با ارقام فارسی پیش‌فرض) + هلپر مشترک `addDuration` با clamp پایان ماه (۳۱ دی + ۱ ماه → ۲۹/۳۰ بهمن). | `membershipService.ts`، `utils/format.ts` |
+
+### ۱۲-۳. باگ‌های سمت رابط کاربری (Views/Components)
+
+| شناسه | شدت | شرح باگ | فیکس اعمال‌شده | فایل |
+|---|---|---|---|---|
+| BUG-41 | Medium | بج «دسترسی کامل فعال» کاتالوگ فقط status را چک می‌کرد (اشتراک منقضی سبز می‌ماند). | گیت با `isMembershipLive`. | `CatalogueView.tsx` |
+| BUG-42 | Medium | جستجوی کاتالوگ: بدون debounce، بدون catch (اسپینر ابدی در خطا)، race پاسخ‌های کهنه. | Debounce ۳۰۰ms + گارد پاسخ کهنه + کارت خطا با «تلاش مجدد» + شمارنده «N دوره یافت شد». | `CatalogueView.tsx` |
+| BUG-43 | Medium (UX) | شش نما بدون state خطا/۴۰۴/خالی: دوره/صفحه ناموجود = اسپینر ابدی، خطای شبکه = اسپینر ابدی، داشبورد هنرجو در حین لود «سفارشی ثبت نکرده‌اید» جعلی نشان می‌داد. | state خطا با «تلاش مجدد» + ۴۰۴ «دوره/صفحه یافت نشد» + state خالی واقعی + اسکلتون لودینگ در همه نماها (Home/Catalogue/CourseDetail/Editorial/Membership/UserDashboard/Admin). | همه views |
+| BUG-44 | Medium (a11y) | توست تک‌اسلاتی: تایمر قبلی پاک نمی‌شد (B توست A را می‌کشت)، بدون `role/aria-live`، بدون واریانت و دکمه بستن. | تایمر در useRef + `role="status" aria-live="polite"` + واریانت‌های success/error/info + دکمه بستن ۴۴px + واریانت‌دهی همه فراخوانی‌ها. | `App.tsx` |
+| BUG-45 | Medium (مالی) | بستن درگاه زیبال بدون نتیجه = سفارش pending ابدی در تاریخچه. | prop جدید `onAbandon` → mutate به `cancelled` + adminNote + توست «سفارش لغو شد». | `App.tsx`، `ZibalSimulatorModal.tsx` |
+| BUG-46 | Medium (UX خرید) | بعد از لاگین وسط خرید، کانتکست پلن گم می‌شد (شاخه مرده در handleSelectGateway). | نگه‌داشتن `selectedPlanForCheckout` و ازسرگیری خودکار CheckoutModal/مسیر رایگان پس از لاگین. | `App.tsx` |
+| BUG-47 | Medium | لینک «مطالعه راهنما» به صفحه اشتباه (about-us) می‌رفت. | پارامتر slug در ناوبری: `onNavigate('editorial', {slug:'guide-membership'})`. | `App.tsx`، `MembershipView.tsx` |
+| BUG-48 | Low (نمایش) | `daysUntil` برای ورودی خراب ۰ برمی‌گرداند («۰ روز باقی‌مانده» ترسناک). | بازگشت null + رندر «—» در نماها. | `utils/format.ts`، views |
+| BUG-49 | Medium (PWA) | `viewport-fit=cover` در متا نبود → `env(safe-area-inset-*)` صفر و نوچ/هوم‌اندیکیتور روی BottomNav می‌افتاد. | افزودن به متا viewport. | `index.html` |
+| BUG-50 | Low (استایل) | `.no-scrollbar` تعریف نشده (اسکرول‌بار بومی روی نوارها) + حلقه فوکوس کیبورد حذف شده بود. | یوتیلیتی `.no-scrollbar` + استایل سراسری `:focus-visible` (حلقه کهربایی). | `index.css` |
+| BUG-51 | Low (انیمیشن) | کلاس‌های `animate-in/fade-in/zoom-in-95` بدون پکیج `tailwindcss-animate` عملاً no-op بودند (مودال‌ها بدون ترنزیشن). | نصب `tw-animate-css` + import در CSS (کلاس‌ها اکنون CSS واقعی تولید می‌کنند). | `package.json`، `index.css` |
+| BUG-52/54 | Low | کدهای مرده/ایمپورت بلااستفاده + `viewParams` از نوع any + دسته‌بندی‌های صفحه اصلی با شمارش هاردکد ناسازگار. | پاک‌سازی ایمپورت‌ها + تایپ `AppViewParams` + شمارش زنده از courseService + state خالی «به‌زودی». | views، `App.tsx` |
+| BUG-55 | Medium (UI) | مودال‌های روی‌هم scroll-lock را خراب می‌کردند (بسته شدن مودال بالا اسکرول پس‌زمینه را آزاد می‌کرد). | ماژول مشترک `utils/scrollLock.ts` با شمارنده مرجع (قفل در عمق ۰→۱، آزادسازی فقط در ۰). | `scrollLock.ts` (جدید)، `Modal.tsx`، `LessonPlayerModal.tsx` |
+| BUG-56/57 | Medium (a11y) | مودال‌ها بدون `role="dialog"/aria-modal`، بدون فوکوس‌تراپ، بدون بستن با backdrop/Esc. | dialog semantics + فوکوس اولیه + trap کامل Tab/Shift+Tab + Esc + کلیک backdrop (ConfirmDialog: Esc فقط وقتی loading نیست). | `Modal.tsx`، `ConfirmDialog.tsx` |
+| BUG-58 | Medium (پلیر) | پلیر: بدون Esc و scroll-lock، بدون fullscreen، اسکرابر فقط کلیکی، بدون میانبر کیبورد. | Esc + scrollLock + دکمه Fullscreen API + میانبرها (Space/K پخش، ←→ ±۵ث، M بی‌صدا، F تمام‌صفحه) + اسکرابر `role="slider"` با arrow-key + aria-label کیفیت. | `LessonPlayerModal.tsx` |
+| BUG-59 | Medium (داده) | «علامت به عنوان تکمیل» فقط توست می‌داد — هیچ‌جا persist نمی‌شد (پیشرفت همیشه صفر) + کلاس ناموجود `xs:`. | props جدید `onCompleteLesson`/`onToggleBookmark` (با fallback به `updateCurrentUser`) + بج ✓ در سرفصل + نوار پیشرفت داشبورد + `xs:` → `sm:` + aria-label دکمه. | `LessonPlayerModal.tsx`، `App.tsx` |
+| BUG-60 | Medium (پلیر) | پایان ویدیو بی‌صدا به صفر لوپ می‌شد. | پنل «جلسه تمام شد» (تماشای مجدد / جلسه بعدی) + تکمیل خودکار درس. | `LessonPlayerModal.tsx` |
+| BUG-61 | Medium (پلیر) | ثانیه یادداشت هنگام تایپ رها می‌شد (یادداشت جای اشتباه ثبت می‌شد) + ویدیو حین تایپ پخش می‌ماند. | فریز ثانیه هنگام فوکوس + توقف پخش + بازگشت خودکار + حذف یادداشت + خطای inline + maxLength 1000. | `LessonPlayerModal.tsx` |
+| BUG-62 | Medium (پلیر) | تمدید خودکار تیکت: setState بعد از unmount + شکست بدون catch = پلیر بی‌تیکت ابدی. | گارد mounted + catch + اورلی «اعتبار پخش منقضی شد» با دکمه تمدید دستی + پاس دادن تصمیم `canAccessLesson` به صدور تیکت (دفاع در عمق). | `LessonPlayerModal.tsx` |
+| BUG-63 | Medium (فرم) | ورودی OTP بدون inputMode؛ دکمه «ارسال مجدد» فقط تایمر را ریست می‌کرد (پیامک واقعی نمی‌رفت)؛ دابل‌سابمیت ورود سریع. | `inputMode="numeric"` + نرمال‌سازی ارقام + resend واقعی (`requestOtp`) + غیرفعال‌سازی هنگام لود. | `PhoneLoginModal.tsx` |
+| BUG-64 | Medium (فرم مالی) | فرم فیش: آپلود قلابی هاردکد ('fish-varaz.jpg')، بدون ریست بین دفعات (نمایش داده بانکی جلسه قبل)، تاریخ پیش‌فرض هاردکد. | input فایل واقعی (≤۵MB، image/*) + ریست کامل state در باز شدن + تاریخ پیش‌فرض = امروز جلالی + کلیپ‌بورد با fallback و پاک‌سازی تایمر. | `ManualTransferModal.tsx` |
+| BUG-65 | Medium | دکمه نصب PWA: کلاس رنگ نامعتبر، promise بدون catch، بنر قابل حذف نبود، iPad تشخیص داده نمی‌شد. | catch + پیام راهنمای دستی + ماندگاری رد (`mrdastbaaf_install_dismissed`) + dialog semantics + تشخیص iPadOS (maxTouchPoints). | `PWAInstallButton.tsx`، `usePWAInstall.ts` |
+| BUG-66/67/68 | Low (a11y) | حذف فوکوس‌ویزیبل در هدر، دکمه‌های آیکونی بدون aria-label، FAQ بدون aria-expanded، `role="status"` نبودن نشانگر آفلاین. | focus-visible سراسری + aria-label ها + `aria-current="page"` در BottomNav + a11y نشانگر آفلاین. | `Header.tsx`، `BottomNav.tsx`، `OfflineIndicator.tsx` |
+
+### ۱۲-۴. فیچرهای توسعه‌ای جدید (Development Features)
+
+| شناسه | فیچر | شرح | فایل |
+|---|---|---|---|
+| DEV-2 | **روتر Hash با دکمه Back و دیپ‌لینک** | ناوبری واقعی با URL: `#/` ، `#/catalogue?cat=…` ، `#/course/{id}` ، `#/membership` ، `#/dashboard` ، `#/admin` ، `#/page/{slug}`؛ sync با popstate/hashchange، دیپ‌لینک روی لود سرد، دکمه Back/Forward مرورگر و اندروید بین نماها جابجا می‌شود (خروج از اپ نیست). | `App.tsx` |
+| DEV-3 | **ErrorBoundary + AsyncState** | مرز خطای React با UI فارسی «خطایی رخ داد» دور کل اپ + کامپوننت مشترک loading/error/empty با «تلاش مجدد» (پذیرفته‌شده در نماها). | `ErrorBoundary.tsx`، `AsyncState.tsx` (جدید) |
+| DEV-4 | **پیشرفت دوره و «ادامه یادگیری»** | ذخیره واقعی `completedLessonIds`، نوار پیشرفت per-course در داشبورد، ✓ کنار درس‌های تکمیل‌شده در سرفصل، کارت «ادامه یادگیری» (باز کردن اولین درس ناتمام). | `UserDashboardView.tsx`، `CourseDetailView.tsx`، `LessonPlayerModal.tsx` |
+| DEV-5 | **نشان‌شده‌ها (Bookmarks)** | بوکمارک درس از هدر پلیر + بخش «نشان‌شده‌ها» در داشبورد با پخش مستقیم. | `LessonPlayerModal.tsx`، `UserDashboardView.tsx` |
+| DEV-6 | **مدیریت یادداشت** | حذف یادداشت از پلیر (`deleteNote`) + خطای inline برای سقف ۱۰۰۰ کاراکتر. | `LessonPlayerModal.tsx`، `courseService.ts` |
+| DEV-7 | **پارامیت آپدیت PWA** | `registerType: 'prompt'` + کارت «بروزرسانی جدید آماده است — بارگذاری مجدد» با `useRegisterSW` (تست زنده: ساخت نسخه جدید → کارت ظاهر شد → reload → نسخه جدید اعمال ✅). | `vite.config.ts`، `PWAUpdatePrompt.tsx` (جدید) |
+| DEV-13 | **پاک‌سازی سفارش‌های معلق** | در mount: سفارش‌های زیبالِ pendingِ بالای ۲۴ ساعت → `cancelled` (هم‌راستا با کرون سمت سرور BUG-35). | `App.tsx` |
+| DEV-16 | **فیلتر/جستجوی سفارش‌های ادمین** | فیلتر وضعیت (۷ وضعیت)، فیلتر درگاه، جستجوی خریدار/شماره سفارش/عنوان + شمارنده «نمایش N از M» (تست زنده ✅). | `AdminDashboardView.tsx` |
+| DEV-19 | **Hygiene** | نام/نسخه پکیج: `mrdastbaaf-pwa@1.0.3`؛ برچسب‌های وضعیت جدید («لغو شده»/«در حال بررسی») در داشبورد هنرجو. | `package.json`، `UserDashboardView.tsx` |
+
+### ۱۲-۵. فایل‌های تغییر یافته / ایجاد شده (فاز ۳)
+
+**ایجاد شده (PWA):** `src/services/storageGuard.ts` · `src/utils/scrollLock.ts` · `src/utils/format.ts` (توسعه‌یافته) · `src/components/common/ErrorBoundary.tsx` · `src/components/common/AsyncState.tsx` · `src/components/common/PWAUpdatePrompt.tsx`
+
+**اصلاح شده — PHP (v1.0.3):** `mrdastbaaf-bridge.php` · `includes/class-database.php` · `includes/class-auth-controller.php` · `includes/class-courses-controller.php` · `includes/class-memberships-controller.php` · `includes/class-membership-helper.php` · `includes/class-payment-controller.php` · `includes/class-admin-controller.php` · `wordpress-plugin/README.md`
+
+**اصلاح شده — PWA:** `src/services/{authService,courseService,membershipService,orderStore,paymentService,transferService,adminService,videoSecurityService}.ts` · `src/types/index.ts` · `src/data/mockData.ts` · `src/App.tsx` · `src/main.tsx` · هر ۷ فایل `src/views/*.tsx` · `src/components/player/LessonPlayerModal.tsx` · `src/components/payment/{CheckoutModal,ManualTransferModal,ZibalSimulatorModal}.tsx` · `src/components/auth/PhoneLoginModal.tsx` · `src/components/common/{Modal,ConfirmDialog,PWAInstallButton,Header,BottomNav,OfflineIndicator}.tsx` · `src/hooks/usePWAInstall.ts` · `index.html` · `src/index.css` · `package.json` · `vite.config.ts` · `CHANGELOG.md`
+
+### ۱۲-۶. نکات مهاجرت برای استقرار (فاز ۳)
+
+1. **آپگرید افزونه ۱.۰.۲ → ۱.۰.۳:** با فعال‌سازی نسخه جدید، چک نسخه (`mrdastbaaf_db_version`) به‌طور خودکار `dbDelta` را اجرا و ایندکس‌های جدید (`zibal_track_id`, `user_id`, `tracking_code`) را می‌سازد — نیازی به دستور SQL دستی نیست.
+2. **کرون ریکنسیلیشن:** رویداد `mrdastbaaf_daily_reconciliation` در فعال‌سازی زمان‌بندی می‌شود؛ برای وردپرس‌های بدون ترافیک کرون واقعی، WP-CLI یا cron سیستم (`wp-cron.php` هر ۱۵ دقیقه) توصیه می‌شود.
+3. **رجیستری کلاینت:** کلید جدید localStorage `mrdastbaaf_users` به‌طور خودکار از داده‌های فعلی seed می‌شود؛ migration دستی لازم نیست. (کلیدهای فعلی: users، current_user، auth_token، courses، notes، plans، orders، home_sections، editorial_pages، install_dismissed)
+4. **Service Worker:** با حالت `prompt`، کاربران نسخه جدید را از طریق کارت «بروزرسانی جدید» می‌پذیرند — هیچ(force) refresh سروری لازم نیست.
+5. **هم‌خوانی وضعیت‌ها:** وضعیت‌های جدید سفارش (`verifying`، `cancelled`، `processing`) اکنون در داشبورد هنرجو، پنل ادمین و سرویس‌ها برچسب فارسی دارند؛ اگر BI/گزارش خارجی به status ها وابسته است، این سه مقدار را در فیلترها لحاظ کنید.
+6. **سقف‌های سرور:** سقف ۵ سفارش pending زیبال per-user و ۱۰ فیش در ساعت per-IP قابل تنظیم از ثابت‌های ابتدای کنترلرهاست؛ در صورت نیاز به مقادیر پروداکشن، پیش از استقرار به Option وردپرس منتقل شوند.
 
 ---
 **توسعه‌یافته با بالاترین استانداردهای مهندسی نرم‌افزار برای مجموعه مستر دستباف**
