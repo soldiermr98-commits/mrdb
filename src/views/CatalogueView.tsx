@@ -34,13 +34,9 @@ export const CatalogueView: React.FC<CatalogueViewProps> = ({
   const [reloadTick, setReloadTick] = useState(0);
   const requestSeqRef = useRef(0);
 
-  const categories: Array<CourseCategory | 'all'> = [
-    'all',
-    'قالی‌بافی و گلیم',
-    'رودوزی‌های سنتی',
-    'مکرمه و منسوجات',
-    'رنگرزی طبیعی',
-  ];
+  // v1.2.8: چیپ‌های دسته‌بندی حذف شدند (به درخواست کارفرما — دوره‌ها دسته‌بندی
+  // لازم ندارند). selectedCategory فقط برای سازگاری لینک‌های عمیق قدیمی
+  // (#/catalogue?cat=…) نگه داشته می‌شود و رابط کاربری ندارد.
 
   const levels = ['all', 'مقدماتی', 'متوسط', 'پیشرفته'];
 
@@ -122,24 +118,7 @@ export const CatalogueView: React.FC<CatalogueViewProps> = ({
           )}
         </div>
 
-        {/* Category Tabs (Segmented Buttons) */}
-        <div>
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs no-scrollbar">
-            {categories.map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setSelectedCategory(cat)}
-                className={`px-3 py-1.5 rounded-xl font-medium shrink-0 transition ${
-                  selectedCategory === cat
-                    ? 'bg-amber-800 text-white shadow-xs'
-                    : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
-                }`}
-              >
-                {cat === 'all' ? 'همه شاخه‌ها' : cat}
-              </button>
-            ))}
-          </div>
-        </div>
+        {/* Category Tabs — v1.2.8 حذف شد (دسته‌بندی‌ها از کاتالوگ برداشته شد) */}
 
         {/* Level Filter */}
         <div className="flex items-center gap-2 pt-2 border-t border-stone-100 text-xs">
@@ -185,7 +164,7 @@ export const CatalogueView: React.FC<CatalogueViewProps> = ({
         <div className="bg-white rounded-2xl p-12 text-center border border-stone-200 text-stone-500 space-y-3">
           <BookOpen className="w-12 h-12 text-stone-300 mx-auto" />
           <h3 className="font-bold text-sm text-stone-800">هیچ دوره‌ای با این مشخصات یافت نشد</h3>
-          <p className="text-xs text-stone-500">عبارت جستجو یا فیلتر دسته‌بندی را تغییر دهید.</p>
+          <p className="text-xs text-stone-500">عبارت جستجو یا فیلتر سطح آموزشی را تغییر دهید.</p>
           <button
             onClick={() => {
               setSearchTerm('');

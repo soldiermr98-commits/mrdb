@@ -4,10 +4,13 @@
  *
  * قرارداد:
  *   GET /app-pages                → AppPage[] (بر اساس سطح دسترسی کاربر جاری فیلترشده سمت سرور)
- *   GET /app-pages/{id}/content   → AppPageContent (HTML رندرشدهٔ برگهٔ وردپرس)
+ *   GET /app-pages/{id}/content   → AppPageContent (HTML رندرشدهٔ برگهٔ وردپرس + url اختیاری)
  *
  * در حالت دمو (بدون VITE_API_BASE_URL) فهرست خالی است — منوی «صفحات سایت»
  * فقط وقتی چیزی برای نشان‌دادن باشد رندر می‌شود.
+ *
+ * v1.2.8: پاسخ محتوا «url» هم دارد — وقتی هست، UI صفحه را با iframe و پارامتر
+ * mrdapp=1 رندر می‌کند (فیکس استایل صفحات المنتور) و HTML فقط فال‌بک است.
  */
 
 import { AppPage, AppPageContent } from '../types';
@@ -18,6 +21,7 @@ interface ApiAppPageShape {
   title?: unknown;
   access?: unknown;
   sortOrder?: unknown;
+  url?: unknown;
 }
 
 interface ApiAppPageContentShape {
@@ -26,6 +30,7 @@ interface ApiAppPageContentShape {
   html?: unknown;
   access?: unknown;
   updatedAtJalali?: unknown;
+  url?: unknown;
 }
 
 function shapeString(value: unknown, fallback = ''): string {
@@ -52,6 +57,8 @@ export const appPagesService = {
         access: shapeAccess(raw.access),
         sortOrder:
           typeof raw.sortOrder === 'number' && Number.isFinite(raw.sortOrder) ? raw.sortOrder : index,
+        // v1.2.8: نشانی برگه (فقط publish از سرور می‌آید)
+        url: shapeString(raw.url) || undefined,
       }))
       .sort((a, b) => a.sortOrder - b.sortOrder);
   },
@@ -70,6 +77,8 @@ export const appPagesService = {
       html: shapeString(data.html),
       access: shapeAccess(data.access),
       updatedAtJalali: shapeString(data.updatedAtJalali),
+      // v1.2.8: رندر iframe با قالب Canvas افزونه (فیکس المنتور) — خالی = فال‌بک HTML
+      url: shapeString(data.url) || undefined,
     };
   },
 };

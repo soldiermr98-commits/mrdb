@@ -83,6 +83,8 @@ interface ApiCourseShape {
   productId?: unknown;
   /** v1.2.6: تعداد درس‌های پیش‌نمایش رایگان */
   freePreviewCount?: unknown;
+  /** v1.2.8: خرید تک‌دوره‌ای — محصول در سفارش پرداخت‌شدهٔ همین کاربر است */
+  owned?: unknown;
   title?: unknown;
   shortDescription?: unknown;
   fullDescription?: unknown;
@@ -248,6 +250,9 @@ function normalizeApiCourse(raw: ApiCourseShape): Course {
         ? Math.round(raw.productId)
         : null,
     freePreviewCount: apiCount(raw.freePreviewCount),
+    // v1.2.8: فقط سرور این پرچم را ست می‌کند (guest همیشه false) — پالایش سمت کلاینت
+    // عمداً بدون هیچ استنتاج محلی است تا گیتِ دسترسی فقط یک حقیقت داشته باشد: سرور.
+    owned: raw.owned === true,
   };
 }
 
@@ -338,8 +343,16 @@ export const courseService = {
 
   /**
    * Check if a user can access a specific lesson
+   *
+   * v1.2.8: پارامتر اختیاری `course` — وقتی دوره در حساب کاربر «خریداری‌شده»
+   * باشد (سرور: owned=true بر اساس سفارش ووکامرس)، تمام جلسات همان دوره بدون
+   * اشتراک باز می‌شود. در نبود course رفتار قبلی حفظ می‌شود.
    */
-  canAccessLesson(user: UserProfile | null, lesson: Lesson): {
+  canAccessLesson(
+    user: UserProfile | null,
+    lesson: Lesson,
+    course?: Pick<Course, 'owned'> | null
+  ): {
     canAccess: boolean;
     reason: string;
     requiredTier: MembershipTier;
@@ -350,6 +363,17 @@ export const courseService = {
         canAccess: true,
         reason: 'پیش‌نمایش رایگان این درس برای همه کاربران باز است.',
         requiredTier: 'free',
+      };
+    }
+
+    // 1.5 — v1.2.8: خرید تک‌دوره‌ای از سایت (ووکامرس) → تمام جلسات همین دوره باز است.
+    // پرچم owned فقط از سرور می‌آید (سفارش wc-completed/wc-processing همین کاربر)
+    // و هرگز سمت کلاینت استنتاج نمی‌شود — هم‌راستا با گیت سمت سرور بلیط پخش.
+    if (course?.owned) {
+      return {
+        canAccess: true,
+        reason: 'این دوره را از سایت خریداری کرده‌اید — تمام جلسات برای شما باز است.',
+        requiredTier: lesson.requiredTier,
       };
     }
 

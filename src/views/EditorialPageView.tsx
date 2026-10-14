@@ -18,14 +18,29 @@ interface EditorialPageViewProps {
   onNavigate: (view: string, params?: { pageId?: string; slug?: string }) => void;
 }
 
+/** v1.2.8: افزودن پارامتر mrdapp=1 به نشانی برگه — افزونه با این پارامتر قالب
+ *  Canvas (بدون هدر/فوتر سایت) رندر می‌کند و استایل المنتور کامل می‌ماند. */
+function buildAppFrameUrl(url: string): string {
+  try {
+    const parsed = new URL(url, window.location.origin);
+    parsed.searchParams.set('mrdapp', '1');
+    return parsed.toString();
+  } catch {
+    return `${url}${url.includes('?') ? '&' : '?'}mrdapp=1`;
+  }
+}
+
 export const EditorialPageView: React.FC<EditorialPageViewProps> = ({ slug, pageId, onNavigate }) => {
   const [page, setPage] = useState<EditorialPage | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   // v1.2.6: حالت «دسترسی ناکافی» — صفحهٔ ویژهٔ اعضا برای مهمان/بدون اشتراک
   const [accessDenied, setAccessDenied] = useState(false);
-  // v1.2.6: HTML رندرشدهٔ برگهٔ وردپرس (فقط در حالت pageId)
+  // v1.2.6: HTML رندرشدهٔ برگهٔ وردپرس (فقط در حالت pageId — فال‌بک رندر iframe)
   const [apiHtml, setApiHtml] = useState<string | null>(null);
+  // v1.2.8: نشانی برگه برای رندر iframe (فیکس استایل صفحات المنتور)
+  const [frameUrl, setFrameUrl] = useState<string | null>(null);
+  const [frameLoaded, setFrameLoaded] = useState(false);
 
   const loadPage = useCallback(() => {
     setIsLoading(true);
@@ -44,6 +59,10 @@ export const EditorialPageView: React.FC<EditorialPageViewProps> = ({ slug, page
             excerpt: 'صفحهٔ رسمی سایت مستر دستباف',
             lastUpdatedJalali: content.updatedAtJalali,
           });
+          // v1.2.8: اگر سرور نشانی برگه را داد، رندر iframe (قالب Canvas افزونه)
+          // استایل المنتور را سالم نگه می‌دارد؛ HTML فقط فال‌بک است.
+          setFrameUrl(content.url ? buildAppFrameUrl(content.url) : null);
+          setFrameLoaded(false);
           // HTML رندرشدهٔ سرور جداگانه نگه داشته می‌شود (dangerouslySetInnerHTML در رندر)
           setApiHtml(content.html);
           setIsLoading(false);
@@ -190,8 +209,24 @@ export const EditorialPageView: React.FC<EditorialPageViewProps> = ({ slug, page
           <p className="text-xs text-stone-500 leading-relaxed">{page.excerpt}</p>
         </div>
 
-        {/* Content Body — v1.2.6: HTML رندرشدهٔ برگهٔ وردپرس (pageId) یا متن سرمقاله‌ای دمو */}
-        {apiHtml ? (
+        {/* Content Body — v1.2.8: اولویت رندر iframe (قالب Canvas — فیکس استایل صفحات
+            المنتور)؛ فال‌بک: HTML رندرشدهٔ سرور (pageId) یا متن سرمقاله‌ای دمو */}
+        {frameUrl ? (
+          <div className="relative rounded-2xl overflow-hidden border border-stone-200 bg-stone-100">
+            {!frameLoaded && (
+              <div className="absolute inset-0 flex items-center justify-center bg-white" aria-hidden="true">
+                <div className="w-8 h-8 border-3 border-amber-700 border-t-transparent rounded-full animate-spin" />
+              </div>
+            )}
+            <iframe
+              src={frameUrl}
+              title={page.title}
+              onLoad={() => setFrameLoaded(true)}
+              className="w-full h-[78vh] min-h-[420px] block bg-white"
+              referrerPolicy="no-referrer-when-downgrade"
+            />
+          </div>
+        ) : apiHtml ? (
           <div
             className="mrd-wp-page text-xs sm:text-sm text-stone-700 leading-loose [&_a]:text-amber-800 [&_a]:underline [&_h1]:text-lg [&_h1]:font-black [&_h1]:text-amber-950 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-amber-950 [&_h3]:text-sm [&_h3]:font-bold [&_h3]:text-stone-900 [&_p]:my-3 [&_ul]:list-disc [&_ul]:pe-5 [&_ul]:space-y-1 [&_ol]:list-decimal [&_ol]:pe-5 [&_ol]:space-y-1 [&_img]:rounded-xl [&_img]:max-w-full [&_img]:h-auto [&_blockquote]:border-e-4 [&_blockquote]:border-amber-300 [&_blockquote]:bg-amber-50/60 [&_blockquote]:px-3 [&_blockquote]:py-2 [&_blockquote]:rounded-lg [&_table]:w-full [&_table]:text-[11px] [&_th]:border [&_th]:border-stone-200 [&_th]:p-2 [&_td]:border [&_td]:border-stone-200 [&_td]:p-2"
             dangerouslySetInnerHTML={{ __html: apiHtml }}

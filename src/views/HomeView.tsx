@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 // BUG-52: unused icon imports removed (Award, HelpCircle, Layers). BookOpen
 // stays — it is used by the DEV/BUG-53 featured empty-state card.
-import { Course, CourseCategory, HomepageSectionConfig, MembershipPlan, AppUiConfig } from '../types';
+import { Course, HomepageSectionConfig, MembershipPlan, AppUiConfig } from '../types';
 import { INITIAL_HOMEPAGE_SECTIONS } from '../data/mockData';
 import { adminService } from '../services/adminService';
 import { courseService } from '../services/courseService';
@@ -72,9 +72,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
   appUi,
 }) => {
   const [sections, setSections] = useState<HomepageSectionConfig[]>(INITIAL_HOMEPAGE_SECTIONS);
-  const [featuredCourses, setFeaturedCourses] = useState<Course[]>([]);
-  // BUG-53: the full course list feeds the derived category counts (no more
-  // hardcoded cat.count values drifting from the real catalogue).
+  // BUG-53: the full course list feeds the featuredCourses derivation
+  // (v1.2.8: خواستهٔ پیشخوان — «دوره‌های برگزیده» بر اساس featuredCourseIds)
   const [allCourses, setAllCourses] = useState<Course[]>([]);
   const [plans, setPlans] = useState<MembershipPlan[]>([]);
   const [isCoursesLoading, setIsCoursesLoading] = useState(true);
@@ -91,7 +90,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
       .then((c) => {
         if (stale) return;
         setAllCourses(c);
-        setFeaturedCourses(c.filter((item) => item.featured));
         setIsCoursesLoading(false);
       })
       .catch(() => {
@@ -169,18 +167,19 @@ export const HomeView: React.FC<HomeViewProps> = ({
     };
   }, [appUi]);
 
-  // BUG-53: live per-category counts derived from courseService data
-  const categoryCountByTitle = new Map<string, number>();
-  allCourses.forEach((c) => {
-    categoryCountByTitle.set(c.category, (categoryCountByTitle.get(c.category) ?? 0) + 1);
-  });
-
-  const categories: Array<{ title: CourseCategory; desc: string; icon: string; count: number }> = [
-    { title: 'قالی‌بافی و گلیم', desc: 'گره ترکی، چله‌کشی تبریز و نقوش ایلیاتی', icon: '🧶', count: categoryCountByTitle.get('قالی‌بافی و گلیم') ?? 0 },
-    { title: 'رودوزی‌های سنتی', desc: 'پته‌دوزی کرمان و سوزن‌دوزی‌های اصیل', icon: '🪡', count: categoryCountByTitle.get('رودوزی‌های سنتی') ?? 0 },
-    { title: 'مکرمه و منسوجات', desc: 'گره‌بافی مدرن و دکوراتیو دست‌ساز', icon: '🧵', count: categoryCountByTitle.get('مکرمه و منسوجات') ?? 0 },
-    { title: 'رنگرزی طبیعی', desc: 'استخراج رنگ گیاهی از روناس و پوست گردو', icon: '🌿', count: categoryCountByTitle.get('رنگرزی طبیعی') ?? 0 },
-  ];
+  // ---------------------------------------------------------------------------
+  // v1.2.8 — «دوره‌های برگزیده» از پیشخوان (محتوای وب‌اپ ← دوره‌های برگزیده):
+  // وقتی کارفرما در پیشخوان دوره انتخاب کرده باشد (featuredCourseIds)، همان‌ها
+  // (بر اساس productId) رندر می‌شوند؛ فهرست خالی = فال‌بک به پرچم featured که
+  // سرور واقعی نمی‌فرستد → کارت وضعیت خالی نشان داده می‌شود.
+  // ---------------------------------------------------------------------------
+  const featuredCourseIds = appUi?.featuredCourseIds ?? [];
+  const featuredCourses =
+    featuredCourseIds.length > 0
+      ? allCourses.filter(
+          (c) => typeof c.productId === 'number' && featuredCourseIds.includes(c.productId)
+        )
+      : allCourses.filter((c) => c.featured);
 
   const faqs = [
     {
@@ -276,49 +275,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
           );
         }
 
-        // 2. CATEGORIES
-        if (sec.key === 'categories') {
-          return (
-            <section key={sec.id} className="max-w-5xl mx-auto px-4">
-              <div className="flex items-end justify-between mb-4">
-                <div>
-                  <h2 className="text-lg sm:text-xl font-bold text-amber-950">{sec.title}</h2>
-                  <p className="text-xs text-stone-500 mt-0.5">{sec.subtitle}</p>
-                </div>
-                <button
-                  onClick={() => onNavigate('catalogue')}
-                  className="text-xs font-semibold text-amber-800 hover:text-amber-900 flex items-center gap-1"
-                >
-                  همه شاخه‌ها
-                  <ArrowLeft className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {categories.map((cat, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => onNavigate('catalogue', { category: cat.title })}
-                    className="p-3.5 rounded-2xl bg-white border border-stone-200/90 hover:border-amber-700/60 hover:shadow-md text-right transition group"
-                  >
-                    <span className="text-2xl mb-2 block">{cat.icon}</span>
-                    <h3 className="font-bold text-xs sm:text-sm text-stone-900 group-hover:text-amber-900 transition">
-                      {cat.title}
-                    </h3>
-                    <p className="text-[11px] text-stone-500 mt-1 line-clamp-2 leading-relaxed">
-                      {cat.desc}
-                    </p>
-                    <span className="inline-block mt-2 text-[10px] text-amber-800 font-medium">
-                      {/* BUG-53: derived from live courseService data — an empty
-                          category reads «به‌زودی» instead of a wrong «۰ دوره». */}
-                      {cat.count > 0 ? `${cat.count.toLocaleString('fa-IR')} دوره تخصصی` : 'به‌زودی'}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </section>
-          );
-        }
+        // 2. CATEGORIES — v1.2.8 بازنشسته شد (به درخواست کارفرما: «دوره‌های آموزشی
+        //    دسته‌بندی لازم ندارن»)؛ ردیف ذخیره‌شدهٔ قدیمی در /app-ui نادیده گرفته می‌شود.
 
         // 3. FEATURED COURSES
         if (sec.key === 'featured_courses') {
@@ -360,10 +318,13 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 </div>
               ) : featuredCourses.length === 0 ? (
                 // BUG-53: explicit empty-state card instead of an empty grid
+                // v1.2.8: راهنمای کارفرما — انتخاب دوره‌های برگزیده از پیشخوان
                 <div className="bg-white rounded-2xl p-10 text-center border border-stone-200 text-stone-500 space-y-2">
                   <BookOpen className="w-10 h-10 text-stone-300 mx-auto" />
                   <h3 className="font-bold text-sm text-stone-800">هنوز دوره ویژه‌ای منتشر نشده است</h3>
-                  <p className="text-xs text-stone-500">به‌زودی مسترکلاس‌های ویژه در این بخش قرار می‌گیرند.</p>
+                  <p className="text-xs text-stone-500 leading-relaxed">
+                    این بخش از پیشخوان وردپرس مدیریت می‌شود: مستر دستباف ← محتوای وب‌اپ ← دوره‌های برگزیده
+                  </p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

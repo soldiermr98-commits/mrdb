@@ -97,6 +97,12 @@ export interface Course {
   productId?: number | null;
   /** v1.2.6 Real-API: تعداد درس‌های پیش‌نمایش رایگان (نشان کارت در کاتالوگ) */
   freePreviewCount?: number;
+  /**
+   * v1.2.8 — خرید تک‌دوره‌ای از سایت: کاربر با حساب ووکامرسیِ خود این محصول را
+   * خریداری کرده است (سفارش wc-completed/wc-processing) → تمام جلسات همان دوره
+   * بدون اشتراک باز می‌شود. فقط سرور این پرچم را ست می‌کند (guest همیشه false).
+   */
+  owned?: boolean;
 }
 
 export type PlanDuration = '1_month' | '3_months' | '6_months' | '12_months';
@@ -157,7 +163,8 @@ export interface PaymentOrder {
 
 export interface HomepageSectionConfig {
   id: string;
-  key: 'hero' | 'categories' | 'featured_courses' | 'membership_plans' | 'artisan_story' | 'faq';
+  // v1.2.8: سکشن «categories» بازنشسته شد (به درخواست کارفرما — دوره‌ها دسته‌بندی لازم ندارند)
+  key: 'hero' | 'featured_courses' | 'membership_plans' | 'artisan_story' | 'faq';
   title: string;
   subtitle?: string;
   isEnabled: boolean;
@@ -190,6 +197,12 @@ export interface VideoStreamingTicket {
    * تنها منبع مجاز <video> در حالت اتصال واقعی. در دمو undefined می‌ماند.
    */
   videoUrl?: string;
+  /**
+   * v1.2.8 — نسخه‌های کیفیت اختیاری سرور (فیلتر mrdastbaaf_stream_video_qualities).
+   * وقتی سرور نسخهٔ چندکیفیته دارد، پلیر انتخاب‌گر واقعی رندر می‌کند و با سوییچ
+   * نسخه، جای پخش حفظ می‌شود. خالی/undefined = پخش خودکار طبق فایل اصلی.
+   */
+  qualities?: Array<{ label: string; url: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -204,15 +217,23 @@ export interface AppPage {
   title: string;
   access: AppPageAccess;
   sortOrder: number;
+  /** v1.2.8: نشانی برگهٔ وردپرس (فقط صفحات publish) — برای رندر iframe با mrdapp=1 */
+  url?: string;
 }
 
 export interface AppPageContent {
   id: string;
   title: string;
-  /** HTML رندرشدهٔ برگهٔ وردپرس (فیلتر the_content سمت سرور) */
+  /** HTML رندرشدهٔ برگهٔ وردپرس (فیلتر the_content سمت سرور) — فال‌بک */
   html: string;
   access: AppPageAccess;
   updatedAtJalali: string;
+  /**
+   * v1.2.8: نشانی واقعی برگه — وقتی هست، به‌جای HTML خام، صفحه با iframe و
+   * پارامتر mrdapp=1 رندر می‌شود (فیکس استایل صفحات المنتور: CSS/JS کامل
+   * المنتور در قالب Canvas خودش اجرا می‌شود و استایل به‌هم نمی‌ریزد).
+   */
+  url?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -236,8 +257,8 @@ export interface AppUiHero {
 }
 
 /** کلیدهای مجاز — دقیقاً همان‌هایی که HomeView رندر می‌کند (hero جدا سرو می‌شود) */
+// v1.2.8: «categories» بازنشسته شد (به درخواست کارفرما)
 export type AppUiSectionKey =
-  | 'categories'
   | 'featured_courses'
   | 'artisan_story'
   | 'membership_plans'
@@ -273,4 +294,10 @@ export interface AppUiConfig {
     dock: AppUiDockItem[];
     guides: AppUiGuideItem[];
   };
+  /**
+   * v1.2.8 — «دوره‌های برگزیده» از پیشخوان (محتوای وب‌اپ ← دوره‌های برگزیده):
+   * شناسه‌های عددی محصولات ووکامرس انتخاب‌شده. فهرست خالی = سکشن خالی می‌ماند
+   * (رفتار قبلی بر اساس پرچم featured که سرور نمی‌فرستد).
+   */
+  featuredCourseIds: number[];
 }

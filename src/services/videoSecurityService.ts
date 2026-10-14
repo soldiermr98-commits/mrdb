@@ -33,10 +33,26 @@ interface ApiPlaybackShape {
   videoUrl?: unknown;
   watermarkText?: unknown;
   expiresAt?: unknown;
+  /** v1.2.8: نسخه‌های کیفیت اختیاری سرور [{label,url}] — خالی/غایب = پخش خودکار */
+  qualities?: unknown;
 }
 
 function ticketString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() !== '' ? value : fallback;
+}
+
+/** v1.2.8: پالایش فهرست نسخه‌های کیفیت سرور — هر مدخل باید label+url معتبر داشته باشد */
+function ticketQualities(value: unknown): Array<{ label: string; url: string }> {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => {
+      const item = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null;
+      if (!item) return null;
+      const label = ticketString(item.label);
+      const url = ticketString(item.url);
+      return label && url ? { label, url } : null;
+    })
+    .filter((q): q is { label: string; url: string } => q !== null);
 }
 
 const REAL_QUALITY_OPTIONS = [
@@ -117,6 +133,8 @@ export const videoSecurityService = {
         provider: `Secure Stream (${streamType})`,
         qualityOptions: REAL_QUALITY_OPTIONS,
         videoUrl,
+        // v1.2.8: فقط فهرست معتبر سرور عبور می‌کند — خالی = پلیر نمایش «خودکار» می‌دهد
+        qualities: ticketQualities(playback.qualities),
       };
     }
 

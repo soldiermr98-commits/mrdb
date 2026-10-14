@@ -2,8 +2,8 @@
  * @file services/appContentService.ts
  * @description سرویس «محتوای وب‌اپ» (v1.2.7) — متن‌ها/سکشن‌ها/منو از پل وردپرس
  *
- * قرارداد (افزونهٔ 1.3.4):
- *   GET /app-ui → { hero, sections[], menu:{ dock[], guides[] } }
+ * قرارداد (افزونهٔ 1.3.4+):
+ *   GET /app-ui → { hero, sections[], menu:{ dock[], guides[] }, featuredCourseIds[] }
  *
  * اصول:
  *  - در حالت دمو null برمی‌گردد (مصرف‌کننده پیش‌فرض‌های کد را نشان می‌دهد).
@@ -11,6 +11,8 @@
  *    نمی‌شکند و فیلد جاافتاده با پیش‌فرض جایگزین می‌شود.
  *  - هیچ کشی در اینجا نیست (پاسخ سرور no-store است و کارفرما انتظار تغییر
  *    تقریباً آنی دارد).
+ * v1.2.8: سکشن «categories» بازنشسته شد؛ featuredCourseIds (دوره‌های برگزیده از
+ * پیشخوان) اضافه شد.
  */
 
 import { AppUiConfig, AppUiSectionKey } from '../types';
@@ -33,13 +35,8 @@ export const DEFAULT_APP_UI: AppUiConfig = {
     stat3Label: 'تمدید اشتراک بدون کسر خودکار',
   },
   sections: [
-    {
-      key: 'categories',
-      title: 'دسته‌بندی‌های آموزشی',
-      subtitle: 'رشته‌های متنوع صنایع دستی از دار قالی تا مکرمه مدرن',
-      enabled: true,
-      sortOrder: 2,
-    },
+    // v1.2.8: سکشن «categories» بازنشسته شد (دسته‌بندی‌های آموزشی حذف شد)
+    // ترتیب پیش‌فرض هم‌ارز افزونهٔ 1.3.5 است (featured=3 … faq=6)
     {
       key: 'featured_courses',
       title: 'دوره‌های برگزیده و پیشنهادی اساتید',
@@ -83,10 +80,10 @@ export const DEFAULT_APP_UI: AppUiConfig = {
       { key: 'membership', label: 'پلن‌های اشتراک', enabled: true, sortOrder: 4 },
     ],
   },
+  featuredCourseIds: [],
 };
 
 const SECTION_KEYS: AppUiSectionKey[] = [
-  'categories',
   'featured_courses',
   'artisan_story',
   'membership_plans',
@@ -117,6 +114,7 @@ export function normalizeAppUi(raw: unknown): AppUiConfig {
       dock: DEFAULT_APP_UI.menu.dock.map((d) => ({ ...d })),
       guides: DEFAULT_APP_UI.menu.guides.map((g) => ({ ...g })),
     },
+    featuredCourseIds: [],
   };
 
   if (!raw || typeof raw !== 'object') return out;
@@ -131,11 +129,16 @@ export function normalizeAppUi(raw: unknown): AppUiConfig {
   }
 
   // ─── sections (بر اساس key ادغام + مرتب‌سازی sortOrder) ───
+  // v1.2.8: ردیف‌های ناشناخته (مثل categories بازنشسته‌شده) عمداً دور ریخته می‌شوند —
+  // فقط کلیدهای شناخته‌شده از پاسخ سرور روی پیش‌فرض‌ها سوار می‌شوند.
   if (Array.isArray(data.sections)) {
     const storedBy = new Map<string, Record<string, unknown>>();
     data.sections.forEach((entry) => {
       if (entry && typeof entry === 'object' && typeof (entry as any).key === 'string') {
-        storedBy.set((entry as any).key, entry as Record<string, unknown>);
+        const key = (entry as any).key as string;
+        if ((SECTION_KEYS as string[]).includes(key)) {
+          storedBy.set(key, entry as Record<string, unknown>);
+        }
       }
     });
     out.sections = out.sections
@@ -151,6 +154,17 @@ export function normalizeAppUi(raw: unknown): AppUiConfig {
         };
       })
       .sort((a, b) => a.sortOrder - b.sortOrder);
+  }
+
+  // ─── featuredCourseIds (v1.2.8: دوره‌های برگزیده از پیشخوان) ───
+  if (Array.isArray(data.featuredCourseIds)) {
+    out.featuredCourseIds = Array.from(
+      new Set(
+        data.featuredCourseIds
+          .filter((id): id is number => typeof id === 'number' && Number.isFinite(id) && id > 0)
+          .map((id) => Math.round(id))
+      )
+    );
   }
 
   // ─── menu.dock (فیلدهای شناخته‌شده + ترتیب آرایهٔ سرور) ───
