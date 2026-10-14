@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.3.2
+ * Version: 1.3.3
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.3.2');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.3.3');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -61,6 +61,8 @@ require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-sms-service.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-membership-helper.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-auth-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-courses-controller.php';
+// v1.3.3: صفحات وب‌اپ (منوی اپ + سطح دسترسی از پیشخوان)
+require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-app-pages-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-memberships-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-payment-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-admin-controller.php';
@@ -132,6 +134,7 @@ class MrDastbaaf_Bridge_Plugin {
             MrDastbaaf_Settings_Controller::LESSONS_SLUG,   // mrdastbaaf-lessons
             MrDastbaaf_Admin_Pages_Controller::PLANS_SLUG,  // mrdastbaaf-plans
             MrDastbaaf_Admin_Pages_Controller::RECEIPTS_SLUG, // mrdastbaaf-receipts
+            MrDastbaaf_Admin_Pages_Controller::APP_PAGES_SLUG, // mrdastbaaf-app-pages (v1.3.3)
         );
         if (in_array($page, $allowed, true)) {
             wp_enqueue_style(
@@ -152,6 +155,10 @@ class MrDastbaaf_Bridge_Plugin {
 
         $courses_controller = new MrDastbaaf_Courses_Controller();
         $courses_controller->register_routes();
+
+        // v1.3.3: صفحات وب‌اپ
+        $app_pages_controller = new MrDastbaaf_App_Pages_Controller();
+        $app_pages_controller->register_routes();
 
         $memberships_controller = new MrDastbaaf_Memberships_Controller();
         $memberships_controller->register_routes();

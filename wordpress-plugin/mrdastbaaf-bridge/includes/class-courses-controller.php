@@ -27,10 +27,20 @@ class MrDastbaaf_Courses_Controller {
             'permission_callback' => '__return_true',
         ));
 
+        // v1.3.3: جزئیات با شناسهٔ عددی محصول (bulletproof) — کلاینت productId را
+        // از پاسخ لیست می‌گیرد و مستقیم با عدد می‌پرسد؛ هیچ وابستگی به شکل اسلاگ نیست.
+        register_rest_route(MRDASTBAAF_API_NAMESPACE, '/courses/by-id/(?P<id>[0-9]+)', array(
+            'methods' => 'GET',
+            'callback' => array($this, 'handle_get_single_course_by_id'),
+            'permission_callback' => '__return_true',
+        ));
+
         // v1.3.2: الگوی id از [a-zA-Z0-9_-] به [^/]+ گسترش یافت — وردپرس اسلاگ‌های
         // فارسی را با utf8_uri_encode به شکل «%d8%af...» ذخیره می‌کند و کاراکتر «%»
         // (و خود حروف فارسی) در الگوی قبلی جور نمی‌شد → همهٔ درخواست‌های جزئیات دوره
         // با «rest_no_route» ۴۰۴ می‌شدند (دوره‌ها در لیست دیده می‌شدند ولی بازشان نمی‌شد).
+        // v1.3.3: جستجوی اسلاگ از get_posts (با واسطهٔ WP_Query) به کوئری مستقیم
+        // $wpdb منتقل شد تا هیچ فیلتر/سانیتایز لایهٔ پرس‌وجو نتواند نتیجه را تغییر دهد.
         register_rest_route(MRDASTBAAF_API_NAMESPACE, '/courses/(?P<id>[^/]+)', array(
             'methods' => 'GET',
             'callback' => array($this, 'handle_get_single_course'),
@@ -99,11 +109,21 @@ class MrDastbaaf_Courses_Controller {
         $courses = array();
         foreach ($query->posts as $product_post) {
             $course = $this->map_product_to_course($product_post);
-            $course['lessonsCount'] = isset($lesson_counts[(int) $product_post->ID]) ? $lesson_counts[(int) $product_post->ID] : 0;
+            $counts = isset($lesson_counts[(int) $product_post->ID]) ? $lesson_counts[(int) $product_post->ID] : array('total' => 0, 'free' => 0);
+            $course['lessonsCount'] = (int) $counts['total'];
+            // v1.3.3: تعداد درس‌های پیش‌نمایش رایگان — کارت دوره در اپ نشان «پیش‌نمایش رایگان» می‌گیرد
+            $course['freePreviewCount'] = (int) $counts['free'];
             $courses[] = $course;
         }
 
         return rest_ensure_response($courses);
+    }
+
+    /**
+     * v1.3.3: جزئیات دوره با شناسهٔ عددی محصول — مسیر بدون وابستگی به اسلاگ.
+     */
+    public function handle_get_single_course_by_id(WP_REST_Request $request) {
+        return $this->serve_single_course(sanitize_text_field($request->get_param('id')));
     }
 
     /**
@@ -114,48 +134,37 @@ class MrDastbaaf_Courses_Controller {
      * ذخیره، همان خام یا همان «%d8%af...» است؛ همهٔ فرم‌های معتبر امتحان می‌شوند.
      */
     public function handle_get_single_course(WP_REST_Request $request) {
+        return $this->serve_single_course(sanitize_text_field($request->get_param('id')));
+    }
+
+    /**
+     * v1.3.3: هستهٔ مشترک جزئیات دوره (اسلاگ یا شناسهٔ عددی).
+     *
+     * تشخیص استقرار ۱.۳.۲: جستجوی اسلاگ با get_posts روی سرور واقعی حتی برای
+     * کاندیدای «دقیقاً برابر با post_name» هم شکست می‌خورد (تأییدشده با کش‌باستر
+     * و lscache:miss) — پس lookup به کوئری مستقیم $wpdb روی post_name منتقل شد
+     * که از تمام فیلترها/سانیتایزهای WP_Query ووکامرسی عبور می‌کند. مسیر عددی
+     * by-id هم برای کلاینت اضافه شد (پاسخ لیست productId دارد).
+     */
+    private function serve_single_course($course_id) {
         if (!class_exists('WooCommerce')) {
             return new WP_Error('woocommerce_missing', 'ووکامرس فعال نیست؛ امکان نمایش دوره وجود ندارد.', array('status' => 503));
         }
 
-        $course_id = sanitize_text_field($request->get_param('id'));
+        $course_id = trim((string) $course_id);
         if ('' === $course_id) {
             return new WP_Error('not_found', 'دوره مورد نظر یافت نشد.', array('status' => 404));
         }
 
-        // v1.3.2: کاندیداهای اسلاگ — [خام، یک‌بار decode، دوبار decode، encode خام]
-        // تا هر ترکیب «فرم درخواست × فرم ذخیره‌شده» پوشش داده شود (فقط جستجوی
-        // ایندکس‌شدهٔ post_name؛ تا ۴ پرس‌وجوی سبک با posts_per_page=1).
-        $candidates = array($course_id);
-        $form = $course_id;
-        for ($i = 0; $i < 2; $i++) {
-            $form = rawurldecode($form);
-            if (!in_array($form, $candidates, true)) {
-                $candidates[] = $form;
-            }
-        }
-        $encoded = rawurlencode($course_id);
-        if (!in_array($encoded, $candidates, true)) {
-            $candidates[] = $encoded;
-        }
-
-        $post_found = null;
-        foreach ($candidates as $candidate) {
-            $posts = get_posts(array(
-                'name' => $candidate,
-                'post_type' => 'product',
-                'post_status' => 'publish',
-                'numberposts' => 1,
-                'no_found_rows' => true,
-            ));
-            if (!empty($posts)) {
-                $post_found = $posts[0];
-                break;
-            }
-        }
+        $tried = array();
+        $post_found = $this->resolve_product($course_id, $tried);
 
         if (null === $post_found) {
-            return new WP_Error('not_found', 'دوره مورد نظر یافت نشد.', array('status' => 404));
+            // v1.3.3: فهرست اشکال امتحان‌شده در بدنهٔ خطا — عیب‌یابی آینده بدون حدس
+            return new WP_Error('not_found', 'دوره مورد نظر یافت نشد.', array(
+                'status' => 404,
+                'tried' => array_slice($tried, 0, 8),
+            ));
         }
 
         // v1.2.0 (یافتهٔ ۳): محصول باید واقعاً در دستهٔ دوره‌ها باشد — قبلاً هر محصول
@@ -172,8 +181,78 @@ class MrDastbaaf_Courses_Controller {
          * آدرس ویدیو فقط از اندپوینت پخش با بلیط معتبر قابل دریافت است.
          */
         $course['lessons'] = $this->get_product_lessons_public((int) $post_found->ID);
+        $course['freePreviewCount'] = $this->count_free_lessons((int) $post_found->ID);
 
         return rest_ensure_response($course);
+    }
+
+    /**
+     * v1.3.3: پیدا کردن محصول publish با اسلاگ یا شناسهٔ عددی — بدون WP_Query.
+     *
+     * @param string $course_id اسلاگ (هر فرمی) یا شناسهٔ عددی
+     * @param array  &$tried    خروجی: فهرست اشکال جستجوشده (برای دیباگ پاسخ ۴۰۴)
+     * @return WP_Post|null
+     */
+    private function resolve_product($course_id, &$tried) {
+        global $wpdb;
+        $tried = array();
+
+        // مسیر ۱: شناسهٔ عددی — قطعی‌ترین شکل
+        if (ctype_digit($course_id)) {
+            $tried[] = 'id=' . (int) $course_id;
+            $post = get_post((int) $course_id);
+            if ($post && 'product' === $post->post_type && 'publish' === $post->post_status) {
+                return $post;
+            }
+            return null;
+        }
+
+        // مسیر ۲: کاندیداهای اسلاگ [خام، یک‌بار decode، دوبار decode، encode خام]
+        $candidates = array($course_id);
+        $form = $course_id;
+        for ($i = 0; $i < 2; $i++) {
+            $form = rawurldecode($form);
+            if (!in_array($form, $candidates, true)) {
+                $candidates[] = $form;
+            }
+        }
+        $encoded = rawurlencode($course_id);
+        if (!in_array($encoded, $candidates, true)) {
+            $candidates[] = $encoded;
+        }
+
+        foreach ($candidates as $candidate) {
+            $candidate = (string) $candidate;
+            if ('' === $candidate) {
+                continue;
+            }
+            $tried[] = 'slug=' . $candidate;
+            $pid = $wpdb->get_var($wpdb->prepare(
+                "SELECT ID FROM {$wpdb->posts} WHERE post_name = %s AND post_type = 'product' AND post_status = 'publish' LIMIT 1",
+                $candidate
+            ));
+            if ($pid) {
+                $post = get_post((int) $pid);
+                if ($post) {
+                    return $post;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * v1.3.3: شمارش درس‌های پیش‌نمایش رایگان یک محصول
+     */
+    private function count_free_lessons($product_id) {
+        global $wpdb;
+        $table_lessons = $wpdb->prefix . 'mrdastbaaf_lessons';
+        $count = $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM $table_lessons WHERE product_id = %d AND is_free = 1",
+            (int) $product_id
+        ));
+        return (int) $count;
     }
 
     /**
@@ -336,6 +415,8 @@ class MrDastbaaf_Courses_Controller {
 
         return array(
             'id' => $post->post_name, // slug محصول = شناسهٔ دوره در فرانت
+            // v1.3.3: شناسهٔ عددی محصول — کلاینت برای جزئیات از /courses/by-id/{productId} استفاده می‌کند
+            'productId' => (int) $post->ID,
             'title' => $post->post_title,
             'description' => $post->post_excerpt,
             'image' => (string) get_the_post_thumbnail_url($post->ID, 'medium'),
@@ -380,8 +461,10 @@ class MrDastbaaf_Courses_Controller {
     /**
      * شمارش درس‌های چند محصول در یک پرس‌وجو
      *
+     * v1.3.3: تعداد پیش‌نمایش‌های رایگان هم در همان پرس‌وجو برمی‌گردد.
+     *
      * @param array $product_ids شناسه‌های عددی محصول
-     * @return array نگاشت product_id => تعداد درس
+     * @return array نگاشت product_id => ['total' => int, 'free' => int]
      */
     private function get_lesson_counts(array $product_ids) {
         global $wpdb;
@@ -395,11 +478,14 @@ class MrDastbaaf_Courses_Controller {
         $sanitized_ids = array_map('absint', $product_ids);
         $ids_sql = implode(',', $sanitized_ids);
 
-        $rows = $wpdb->get_results("SELECT product_id, COUNT(*) AS lesson_total FROM $table_lessons WHERE product_id IN ($ids_sql) GROUP BY product_id");
+        $rows = $wpdb->get_results("SELECT product_id, COUNT(*) AS lesson_total, COALESCE(SUM(CASE WHEN is_free = 1 THEN 1 ELSE 0 END), 0) AS lesson_free FROM $table_lessons WHERE product_id IN ($ids_sql) GROUP BY product_id");
 
         $counts = array();
         foreach ($rows as $row) {
-            $counts[(int) $row->product_id] = (int) $row->lesson_total;
+            $counts[(int) $row->product_id] = array(
+                'total' => (int) $row->lesson_total,
+                'free'  => (int) $row->lesson_free,
+            );
         }
 
         return $counts;
