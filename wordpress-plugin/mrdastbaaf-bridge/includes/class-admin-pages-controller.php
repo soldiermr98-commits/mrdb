@@ -19,6 +19,15 @@
  *     MrDastbaaf_Admin_Controller::review_receipt_decision() عبور می‌کند تا
  *     رفتار REST (ادعای اتمیک pending→verifying، grant، ممیزی) عیناً حفظ شود.
  *
+ *  ۳) (v1.3.4) محتوای وب‌اپ — متن‌های بنر اصلی (Hero)، سکشن‌های صفحهٔ اصلی و
+ *     منوی اپ (داک موبایل/دسکتاپ + میان‌برهای شیت منو) از پیشخوان؛ سرو REST
+ *     با GET /app-ui از کنترلر NEW class-app-ui-controller.php. ترتیب سکشن‌ها
+ *     و راهنماها با دکمه‌های ↑/↓ (admin_post مخصوص move) جابه‌جا می‌شود.
+ *
+ *  ۴) (v1.3.4) اتصال خرید سایت — نگاشت پلن‌های عضویت به محصولات ووکامرس؛
+ *     منطق پرداخت در کنترلر NEW class-woo-bridge-controller.php است و این
+ *     صفحه فقط فرم نگاشت (انتخاب محصول برای هر پلن) را نگه می‌دارد.
+ *
  * امنیت: همهٔ عملیات نوشتن از admin-post.php با check_admin_referer +
  * current_user_can('manage_options') + sanitize ورودی‌ها؛ خروجی‌ها با
  * esc_html/esc_attr/esc_url. پیام نتیجهٔ هر عملیات در transient کوتاه‌عمر
@@ -35,6 +44,9 @@ class MrDastbaaf_Admin_Pages_Controller {
     const PLANS_SLUG = 'mrdastbaaf-plans';
     const RECEIPTS_SLUG = 'mrdastbaaf-receipts';
     const APP_PAGES_SLUG = 'mrdastbaaf-app-pages';
+    // v1.3.4: محتوای وب‌اپ + اتصال خرید سایت
+    const APP_UI_SLUG = 'mrdastbaaf-app-ui';
+    const WOO_MAP_SLUG = 'mrdastbaaf-woo-map';
 
     public function register() {
         add_action('admin_menu', array($this, 'register_admin_menu'));
@@ -47,6 +59,13 @@ class MrDastbaaf_Admin_Pages_Controller {
         add_action('admin_post_mrdastbaaf_app_page_toggle', array($this, 'handle_app_page_toggle'));
         add_action('admin_post_mrdastbaaf_app_page_delete', array($this, 'handle_app_page_delete'));
         add_action('admin_post_mrdastbaaf_app_page_move', array($this, 'handle_app_page_move'));
+        // v1.3.4: محتوای وب‌اپ (متن‌ها/سکشن‌ها/منو + جابه‌جایی ترتیب)
+        add_action('admin_post_mrdastbaaf_app_ui_save_texts', array($this, 'handle_app_ui_save_texts'));
+        add_action('admin_post_mrdastbaaf_app_ui_save_sections', array($this, 'handle_app_ui_save_sections'));
+        add_action('admin_post_mrdastbaaf_app_ui_save_menu', array($this, 'handle_app_ui_save_menu'));
+        add_action('admin_post_mrdastbaaf_app_ui_move', array($this, 'handle_app_ui_move'));
+        // v1.3.4: اتصال خرید سایت (نگاشت پلن → محصول ووکامرس)
+        add_action('admin_post_mrdastbaaf_woo_map_save', array($this, 'handle_woo_map_save'));
     }
 
     /**
@@ -80,6 +99,26 @@ class MrDastbaaf_Admin_Pages_Controller {
             'manage_options',
             self::APP_PAGES_SLUG,
             array($this, 'render_app_pages_page')
+        );
+
+        // v1.3.4: محتوای وب‌اپ
+        add_submenu_page(
+            MrDastbaaf_Settings_Controller::MENU_SLUG,
+            'محتوای وب‌اپلیکیشن مستر دستباف',
+            'محتوای وب‌اپ',
+            'manage_options',
+            self::APP_UI_SLUG,
+            array($this, 'render_app_ui_page')
+        );
+
+        // v1.3.4: اتصال خرید سایت
+        add_submenu_page(
+            MrDastbaaf_Settings_Controller::MENU_SLUG,
+            'اتصال خرید ووکامرس به پلن‌های عضویت',
+            'اتصال خرید سایت',
+            'manage_options',
+            self::WOO_MAP_SLUG,
+            array($this, 'render_woo_map_page')
         );
     }
 
@@ -1282,5 +1321,542 @@ class MrDastbaaf_Admin_Pages_Controller {
         }
 
         $this->redirect_to_page(self::APP_PAGES_SLUG);
+    }
+
+    /* ─────────────────────── صفحهٔ «محتوای وب‌اپ» (v1.3.4) ─────────────────────── */
+
+    /**
+     * صفحهٔ «محتوای وب‌اپ» — سه کارت: متن‌های بنر اصلی (Hero)، سکشن‌های صفحهٔ نخست
+     * و منوی وب‌اپ (داک + راهنماها). داده از هستهٔ مشترک
+     * MrDastbaaf_App_UI_Controller::get_app_ui() (پیش‌فرض + ذخیره‌شده) می‌آید و
+     * REST GET /app-ui دقیقاً همین شکل را سرو می‌کند — یعنی هرچه اینجا ذخیره
+     * شود همان است که اپ نشان می‌دهد. هیچ جدول/اسکیمای جدیدی در کار نیست.
+     */
+    public function render_app_ui_page() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $flash = $this->pull_flash();
+        $ui = MrDastbaaf_App_UI_Controller::get_app_ui();
+        $updated_at = (int) get_option(MrDastbaaf_App_UI_Controller::UPDATED_AT_OPTION, 0);
+        $admin_post = admin_url('admin-post.php');
+        ?>
+        <div class="wrap mrd-scope">
+            <div class="mrd-hero">
+                <div class="mrd-hero__icon" aria-hidden="true">🎨</div>
+                <div>
+                    <h1 class="mrd-hero__title">محتوای وب‌اپلیکیشن</h1>
+                    <p class="mrd-hero__desc">متن‌های بنر اصلی صفحهٔ نخست، عنوان و توضیح سکشن‌ها و برچسب‌های منوی اپ را از این‌جا مدیریت کنید. تغییرات بلافاصله در اندپوینت <code dir="ltr">GET /app-ui</code> سرو می‌شود و پاسخ‌های آن همیشه بدون کش هستند؛ مقدار هر فیلدِ ذخیره‌شده روی پیش‌فرض سوار می‌شود و فیلدِ جاافتاده از پیش‌فرض می‌آید.</p>
+                </div>
+            </div>
+
+            <?php $this->render_flash_notice($flash); ?>
+
+            <?php if ($updated_at > 0): ?>
+                <p class="mrd-muted">آخرین به‌روزرسانی محتوا: <?php echo esc_html(date_i18n('Y/m/d — H:i', $updated_at)); ?></p>
+            <?php endif; ?>
+
+            <div class="mrd-card">
+            <h2 class="mrd-card__title">متن‌های بنر اصلی (Hero)</h2>
+            <form method="post" action="<?php echo esc_url($admin_post); ?>">
+                <input type="hidden" name="action" value="mrdastbaaf_app_ui_save_texts" />
+                <?php wp_nonce_field('mrdastbaaf_app_ui_save_texts', 'mrd_nonce'); ?>
+                <table class="form-table" role="presentation">
+                    <?php
+                    $this->app_ui_text_row('متن نشان بالای تیتر', 'badgeText', $ui['hero']['badgeText']);
+                    $this->app_ui_text_row('تیتر اصلی بنر', 'headline', $ui['hero']['headline']);
+                    $this->app_ui_text_row('توضیح زیر تیتر', 'subheadline', $ui['hero']['subheadline']);
+                    $this->app_ui_text_row('متن دکمهٔ اصلی', 'ctaPrimaryText', $ui['hero']['ctaPrimaryText']);
+                    $this->app_ui_text_row('متن دکمهٔ دوم', 'ctaSecondaryText', $ui['hero']['ctaSecondaryText']);
+                    $this->app_ui_text_row('آمار ۱ — عدد', 'stat1Value', $ui['hero']['stat1Value'], 'مثلاً «+۱,۴۰۰»');
+                    $this->app_ui_text_row('آمار ۱ — توضیح', 'stat1Label', $ui['hero']['stat1Label']);
+                    $this->app_ui_text_row('آمار ۲ — عدد', 'stat2Value', $ui['hero']['stat2Value'], 'مثلاً «۶ دوره»');
+                    $this->app_ui_text_row('آمار ۲ — توضیح', 'stat2Label', $ui['hero']['stat2Label']);
+                    $this->app_ui_text_row('آمار ۳ — عدد', 'stat3Value', $ui['hero']['stat3Value'], 'مثلاً «۱۰۰٪ دستی»');
+                    $this->app_ui_text_row('آمار ۳ — توضیح', 'stat3Label', $ui['hero']['stat3Label']);
+                    ?>
+                </table>
+                <?php submit_button('ذخیرهٔ متن‌های بنر'); ?>
+            </form>
+            </div>
+
+            <div class="mrd-card">
+            <h2 class="mrd-card__title">سکشن‌های صفحهٔ نخست</h2>
+            <p class="mrd-hint">عنوان و توضیح هر سکشن + روشن/خاموش کردن نمایش آن. ترتیب را با دکمه‌های ↑/↓ جابه‌جا کنید؛ ردیف ۱ صفحهٔ نخست برای بنر Hero نگه داشته می‌شود و سکشن‌ها پس از آن می‌آیند.</p>
+            <form method="post" action="<?php echo esc_url($admin_post); ?>">
+                <input type="hidden" name="action" value="mrdastbaaf_app_ui_save_sections" />
+                <?php wp_nonce_field('mrdastbaaf_app_ui_save_sections', 'mrd_nonce'); ?>
+                <div class="mrd-table-wrap">
+                <table class="widefat striped">
+                    <thead>
+                        <tr>
+                            <th>عنوان سکشن</th>
+                            <th>توضیح سکشن</th>
+                            <th>نمایش در اپ</th>
+                            <th>ترتیب</th>
+                            <th>جابه‌جایی</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($ui['sections'] as $section): $section_key = (string) $section['key']; ?>
+                            <tr>
+                                <td><input type="text" name="sections[<?php echo esc_attr($section_key); ?>][title]" value="<?php echo esc_attr($section['title']); ?>" class="regular-text" /></td>
+                                <td><input type="text" name="sections[<?php echo esc_attr($section_key); ?>][subtitle]" value="<?php echo esc_attr($section['subtitle']); ?>" class="regular-text" /></td>
+                                <td><input type="checkbox" name="sections[<?php echo esc_attr($section_key); ?>][enabled]" value="1" <?php checked(!empty($section['enabled'])); ?> /></td>
+                                <td><?php echo esc_html(number_format_i18n((int) $section['sortOrder'])); ?></td>
+                                <td>
+                                    <button type="submit" class="button button-small" form="mrd-app-ui-section-<?php echo esc_attr($section_key); ?>-up" aria-label="انتقال به بالا">↑</button>
+                                    <button type="submit" class="button button-small" form="mrd-app-ui-section-<?php echo esc_attr($section_key); ?>-down" aria-label="انتقال به پایین">↓</button>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <?php submit_button('ذخیرهٔ سکشن‌ها'); ?>
+            </form>
+            <?php
+            // فرم‌های کوچک جابه‌جایی ترتیب (بیرون از فرم اصلی تا تودرتو نشوند؛
+            // دکمه‌های ↑/↓ بالا با مشخصهٔ HTML5 form= به همین‌ها وصل می‌شوند)
+            foreach ($ui['sections'] as $section):
+                $section_key = (string) $section['key'];
+                foreach (array('up', 'down') as $move_dir): ?>
+                <form method="post" action="<?php echo esc_url($admin_post); ?>" style="display:none;" id="mrd-app-ui-section-<?php echo esc_attr($section_key); ?>-<?php echo esc_attr($move_dir); ?>">
+                    <input type="hidden" name="action" value="mrdastbaaf_app_ui_move" />
+                    <input type="hidden" name="scope" value="sections" />
+                    <input type="hidden" name="key" value="<?php echo esc_attr($section_key); ?>" />
+                    <input type="hidden" name="dir" value="<?php echo esc_attr($move_dir); ?>" />
+                    <?php wp_nonce_field('mrdastbaaf_app_ui_move', 'mrd_nonce'); ?>
+                </form>
+            <?php endforeach; endforeach; ?>
+            </div>
+
+            <div class="mrd-card">
+            <h2 class="mrd-card__title">منوی وب‌اپ</h2>
+            <p class="mrd-hint">نوار پایین/بالای اپ (داک): چهار آیتم ثابت با برچسب و کلید نمایش قابل تنظیم — ترتیب داک در اپ ثابت است. میان‌برهای شیت منو (راهنماها): برچسب + کلید نمایش + ترتیبِ قابل جابه‌جایی با ↑/↓.</p>
+            <form method="post" action="<?php echo esc_url($admin_post); ?>">
+                <input type="hidden" name="action" value="mrdastbaaf_app_ui_save_menu" />
+                <?php wp_nonce_field('mrdastbaaf_app_ui_save_menu', 'mrd_nonce'); ?>
+                <div class="mrd-table-wrap">
+                <table class="widefat striped">
+                    <thead>
+                        <tr>
+                            <th>آیتم داک</th>
+                            <th>برچسب</th>
+                            <th>نمایش در اپ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($ui['menu']['dock'] as $item): $item_key = (string) $item['key']; ?>
+                            <tr>
+                                <td><code dir="ltr"><?php echo esc_html($item_key); ?></code></td>
+                                <td><input type="text" name="dock[<?php echo esc_attr($item_key); ?>][label]" value="<?php echo esc_attr($item['label']); ?>" class="regular-text" /></td>
+                                <td><input type="checkbox" name="dock[<?php echo esc_attr($item_key); ?>][enabled]" value="1" <?php checked(!empty($item['enabled'])); ?> /></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <div class="mrd-table-wrap" style="margin-top:18px;">
+                <table class="widefat striped">
+                    <thead>
+                        <tr>
+                            <th>میان‌بر منو (راهنماها)</th>
+                            <th>برچسب</th>
+                            <th>نمایش در اپ</th>
+                            <th>ترتیب</th>
+                            <th>جابه‌جایی</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($ui['menu']['guides'] as $item): $item_key = (string) $item['key']; ?>
+                            <tr>
+                                <td><code dir="ltr"><?php echo esc_html($item_key); ?></code></td>
+                                <td><input type="text" name="guides[<?php echo esc_attr($item_key); ?>][label]" value="<?php echo esc_attr($item['label']); ?>" class="regular-text" /></td>
+                                <td><input type="checkbox" name="guides[<?php echo esc_attr($item_key); ?>][enabled]" value="1" <?php checked(!empty($item['enabled'])); ?> /></td>
+                                <td><?php echo esc_html(number_format_i18n((int) $item['sortOrder'])); ?></td>
+                                <td>
+                                    <button type="submit" class="button button-small" form="mrd-app-ui-guide-<?php echo esc_attr($item_key); ?>-up" aria-label="انتقال به بالا">↑</button>
+                                    <button type="submit" class="button button-small" form="mrd-app-ui-guide-<?php echo esc_attr($item_key); ?>-down" aria-label="انتقال به پایین">↓</button>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <?php submit_button('ذخیرهٔ منو'); ?>
+            </form>
+            <?php
+            // فرم‌های کوچک جابه‌جایی راهنماها (همان الگوی سکشن‌ها)
+            foreach ($ui['menu']['guides'] as $item):
+                $item_key = (string) $item['key'];
+                foreach (array('up', 'down') as $move_dir): ?>
+                <form method="post" action="<?php echo esc_url($admin_post); ?>" style="display:none;" id="mrd-app-ui-guide-<?php echo esc_attr($item_key); ?>-<?php echo esc_attr($move_dir); ?>">
+                    <input type="hidden" name="action" value="mrdastbaaf_app_ui_move" />
+                    <input type="hidden" name="scope" value="guides" />
+                    <input type="hidden" name="key" value="<?php echo esc_attr($item_key); ?>" />
+                    <input type="hidden" name="dir" value="<?php echo esc_attr($move_dir); ?>" />
+                    <?php wp_nonce_field('mrdastbaaf_app_ui_move', 'mrd_nonce'); ?>
+                </form>
+            <?php endforeach; endforeach; ?>
+            </div>
+        </div>
+        <?php
+    }
+
+    /**
+     * ردیف ورودی متنی فرم‌توان Hero — فقط خروجی HTML؛ پاکسازی در هندلر ذخیره
+     */
+    private function app_ui_text_row($label, $name, $value, $description = '') {
+        ?>
+        <tr>
+            <th scope="row"><label for="mrd-app-ui-<?php echo esc_attr($name); ?>"><?php echo esc_html($label); ?></label></th>
+            <td>
+                <input type="text" id="mrd-app-ui-<?php echo esc_attr($name); ?>" name="<?php echo esc_attr($name); ?>" value="<?php echo esc_attr($value); ?>" class="regular-text" />
+                <?php if ('' !== (string) $description): ?>
+                    <p class="description"><?php echo esc_html($description); ?></p>
+                <?php endif; ?>
+            </td>
+        </tr>
+        <?php
+    }
+
+    /**
+     * ذخیرهٔ متن‌های بنر اصلی (Hero) — ۱۱ فیلد متنی؛ فقط بخش hero بازنویسی
+     * می‌شود و سکشن‌ها/منوی ذخیره‌شده دست‌نخورده می‌مانند.
+     */
+    public function handle_app_ui_save_texts() {
+        check_admin_referer('mrdastbaaf_app_ui_save_texts', 'mrd_nonce');
+        if (!current_user_can('manage_options')) {
+            wp_die('شما مجوز انجام این عملیات را ندارید.');
+        }
+
+        $fields = array(
+            'badgeText', 'headline', 'subheadline', 'ctaPrimaryText', 'ctaSecondaryText',
+            'stat1Value', 'stat1Label', 'stat2Value', 'stat2Label', 'stat3Value', 'stat3Label',
+        );
+        $hero = array();
+        foreach ($fields as $field) {
+            $hero[$field] = isset($_POST[$field]) ? sanitize_text_field(wp_unslash($_POST[$field])) : '';
+        }
+
+        $stored = MrDastbaaf_App_UI_Controller::get_stored();
+        $stored['hero'] = $hero;
+        MrDastbaaf_App_UI_Controller::save($stored);
+
+        $this->flash('success', 'متن‌های بنر اصلی ذخیره شد؛ اپ از همین لحظه متن‌های تازه را می‌بیند.');
+        $this->redirect_to_page(self::APP_UI_SLUG);
+    }
+
+    /**
+     * ذخیرهٔ سکشن‌های صفحهٔ نخست — عنوان/توضیح/نمایش از فرم؛ ترتیب (sortOrder)
+     * از وضعیت فعلی حفظ می‌شود و فقط با دکمه‌های ↑/↓ تغییر می‌کند.
+     */
+    public function handle_app_ui_save_sections() {
+        check_admin_referer('mrdastbaaf_app_ui_save_sections', 'mrd_nonce');
+        if (!current_user_can('manage_options')) {
+            wp_die('شما مجوز انجام این عملیات را ندارید.');
+        }
+
+        $posted = (isset($_POST['sections']) && is_array($_POST['sections'])) ? wp_unslash($_POST['sections']) : array();
+        $current = MrDastbaaf_App_UI_Controller::get_app_ui();
+
+        $sections = array();
+        foreach ($current['sections'] as $section) {
+            $key = (string) $section['key'];
+            $entry = array(
+                'key'       => $key,
+                'title'     => (string) $section['title'],
+                'subtitle'  => (string) $section['subtitle'],
+                'enabled'   => !empty($section['enabled']),
+                'sortOrder' => (int) $section['sortOrder'],
+            );
+            if (isset($posted[$key]) && is_array($posted[$key])) {
+                if (isset($posted[$key]['title'])) {
+                    $entry['title'] = sanitize_text_field($posted[$key]['title']);
+                }
+                if (isset($posted[$key]['subtitle'])) {
+                    $entry['subtitle'] = sanitize_text_field($posted[$key]['subtitle']);
+                }
+                $entry['enabled'] = !empty($posted[$key]['enabled']);
+            }
+            $sections[] = $entry;
+        }
+
+        $stored = MrDastbaaf_App_UI_Controller::get_stored();
+        $stored['sections'] = $sections;
+        MrDastbaaf_App_UI_Controller::save($stored);
+
+        $this->flash('success', 'سکشن‌های صفحهٔ نخست ذخیره شد.');
+        $this->redirect_to_page(self::APP_UI_SLUG);
+    }
+
+    /**
+     * ذخیرهٔ منوی وب‌اپ — داک (برچسب + نمایش) و راهنماها (برچسب + نمایش)؛
+     * ترتیب راهنماها از وضعیت فعلی حفظ می‌شود.
+     */
+    public function handle_app_ui_save_menu() {
+        check_admin_referer('mrdastbaaf_app_ui_save_menu', 'mrd_nonce');
+        if (!current_user_can('manage_options')) {
+            wp_die('شما مجوز انجام این عملیات را ندارید.');
+        }
+
+        $posted_dock = (isset($_POST['dock']) && is_array($_POST['dock'])) ? wp_unslash($_POST['dock']) : array();
+        $posted_guides = (isset($_POST['guides']) && is_array($_POST['guides'])) ? wp_unslash($_POST['guides']) : array();
+        $current = MrDastbaaf_App_UI_Controller::get_app_ui();
+
+        $dock = array();
+        foreach ($current['menu']['dock'] as $item) {
+            $key = (string) $item['key'];
+            $entry = array(
+                'key'     => $key,
+                'label'   => (string) $item['label'],
+                'enabled' => !empty($item['enabled']),
+            );
+            if (isset($posted_dock[$key]) && is_array($posted_dock[$key])) {
+                if (isset($posted_dock[$key]['label'])) {
+                    $entry['label'] = sanitize_text_field($posted_dock[$key]['label']);
+                }
+                $entry['enabled'] = !empty($posted_dock[$key]['enabled']);
+            }
+            $dock[] = $entry;
+        }
+
+        $guides = array();
+        foreach ($current['menu']['guides'] as $item) {
+            $key = (string) $item['key'];
+            $entry = array(
+                'key'       => $key,
+                'label'     => (string) $item['label'],
+                'enabled'   => !empty($item['enabled']),
+                'sortOrder' => (int) $item['sortOrder'],
+            );
+            if (isset($posted_guides[$key]) && is_array($posted_guides[$key])) {
+                if (isset($posted_guides[$key]['label'])) {
+                    $entry['label'] = sanitize_text_field($posted_guides[$key]['label']);
+                }
+                $entry['enabled'] = !empty($posted_guides[$key]['enabled']);
+            }
+            $guides[] = $entry;
+        }
+
+        $stored = MrDastbaaf_App_UI_Controller::get_stored();
+        if (!isset($stored['menu']) || !is_array($stored['menu'])) {
+            $stored['menu'] = array();
+        }
+        $stored['menu']['dock'] = $dock;
+        $stored['menu']['guides'] = $guides;
+        MrDastbaaf_App_UI_Controller::save($stored);
+
+        $this->flash('success', 'منوی وب‌اپ ذخیره شد.');
+        $this->redirect_to_page(self::APP_UI_SLUG);
+    }
+
+    /**
+     * جابه‌جایی ترتیب سکشن/راهنما (↑/↓) — sortOrder با همسایه در فهرست مرتب‌شده
+     * عوض می‌شود (همان الگوی handle_app_page_move)؛ scope = sections|guides.
+     */
+    public function handle_app_ui_move() {
+        check_admin_referer('mrdastbaaf_app_ui_move', 'mrd_nonce');
+        if (!current_user_can('manage_options')) {
+            wp_die('شما مجوز انجام این عملیات را ندارید.');
+        }
+
+        $scope = isset($_POST['scope']) ? sanitize_key(wp_unslash($_POST['scope'])) : '';
+        $key = isset($_POST['key']) ? $this->sanitize_item_key(wp_unslash($_POST['key'])) : '';
+        $dir = isset($_POST['dir']) ? sanitize_key(wp_unslash($_POST['dir'])) : 'up';
+
+        if ('' === $key || !in_array($scope, array('sections', 'guides'), true) || !in_array($dir, array('up', 'down'), true)) {
+            $this->flash('error', 'درخواست جابه‌جایی ترتیب نامعتبر بود.');
+            $this->redirect_to_page(self::APP_UI_SLUG);
+        }
+
+        $ui = MrDastbaaf_App_UI_Controller::get_app_ui();
+        $list = ('guides' === $scope) ? $ui['menu']['guides'] : $ui['sections'];
+
+        $index = null;
+        foreach ($list as $i => $entry) {
+            if ((string) $entry['key'] === $key) {
+                $index = $i;
+                break;
+            }
+        }
+
+        if (null !== $index) {
+            $swap_with = ('up' === $dir) ? $index - 1 : $index + 1;
+            if ($swap_with >= 0 && $swap_with < count($list)) {
+                $tmp = (int) $list[$index]['sortOrder'];
+                $list[$index]['sortOrder'] = (int) $list[$swap_with]['sortOrder'];
+                $list[$swap_with]['sortOrder'] = $tmp;
+
+                $stored = MrDastbaaf_App_UI_Controller::get_stored();
+                if ('guides' === $scope) {
+                    if (!isset($stored['menu']) || !is_array($stored['menu'])) {
+                        $stored['menu'] = array();
+                    }
+                    $stored['menu']['guides'] = $list;
+                } else {
+                    $stored['sections'] = $list;
+                }
+                MrDastbaaf_App_UI_Controller::save($stored);
+                $this->flash('success', 'ترتیب به‌روزرسانی شد.');
+            }
+        }
+
+        $this->redirect_to_page(self::APP_UI_SLUG);
+    }
+
+    /* ─────────────────────── صفحهٔ «اتصال خرید سایت» (v1.3.4) ─────────────────────── */
+
+    /**
+     * صفحهٔ «اتصال خرید سایت» — توضیح فارسی قابلیت + جدول همهٔ پلن‌ها با
+     * انتخابگر محصول ووکامرس (منتشرشده، حداکثر ۲۰۰ محصول بر اساس عنوان) که
+     * مقدار فعلی نگاشت (آپشن mrdastbaaf_woo_map) روی آن پیش‌انتخاب شده است.
+     * در نبود ووکامرس فقط اعلان نمایش داده می‌شود.
+     */
+    public function render_woo_map_page() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $flash = $this->pull_flash();
+        ?>
+        <div class="wrap mrd-scope">
+            <div class="mrd-hero">
+                <div class="mrd-hero__icon" aria-hidden="true">🛒</div>
+                <div>
+                    <h1 class="mrd-hero__title">اتصال خرید سایت</h1>
+                    <p class="mrd-hero__desc">هر پلنِ عضویت را به یک محصول ووکامرس نگاشت کنید؛ وقتی سفارشِ آن محصول به وضعیت «در حال پردازش» یا «تکمیل‌شده» برسد، خریدار به‌صورت خودکار در وب‌اپ مشترک می‌شود — با همان هستهٔ فعال‌سازی/تمدید فیش‌ها (سطح-آگاه: تمدید، ارتقا یا رد سطح پایین‌تر) و دفتر ایدمپوتنسی؛ پس اجرای دوبارهٔ همان سفارش هرگز تمدید دوم نمی‌سازد. خریدارِ مهمان با شمارهٔ صورتحساب شناسایی می‌شود؛ اگر کاربری با آن شماره پیدا نشود، سفارش بی‌اعمال رها شده و در لاگ سرور ثبت می‌گردد.</p>
+                </div>
+            </div>
+
+            <?php $this->render_flash_notice($flash); ?>
+
+            <?php if (!class_exists('WooCommerce')): ?>
+                <div class="notice notice-error"><p>ووکامرس فعال نیست؛ ابتدا افزونهٔ ووکامرس را نصب و فعال کنید تا فهرست محصول‌ها برای نگاشت نمایش داده شود. تا آن زمان، پرداخت موفق سایت هیچ عضویتی در اپ نمی‌سازد.</p></div>
+            <?php else:
+                global $wpdb;
+                $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
+                $plans = $wpdb->get_results("SELECT * FROM $table_plans ORDER BY price_toman ASC, created_at ASC");
+                $map = MrDastbaaf_Woo_Bridge_Controller::get_map();
+
+                // فقط محصولات منتشرشده — حداکثر ۲۰۰ مورد بر اساس عنوان (بدون کش
+                // اضافه؛ این صفحه فقط برای ادمین و به‌ندرت باز می‌شود)
+                $products_query = new WP_Query(array(
+                    'post_type'              => 'product',
+                    'post_status'            => 'publish',
+                    'posts_per_page'         => 200,
+                    'orderby'                => 'title',
+                    'order'                  => 'ASC',
+                    'no_found_rows'          => true,
+                    'update_post_term_cache' => false,
+                    'update_post_meta_cache' => false,
+                ));
+                ?>
+                <div class="mrd-card">
+                <h2 class="mrd-card__title">نگاشت پلن ← محصول ووکامرس</h2>
+                <?php if (empty($plans)): ?>
+                    <p class="mrd-empty">هنوز پلنی در صفحهٔ «پلن‌های عضویت» ثبت نشده است؛ ابتدا پلن‌ها را بسازید، سپس این‌جا به محصول وصل کنید.</p>
+                <?php elseif (!$products_query->have_posts()): ?>
+                    <p class="mrd-note mrd-note--warn">هیچ محصول منتشرشده‌ای در ووکامرس یافت نشد؛ برای هر پلن یک محصول بسازید، منتشر کنید و سپس این‌جا نگاشت را ثبت کنید.</p>
+                <?php else: ?>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                    <input type="hidden" name="action" value="mrdastbaaf_woo_map_save" />
+                    <?php wp_nonce_field('mrdastbaaf_woo_map_save', 'mrd_nonce'); ?>
+                    <div class="mrd-table-wrap">
+                    <table class="widefat striped">
+                        <thead>
+                            <tr>
+                                <th>پلن عضویت</th>
+                                <th>سطح</th>
+                                <th>قیمت (تومان)</th>
+                                <th>مدت</th>
+                                <th>محصول ووکامرس</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($plans as $plan): $plan_id = (string) $plan->id; $selected = isset($map[$plan_id]) ? (int) $map[$plan_id] : 0; ?>
+                                <tr>
+                                    <td>
+                                        <strong><?php echo esc_html($plan->title); ?></strong><br />
+                                        <code dir="ltr"><?php echo esc_html($plan_id); ?></code>
+                                        <?php if (empty($plan->is_active)): ?><br /><span class="mrd-pill mrd-pill--off">پلن غیرفعال</span><?php endif; ?>
+                                    </td>
+                                    <td><span class="mrd-pill mrd-pill--<?php echo esc_attr((string) $plan->tier); ?>"><?php echo esc_html($this->tier_label($plan->tier)); ?></span></td>
+                                    <td><?php echo esc_html(number_format_i18n((int) $plan->price_toman)); ?></td>
+                                    <td><?php echo esc_html((string) $plan->duration_label); ?></td>
+                                    <td>
+                                        <select name="map[<?php echo esc_attr($plan_id); ?>]">
+                                            <option value="0" <?php selected($selected, 0); ?>>— بدون اتصال —</option>
+                                            <?php foreach ($products_query->posts as $product): ?>
+                                                <option value="<?php echo esc_attr((string) $product->ID); ?>" <?php selected($selected, (int) $product->ID); ?>><?php echo esc_html(get_the_title($product) . ' (#' . (int) $product->ID . ')'); ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    </div>
+                    <p class="mrd-hint">تغییر نگاشت روی خریدهای «جدید» اثر می‌گذارد؛ سفارش‌هایی که قبلاً اعمال شده‌اند با دفتر ایدمپوتنسی دوباره اعمال نمی‌شوند.</p>
+                    <?php submit_button('ذخیرهٔ نگاشت'); ?>
+                </form>
+                <?php endif; ?>
+                </div>
+            <?php endif; ?>
+        </div>
+        <?php
+    }
+
+    /**
+     * ذخیرهٔ نگاشت پلن → محصول — هر ورودی absint می‌شود؛ شناسهٔ پلن با الگوی
+     * سفید کاراکتری اعتبارسنجی می‌شود؛ انتخاب «بدون اتصال» (۰) یعنی حذف نگاشت.
+     */
+    public function handle_woo_map_save() {
+        check_admin_referer('mrdastbaaf_woo_map_save', 'mrd_nonce');
+        if (!current_user_can('manage_options')) {
+            wp_die('شما مجوز انجام این عملیات را ندارید.');
+        }
+
+        $raw_map = (isset($_POST['map']) && is_array($_POST['map'])) ? wp_unslash($_POST['map']) : array();
+        $map = array();
+        foreach ($raw_map as $raw_plan_id => $raw_product_id) {
+            $plan_id = $this->sanitize_plan_id((string) $raw_plan_id);
+            $product_id = absint($raw_product_id);
+            if ('' !== $plan_id && $product_id > 0) {
+                $map[$plan_id] = $product_id;
+            }
+        }
+
+        MrDastbaaf_Woo_Bridge_Controller::save_map($map);
+
+        if (empty($map)) {
+            $this->flash('success', 'نگاشت ذخیره شد — همهٔ پلن‌ها بدون اتصال هستند و خرید سایت عضویتی نمی‌سازد.');
+        } else {
+            $this->flash('success', 'نگاشت پلن‌ها به محصولات ذخیره شد؛ خریدهای جدید از همین لحظه عضویت می‌سازند.');
+        }
+        $this->redirect_to_page(self::WOO_MAP_SLUG);
+    }
+
+    /**
+     * پاکسازی کلید آیتم‌های وب‌اپ (sections/guides/dock) — فقط a-z0-9_- مجاز
+     * (کلیدهای قراردادی همیشه همین الگو هستند)
+     */
+    private function sanitize_item_key($raw) {
+        $clean = preg_replace('/[^a-z0-9_\-]/', '', strtolower(trim((string) $raw)));
+        return is_string($clean) ? $clean : '';
+    }
+
+    /**
+     * اعتبارسنجی شناسهٔ پلن از کلیدهای آرایهٔ POST — الگوی تولید شناسهٔ پلن
+     * {tier}_{random} با کاراکترهای [A-Za-z0-9_-] و حداکثر ۶۴ کاراکتر (varchar(64))
+     */
+    private function sanitize_plan_id($raw) {
+        $raw = trim((string) $raw);
+        if ('' === $raw || !preg_match('/^[A-Za-z0-9_\-]{1,64}$/', $raw)) {
+            return '';
+        }
+        return $raw;
     }
 }

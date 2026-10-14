@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.3.3
+ * Version: 1.3.4
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.3.3');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.3.4');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -32,6 +32,14 @@ define('MRDASTBAAF_BRIDGE_VERSION', '1.3.3');
  * v1.3.2: فیکس ۴۰۴ جزئیات دوره با اسلاگ فارسی — الگوی id اندپوینت /courses/{id}
  * به [^/]+ گسترش یافت + جستجوی تحمل‌پذیر اسلاگ (خام/یک‌بار/دوبار encoded) چون
  * وردپرس اسلاگ فارسی را به شکل «%d8%af...» ذخیره می‌کند و الگوی قبلی هرگز جور نمی‌شد.
+ * v1.3.4: دو قابلیت NEW بدون هیچ تغییری در اسکیما (۱.۳.۰ ثابت) —
+ *  ۱) «محتوای وب‌اپ»: متن‌های بنر اصلی، سکشن‌های صفحهٔ اصلی و منوی اپ از پیشخوان
+ *     (صفحهٔ NEW «محتوای وب‌اپ») و سرو REST با GET /app-ui — ذخیره در آپشن
+ *     mrdastbaaf_app_ui (بدون جدول جدید)؛ پاسخ namespace همیشه no-store است.
+ *  ۲) «اتصال خرید سایت»: پل ووکامرس — نگاشت پلن→محصول در آپشن mrdastbaaf_woo_map
+ *     (صفحهٔ NEW «اتصال خرید سایت»)؛ پرداخت موفق (processing/completed) محصولِ
+ *     نگاشت‌شده، با هستهٔ مشترک grant_or_extend و دفتر ایدمپوتنسی woo-{order_id}
+ *     اشتراک کاربر را فعال/تمدید می‌کند.
  */
 
 /**
@@ -63,6 +71,10 @@ require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-auth-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-courses-controller.php';
 // v1.3.3: صفحات وب‌اپ (منوی اپ + سطح دسترسی از پیشخوان)
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-app-pages-controller.php';
+// v1.3.4: محتوای وب‌اپ (REST /app-ui) + پل ووکامرس (پیش از کنترلر صفحات ادمین —
+// زیرصفحه‌های «محتوای وب‌اپ» و «اتصال خرید سایت» از آن‌ها استفاده می‌کنند)
+require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-app-ui-controller.php';
+require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-woo-bridge-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-memberships-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-payment-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-admin-controller.php';
@@ -109,6 +121,10 @@ class MrDastbaaf_Bridge_Plugin {
         $settings_controller = new MrDastbaaf_Settings_Controller();
         $settings_controller->register();
 
+        // v1.3.4: پل ووکامرس — پرداخت موفق محصولِ نگاشت‌شده → عضویت اپ؛ هوک‌ها
+        // بی‌قید‌و‌شرط ثبت می‌شوند (هندلر در نبود ووکامرس به‌صورت دفاعی خالی می‌گذرد)
+        MrDastbaaf_Woo_Bridge_Controller::add_hooks();
+
         // v1.2.1: زیرصفحه‌های NEW «پلن‌های عضویت» و «بررسی فیش‌ها» (CRUD پلن‌ها +
         // تایید/رد فیش با هستهٔ مشترک REST)
         $admin_pages_controller = new MrDastbaaf_Admin_Pages_Controller();
@@ -135,6 +151,8 @@ class MrDastbaaf_Bridge_Plugin {
             MrDastbaaf_Admin_Pages_Controller::PLANS_SLUG,  // mrdastbaaf-plans
             MrDastbaaf_Admin_Pages_Controller::RECEIPTS_SLUG, // mrdastbaaf-receipts
             MrDastbaaf_Admin_Pages_Controller::APP_PAGES_SLUG, // mrdastbaaf-app-pages (v1.3.3)
+            MrDastbaaf_Admin_Pages_Controller::APP_UI_SLUG,    // mrdastbaaf-app-ui (v1.3.4)
+            MrDastbaaf_Admin_Pages_Controller::WOO_MAP_SLUG,   // mrdastbaaf-woo-map (v1.3.4)
         );
         if (in_array($page, $allowed, true)) {
             wp_enqueue_style(
@@ -159,6 +177,10 @@ class MrDastbaaf_Bridge_Plugin {
         // v1.3.3: صفحات وب‌اپ
         $app_pages_controller = new MrDastbaaf_App_Pages_Controller();
         $app_pages_controller->register_routes();
+
+        // v1.3.4: محتوای وب‌اپ (متن‌های بنر/سکشن‌ها/منو — GET /app-ui)
+        $app_ui_controller = new MrDastbaaf_App_UI_Controller();
+        $app_ui_controller->register_routes();
 
         $memberships_controller = new MrDastbaaf_Memberships_Controller();
         $memberships_controller->register_routes();
