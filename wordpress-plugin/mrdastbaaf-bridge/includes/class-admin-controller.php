@@ -175,18 +175,56 @@ class MrDastbaaf_Admin_Controller {
     }
 
     /**
-     * تایید یا رد فیش واریزی توسط مدیر
+     * تایید یا رد فیش واریزی توسط مدیر (اندپوینت REST)
+     *
+     * v1.2.1: این متد حالا پوستهٔ نازکِ هستهٔ مشترک review_receipt_decision() است —
+     * صفحهٔ پیشخوان «بررسی فیش‌ها» هم با دقیقاً همین هسته کار می‌کند تا گذار وضعیت،
+     * پیام‌ها و ردپای ممیزی بین REST و پیشخوان هرگز واگرا نشود.
+     */
+    public function handle_review_receipt(WP_REST_Request $request) {
+        $result = self::review_receipt_decision(
+            (string) $request->get_param('id'),
+            (string) $request->get_param('decision'),
+            (string) $request->get_param('admin_note')
+        );
+
+        if (is_wp_error($result)) {
+            // کد خطا/وضعیت HTTP عیناً مانند نسخه‌های پیشین برگردانده می‌شود
+            return $result;
+        }
+
+        return rest_ensure_response($result);
+    }
+
+    /**
+     * v1.2.1: هستهٔ مشترک تایید/رد فیش — هم REST (اندپوینت /admin/receipts/{id}/review)
+     * و هم صفحهٔ پیشخوان «بررسی فیش‌ها» از همین متد استفاده می‌کنند.
      *
      * v1.2.0 (یافتهٔ ۱-۱۰): ادعای اتمیک به verifying تغییر کرد (نه completed) تا
      * وضعیت میانی «در حال پردازش» گمراه‌کننده نباشد؛ رد با UPDATE مشروط + بررسی
      * نتیجه انجام می‌شود؛ رکورد انتقال فقط پس از گذار موفق وضعیت به‌روز می‌شود؛
-     * و همهٔ اقدامات با ردپای ممیزی ثبت می‌شوند.
+     * و همهٔ اقدامات با ردپای ممیزی ثبت می‌شوند. رفتار نسخهٔ ۱.۲.۰ (همان کدهای خطا،
+     * وضعیت‌ها و پیام‌ها) کلمه‌به‌کلمه حفظ شده است.
+     *
+     * ورودی‌ها اینجا sanitize می‌شوند؛ فراخوانندهٔ پیشخوان فقط مقدار unslash‌شده
+     * می‌دهد (REST مقادیر get_param از پیش unslash هستند).
+     *
+     * @param string   $order_id    شناسه سفارش
+     * @param string   $decision    'approve' یا 'reject'
+     * @param string   $admin_note  یادداشت ادمین (برای رد الزامی است — قرارداد REST)
+     * @param int|null $reviewer_id عامل اقدام (پیش‌فرض: کاربر جاری)
+     * @return array|WP_Error در موفقیت آرایهٔ {success: true, message: string}؛
+     *                        در خطا WP_Error با کد/وضعیت همان REST
      */
-    public function handle_review_receipt(WP_REST_Request $request) {
+    public static function review_receipt_decision($order_id, $decision, $admin_note, $reviewer_id = null) {
         global $wpdb;
-        $order_id = sanitize_text_field($request->get_param('id'));
-        $decision = sanitize_text_field($request->get_param('decision')); // 'approve' یا 'reject'
-        $admin_note = sanitize_textarea_field($request->get_param('admin_note'));
+        $order_id = sanitize_text_field((string) $order_id);
+        $decision = sanitize_text_field((string) $decision); // 'approve' یا 'reject'
+        $admin_note = sanitize_textarea_field((string) $admin_note);
+
+        if (null === $reviewer_id) {
+            $reviewer_id = get_current_user_id();
+        }
 
         $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
         $table_transfers = $wpdb->prefix . 'mrdastbaaf_manual_transfers';
@@ -203,7 +241,7 @@ class MrDastbaaf_Admin_Controller {
         }
 
         $now = current_time('mysql');
-        $reviewer_id = get_current_user_id();
+        // $reviewer_id پیش‌تر در ابتدای متد تعیین شده است (پارامتر یا کاربر جاری)
 
         if ($decision === 'reject') {
             if (empty($admin_note)) {
@@ -234,7 +272,7 @@ class MrDastbaaf_Admin_Controller {
             // v1.2.0: ردپای ممیزی
             self::write_audit('receipt_rejected', 'order', $order_id, 'رد فیش: ' . $admin_note, $reviewer_id);
 
-            return rest_ensure_response(array('success' => true, 'message' => 'فیش واریزی با ثبت علت رد گردید.'));
+            return array('success' => true, 'message' => 'فیش واریزی با ثبت علت رد گردید.');
         }
 
         if ($decision === 'approve') {
@@ -309,10 +347,10 @@ class MrDastbaaf_Admin_Controller {
                     ? 'فیش تایید و اشتراک کاربر با تبدیل ارزش روزهای باقی‌مانده ارتقا یافت.'
                     : 'فیش تایید و اشتراک کاربر فعال گردید.'));
 
-            return rest_ensure_response(array(
+            return array(
                 'success' => true,
                 'message' => $mode_message,
-            ));
+            );
         }
 
         return new WP_Error('invalid_decision', 'تصمیم نامعتبر است.', array('status' => 400));
