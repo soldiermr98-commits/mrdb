@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.2.1
+ * Version: 1.3.0
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,12 +16,16 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.2.1');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.3.0');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
  * v1.2.1: دو زیرصفحهٔ NEW پیشخوان («پلن‌های عضویت» / «بررسی فیش‌ها») + هستهٔ مشترک
  * تایید/رد فیش (REST و پیشخوان) — بدون هیچ تغییری در اسکیمای دیتابیس (۱.۳.۰ ثابت می‌ماند).
+ * v1.3.0: فهرست دوره‌ها در صفحهٔ «درس‌ها و ویدیوها» به‌صورت خودکار از دستهٔ ووکامرسی
+ * تنظیم‌شده خوانده می‌شود (نام/لینک دوره از محصول — فقط فیلدهای جلسه دستی است) +
+ * پوستهٔ سبک مدرن پیشخوان (assets/admin-ui.css فقط روی صفحات همین افزونه) —
+ * اسکیما همچنان ۱.۳.۰ ثابت است (هیچ تغییر ساختاری در جداول).
  */
 
 /**
@@ -101,6 +105,36 @@ class MrDastbaaf_Bridge_Plugin {
         // تایید/رد فیش با هستهٔ مشترک REST)
         $admin_pages_controller = new MrDastbaaf_Admin_Pages_Controller();
         $admin_pages_controller->register();
+
+        // v1.3.0: پوستهٔ سبک پیشخوان — فقط روی چهار صفحهٔ همین افزونه بارگذاری می‌شود
+        add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_assets'));
+    }
+
+    /**
+     * v1.3.0: استایل سبک صفحات پیشخوان افزونه — یک فایل CSS خالص (~۶KB) بدون هیچ
+     * وابستگی؛ فقط وقتی page= از خانوادهٔ mrdastbaaf-* است بارگذاری می‌شود تا
+     * بقیهٔ پیشخوان وردپرس هیچ باری اضافه‌ای نپذیرد. نسخهٔ افزونه به‌عنوان
+     * cache-buster کوئری استایل.
+     */
+    public function enqueue_admin_assets() {
+        if (!isset($_GET['page']) || !is_string($_GET['page'])) {
+            return;
+        }
+        $page = sanitize_key(wp_unslash($_GET['page']));
+        $allowed = array(
+            MrDastbaaf_Settings_Controller::MENU_SLUG,      // mrdastbaaf-bridge (تنظیمات)
+            MrDastbaaf_Settings_Controller::LESSONS_SLUG,   // mrdastbaaf-lessons
+            MrDastbaaf_Admin_Pages_Controller::PLANS_SLUG,  // mrdastbaaf-plans
+            MrDastbaaf_Admin_Pages_Controller::RECEIPTS_SLUG, // mrdastbaaf-receipts
+        );
+        if (in_array($page, $allowed, true)) {
+            wp_enqueue_style(
+                'mrdastbaaf-admin-ui',
+                MRDASTBAAF_BRIDGE_URL . 'assets/admin-ui.css',
+                array(),
+                MRDASTBAAF_BRIDGE_VERSION
+            );
+        }
     }
 
     /**

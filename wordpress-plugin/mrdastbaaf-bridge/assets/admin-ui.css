@@ -1,0 +1,261 @@
+/**
+ * پوستهٔ سبک پیشخوان مستر دستباف (v1.3.0)
+ *
+ * یک فایل CSS خالص (~۶ کیلوبایت) بدون هیچ فریم‌ورک/تصویر — فقط روی چهار صفحهٔ
+ * افزونه بارگذاری می‌شود (شرط اسلاگ در enqueue). طراحی RTL مدرن با کارت‌ها،
+ * نشان‌های رنگی (pill) و کلیدهای سوئیچی؛ رنگ برند از لوگوی رسمی (فیروزه‌ای
+ * #62C7C4) و کهربایی گرم سایت. عمداً از overrideهای وسیع وردپرس پرهیز شده تا
+ * با به‌روزرسانی هسته/اسکیم‌های رنگی ادمین نشکند.
+ */
+
+:root {
+	--mrd-teal: #62c7c4;
+	--mrd-teal-dark: #2e8f8c;
+	--mrd-teal-soft: #eafaf9;
+	--mrd-amber: #b45309;
+	--mrd-amber-soft: #fef3e2;
+	--mrd-ink: #1d2327;
+	--mrd-muted: #646970;
+	--mrd-line: #e5e7eb;
+	--mrd-card: #ffffff;
+	--mrd-radius: 12px;
+	--mrd-shadow: 0 1px 2px rgba(16, 42, 51, .06), 0 4px 14px rgba(16, 42, 51, .05);
+}
+
+/* ── قاب صفحه و هدر ─────────────────────────────────────────── */
+
+.mrd-scope { max-width: 1080px; }
+
+.mrd-hero {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	background: linear-gradient(135deg, #ffffff 0%, var(--mrd-teal-soft) 100%);
+	border: 1px solid #d9efee;
+	border-radius: var(--mrd-radius);
+	box-shadow: var(--mrd-shadow);
+	padding: 18px 20px;
+	margin: 16px 0 4px;
+}
+
+.mrd-hero__icon {
+	flex: 0 0 auto;
+	width: 46px;
+	height: 46px;
+	border-radius: 12px;
+	background: var(--mrd-teal);
+	color: #fff;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 24px;
+	line-height: 1;
+}
+
+.mrd-hero__title { margin: 0; font-size: 19px; font-weight: 700; color: var(--mrd-ink); }
+.mrd-hero__desc { margin: 4px 0 0; font-size: 13px; color: var(--mrd-muted); max-width: 72ch; }
+
+/* کارت بخش‌ها */
+.mrd-card {
+	background: var(--mrd-card);
+	border: 1px solid var(--mrd-line);
+	border-radius: var(--mrd-radius);
+	box-shadow: var(--mrd-shadow);
+	padding: 18px 20px;
+	margin: 16px 0;
+}
+
+.mrd-card__title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0 0 10px;
+	font-size: 15px;
+	font-weight: 700;
+	color: var(--mrd-ink);
+}
+
+.mrd-card__title::before {
+	content: "";
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--mrd-teal);
+	flex: 0 0 auto;
+}
+
+.mrd-hint { font-size: 12.5px; color: var(--mrd-muted); margin: 8px 0 0; }
+.mrd-hint code { background: #f3f4f6; border-radius: 5px; padding: 1px 6px; }
+
+/* نوار وضعیت کوچک (شمارنده‌ها) */
+.mrd-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
+.mrd-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--mrd-teal-dark);
+	background: var(--mrd-teal-soft);
+	border: 1px solid #cdeeec;
+	border-radius: 999px;
+	padding: 4px 12px;
+}
+.mrd-chip--amber { color: var(--mrd-amber); background: var(--mrd-amber-soft); border-color: #f5e0c3; }
+
+/* ── فرم‌ها ─────────────────────────────────────────────────── */
+
+.mrd-scope .form-table { margin-top: 4px; }
+.mrd-scope .form-table th { width: 220px; padding-top: 16px; }
+.mrd-scope .form-table td { padding-top: 16px; }
+
+.mrd-scope input[type="text"],
+.mrd-scope input[type="url"],
+.mrd-scope input[type="number"],
+.mrd-scope input[type="password"],
+.mrd-scope select,
+.mrd-scope textarea {
+	border: 1px solid #d5d8dc;
+	border-radius: 8px;
+	box-shadow: none;
+	transition: border-color .15s ease, box-shadow .15s ease;
+	min-height: 36px;
+}
+
+.mrd-scope input[type="text"]:focus,
+.mrd-scope input[type="url"]:focus,
+.mrd-scope input[type="number"]:focus,
+.mrd-scope input[type="password"]:focus,
+.mrd-scope select:focus,
+.mrd-scope textarea:focus {
+	border-color: var(--mrd-teal);
+	box-shadow: 0 0 0 3px rgba(98, 199, 196, .22);
+	outline: none;
+}
+
+/* دکمهٔ اصلی — گرادیان برند */
+.mrd-scope .button-primary {
+	background: linear-gradient(135deg, var(--mrd-teal-dark), var(--mrd-teal));
+	border: 1px solid var(--mrd-teal-dark);
+	border-radius: 8px;
+	text-shadow: none;
+	box-shadow: 0 1px 2px rgba(46, 143, 140, .35);
+}
+
+.mrd-scope .button-primary:hover,
+.mrd-scope .button-primary:focus {
+	background: linear-gradient(135deg, #277f7c, var(--mrd-teal));
+	border-color: #277f7c;
+}
+
+.mrd-scope .button { border-radius: 8px; }
+
+/* ── نشان‌های رنگی (pill) ───────────────────────────────────── */
+
+.mrd-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 1;
+	border-radius: 999px;
+	padding: 5px 11px;
+	white-space: nowrap;
+}
+
+.mrd-pill--bronze  { color: #8a4b12; background: #f7ead9; border: 1px solid #ecd5b6; }
+.mrd-pill--silver  { color: #4b5563; background: #eef1f5; border: 1px solid #d8dee7; }
+.mrd-pill--gold    { color: #8a6d07; background: #fbf3cd; border: 1px solid #efe2a0; }
+.mrd-pill--free    { color: #047857; background: #e7f7f0; border: 1px solid #c2ebdb; }
+.mrd-pill--on      { color: #047857; background: #e7f7f0; border: 1px solid #c2ebdb; }
+.mrd-pill--off     { color: #6b7280; background: #f3f4f6; border: 1px solid #e0e3e8; }
+.mrd-pill--star    { color: var(--mrd-amber); background: var(--mrd-amber-soft); border: 1px solid #f5e0c3; }
+
+.mrd-pill--pending   { color: #92650b; background: #fdf3d7; border: 1px solid #f2e2a8; }
+.mrd-pill--verifying { color: #17557e; background: #e3f0fa; border: 1px solid #c4dff2; }
+.mrd-pill--completed { color: #047857; background: #e7f7f0; border: 1px solid #c2ebdb; }
+.mrd-pill--rejected,
+.mrd-pill--failed    { color: #a5252a; background: #fdeaea; border: 1px solid #f3c8c9; }
+.mrd-pill--cancelled { color: #6b7280; background: #f3f4f6; border: 1px solid #e0e3e8; }
+
+/* ── کلید سوئیچی (چک‌باکس دو-حالته) ─────────────────────────── */
+
+.mrd-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.mrd-toggle input[type="checkbox"] { appearance: none; -webkit-appearance: none; margin: 0; width: 40px; height: 22px; border-radius: 999px; background: #d7dbdf; position: relative; cursor: pointer; transition: background .18s ease; flex: 0 0 auto; }
+.mrd-toggle input[type="checkbox"]::after { content: ""; position: absolute; top: 3px; inset-inline-start: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25); transition: transform .18s ease; }
+.mrd-toggle input[type="checkbox"]:checked { background: var(--mrd-teal-dark); }
+.mrd-toggle input[type="checkbox"]:checked::after { transform: translateX(-18px); }
+.mrd-toggle input[type="checkbox"]:focus-visible { outline: 2px solid var(--mrd-teal); outline-offset: 2px; }
+
+/* ── جدول‌ها ────────────────────────────────────────────────── */
+
+.mrd-table-wrap {
+	background: #fff;
+	border: 1px solid var(--mrd-line);
+	border-radius: var(--mrd-radius);
+	box-shadow: var(--mrd-shadow);
+	overflow: auto;
+	margin: 14px 0;
+}
+
+.mrd-scope .mrd-table-wrap .widefat {
+	border: 0;
+	box-shadow: none;
+	background: transparent;
+}
+
+.mrd-scope .mrd-table-wrap thead th {
+	background: #f8faf9;
+	border-bottom: 1px solid var(--mrd-line);
+	color: var(--mrd-muted);
+	font-size: 12px;
+	font-weight: 700;
+	padding: 12px 14px;
+}
+
+.mrd-scope .mrd-table-wrap td { padding: 12px 14px; vertical-align: middle; }
+
+.mrd-table-wrap tbody tr:hover { background: #fafcfb; }
+
+.mrd-empty { text-align: center; padding: 28px 16px !important; color: var(--mrd-muted); }
+
+/* ── پیش‌نمایش دورهٔ انتخاب‌شده (صفحهٔ درس‌ها) ───────────────── */
+
+.mrd-course-meta {
+	display: none;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 10px;
+	padding: 10px 14px;
+	background: var(--mrd-teal-soft);
+	border: 1px solid #cdeeec;
+	border-radius: 10px;
+	font-size: 13px;
+	color: var(--mrd-ink);
+}
+.mrd-course-meta.is-visible { display: flex; }
+.mrd-course-meta a { color: var(--mrd-teal-dark); font-weight: 700; text-decoration: none; }
+.mrd-course-meta a:hover { text-decoration: underline; }
+
+/* حالت خالی/راهنما */
+.mrd-note {
+	border-inline-start: 4px solid var(--mrd-teal);
+	background: var(--mrd-teal-soft);
+	border-radius: 8px;
+	padding: 10px 14px;
+	margin: 12px 0;
+	font-size: 13px;
+}
+.mrd-note--warn { border-inline-start-color: #d97706; background: var(--mrd-amber-soft); }
+.mrd-note--error { border-inline-start-color: #b32d2e; background: #fdeaea; }
+
+/* ── واکنش‌گرایی ────────────────────────────────────────────── */
+
+@media (max-width: 782px) {
+	.mrd-scope .form-table th,
+	.mrd-scope .form-table td { display: block; width: auto; padding-top: 8px; padding-bottom: 2px; }
+	.mrd-hero { flex-direction: column; align-items: flex-start; gap: 10px; }
+	.mrd-scope .mrd-table-wrap td, .mrd-scope .mrd-table-wrap thead th { padding: 10px 10px; }
+}

@@ -98,7 +98,8 @@ class MrDastbaaf_Admin_Pages_Controller {
     }
 
     /**
-     * برچسب فارسی وضعیت سفارش
+     * برچسب فارسی وضعیت سفارش — رنگ‌بندی با کلاس mrd-pill--{status} در CSS افزونه
+     * (assets/admin-ui.css) انجام می‌شود.
      */
     private function status_label($status) {
         $labels = array(
@@ -111,22 +112,6 @@ class MrDastbaaf_Admin_Pages_Controller {
         );
         $status = (string) $status;
         return isset($labels[$status]) ? $labels[$status] : $status;
-    }
-
-    /**
-     * رنگ نمایش وضعیت در جدول
-     */
-    private function status_color($status) {
-        $colors = array(
-            'pending'   => '#dba617',
-            'verifying' => '#2271b1',
-            'completed' => '#00a32a',
-            'rejected'  => '#b32d2e',
-            'failed'    => '#b32d2e',
-            'cancelled' => '#8c8f94',
-        );
-        $status = (string) $status;
-        return isset($colors[$status]) ? $colors[$status] : '#8c8f94';
     }
 
     /**
@@ -254,9 +239,14 @@ class MrDastbaaf_Admin_Pages_Controller {
         $is_edit = ($editing instanceof stdClass);
         $confirm_delete = 'حذف پلن، سفارش‌های قبلی را تحت تأثیر قرار نمی‌دهد اما دیگر قابل خرید نیست. مطمئنید؟';
         ?>
-        <div class="wrap">
-            <h1>پلن‌های عضویت</h1>
-            <p>قیمت، مدت و ویژگی‌های پلن‌های عضویت را مدیریت کنید. تغییرات پس از ذخیره در اپلیکیشن (حالت Real) اعمال می‌شود — فهرست عمومی اپ حداکثر ۵ دقیقه کش می‌شود و با هر ذخیره در این صفحه کش بلافاصله باطل می‌گردد.</p>
+        <div class="wrap mrd-scope">
+            <div class="mrd-hero">
+                <div class="mrd-hero__icon" aria-hidden="true">💳</div>
+                <div>
+                    <h1 class="mrd-hero__title">پلن‌های عضویت</h1>
+                    <p class="mrd-hero__desc">قیمت، مدت و ویژگی‌های پلن‌های عضویت را مدیریت کنید. تغییرات پس از ذخیره در اپلیکیشن (حالت Real) اعمال می‌شود — فهرست عمومی اپ حداکثر ۵ دقیقه کش می‌شود و با هر ذخیره در این صفحه کش بلافاصله باطل می‌گردد.</p>
+                </div>
+            </div>
 
             <?php $this->render_flash_notice($flash); ?>
 
@@ -268,6 +258,8 @@ class MrDastbaaf_Admin_Pages_Controller {
                 <div class="notice notice-error"><p>پلن برای ویرایش یافت نشد؛ شاید پیش از این حذف شده باشد.</p></div>
             <?php endif; ?>
 
+            <div class="mrd-card">
+            <div class="mrd-table-wrap">
             <table class="widefat striped">
                 <thead>
                     <tr>
@@ -284,7 +276,7 @@ class MrDastbaaf_Admin_Pages_Controller {
                 </thead>
                 <tbody>
                     <?php if (empty($rows)): ?>
-                        <tr><td colspan="9">هنوز پلنی ثبت نشده است؛ با فرم پایین اولین پلن را اضافه کنید.</td></tr>
+                        <tr><td colspan="9" class="mrd-empty">هنوز پلنی ثبت نشده است؛ با فرم پایین اولین پلن را اضافه کنید.</td></tr>
                     <?php else: ?>
                         <?php foreach ($rows as $row): ?>
                             <?php $is_free_tier = ('free' === $row->tier); ?>
@@ -293,7 +285,7 @@ class MrDastbaaf_Admin_Pages_Controller {
                                     <strong><?php echo esc_html($row->title); ?></strong><br />
                                     <code dir="ltr"><?php echo esc_html($row->id); ?></code>
                                 </td>
-                                <td><?php echo esc_html($this->tier_label($row->tier)); ?></td>
+                                <td><span class="mrd-pill mrd-pill--<?php echo esc_attr((string) $row->tier); ?>"><?php echo esc_html($this->tier_label($row->tier)); ?></span></td>
                                 <td><?php echo esc_html(number_format_i18n((int) $row->price_toman)); ?></td>
                                 <td>
                                     <?php if (!empty($row->original_price_toman)): ?>
@@ -305,7 +297,7 @@ class MrDastbaaf_Admin_Pages_Controller {
                                 <td><?php echo esc_html(number_format_i18n((int) $row->duration_days)); ?> روز</td>
                                 <td><?php echo esc_html($row->duration_label); ?></td>
                                 <td>
-                                    <span style="color:<?php echo $row->is_active ? esc_attr('#00a32a') : esc_attr('#8c8f94'); ?>;font-weight:600;">
+                                    <span class="mrd-pill <?php echo $row->is_active ? 'mrd-pill--on' : 'mrd-pill--off'; ?>">
                                         <?php echo $row->is_active ? 'فعال' : 'غیرفعال'; ?>
                                     </span>
                                     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:6px;">
@@ -315,7 +307,7 @@ class MrDastbaaf_Admin_Pages_Controller {
                                         <button type="submit" class="button button-small"><?php echo $row->is_active ? 'غیرفعال کردن' : 'فعال کردن'; ?></button>
                                     </form>
                                 </td>
-                                <td><?php echo $row->is_popular ? '★' : '—'; ?></td>
+                                <td><?php echo $row->is_popular ? '<span class="mrd-pill mrd-pill--star">★ محبوب‌ترین</span>' : '—'; ?></td>
                                 <td>
                                     <a class="button button-small" href="<?php echo esc_url(add_query_arg(array('page' => self::PLANS_SLUG, 'action' => 'edit', 'plan_id' => $row->id), admin_url('admin.php'))); ?>">ویرایش</a>
                                     <?php if (!$is_free_tier): ?>
@@ -334,8 +326,11 @@ class MrDastbaaf_Admin_Pages_Controller {
                     <?php endif; ?>
                 </tbody>
             </table>
+            </div>
+            </div>
 
-            <h2 class="title" id="mrd-plan-form-title"><?php echo $is_edit ? 'ویرایش پلن «' . esc_html($editing->title) . '»' : 'افزودن پلن جدید'; ?></h2>
+            <div class="mrd-card">
+            <h2 class="mrd-card__title" id="mrd-plan-form-title"><?php echo $is_edit ? 'ویرایش پلن «' . esc_html($editing->title) . '»' : 'افزودن پلن جدید'; ?></h2>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                 <input type="hidden" name="action" value="mrdastbaaf_plan_save" />
                 <input type="hidden" name="plan_mode" value="<?php echo $is_edit ? 'edit' : 'add'; ?>" />
@@ -441,6 +436,7 @@ class MrDastbaaf_Admin_Pages_Controller {
                     <p><a href="<?php echo esc_url(add_query_arg(array('page' => self::PLANS_SLUG), admin_url('admin.php'))); ?>">انصراف از ویرایش</a></p>
                 <?php endif; ?>
             </form>
+            </div>
         </div>
         <?php
     }
@@ -742,11 +738,20 @@ class MrDastbaaf_Admin_Pages_Controller {
         $approve_confirm = 'با تایید این فیش اشتراک خریدار فعال یا تمدید می‌شود. ادامه می‌دهید؟';
         $reject_confirm = 'این فیش رد می‌شود و علت آن در سفارش ثبت خواهد شد. مطمئنید؟';
         ?>
-        <div class="wrap">
-            <h1>بررسی فیش‌ها</h1>
-            <p>فیش‌های واریز کارت‌به‌کارت هنرجویان. «تایید و فعال‌سازی» اشتراک را بلافاصله فعال/تمدید می‌کند؛ «رد» سفارش را ردشده و علت را برای کاربر ثبت می‌کند.</p>
+        <div class="wrap mrd-scope">
+            <div class="mrd-hero">
+                <div class="mrd-hero__icon" aria-hidden="true">🧾</div>
+                <div>
+                    <h1 class="mrd-hero__title">بررسی فیش‌ها</h1>
+                    <p class="mrd-hero__desc">فیش‌های واریز کارت‌به‌کارت هنرجویان. «تایید و فعال‌سازی» اشتراک را بلافاصله فعال/تمدید می‌کند؛ «رد» سفارش را ردشده و علت را برای کاربر ثبت می‌کند.</p>
+                </div>
+            </div>
 
             <?php $this->render_flash_notice($flash); ?>
+
+            <div class="mrd-chips" style="margin-top:14px;">
+                <span class="mrd-chip mrd-chip--amber">در انتظار بررسی: <?php echo esc_html(number_format_i18n($pending_count)); ?> فیش</span>
+            </div>
 
             <ul class="subsubsub">
                 <?php foreach ($tabs as $tab_key => $tab_label): ?>
@@ -758,6 +763,8 @@ class MrDastbaaf_Admin_Pages_Controller {
                 <?php endforeach; ?>
             </ul>
 
+            <div class="mrd-card">
+            <div class="mrd-table-wrap">
             <table class="widefat striped">
                 <thead>
                     <tr>
@@ -773,7 +780,7 @@ class MrDastbaaf_Admin_Pages_Controller {
                 </thead>
                 <tbody>
                     <?php if (empty($rows)): ?>
-                        <tr><td colspan="8">فیشی با این فیلتر یافت نشد.</td></tr>
+                        <tr><td colspan="8" class="mrd-empty">فیشی با این فیلتر یافت نشد.</td></tr>
                     <?php else: ?>
                         <?php foreach ($rows as $r): ?>
                             <tr>
@@ -796,8 +803,10 @@ class MrDastbaaf_Admin_Pages_Controller {
                                     <?php endif; ?>
                                 </td>
                                 <td><?php echo esc_html(date_i18n('Y/m/d H:i', strtotime($r->created_at))); ?></td>
-                                <td style="color:<?php echo esc_attr($this->status_color($r->status)); ?>;font-weight:600;">
-                                    <?php echo esc_html($this->status_label($r->status)); ?>
+                                <td style="white-space:nowrap;">
+                                    <span class="mrd-pill mrd-pill--<?php echo esc_attr((string) $r->status); ?>">
+                                        <?php echo esc_html($this->status_label($r->status)); ?>
+                                    </span>
                                 </td>
                                 <td>
                                     <?php if ('pending' === $r->status): ?>
@@ -826,6 +835,8 @@ class MrDastbaaf_Admin_Pages_Controller {
                     <?php endif; ?>
                 </tbody>
             </table>
+            </div>
+            </div>
 
             <?php if ('pending' !== $status_filter): ?>
                 <p class="description">حداکثر ۱۰۰ رکورد اخیر نمایش داده می‌شود. عملیات تایید/رد فقط از تب «در انتظار بررسی» ممکن است.</p>
