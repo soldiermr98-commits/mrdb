@@ -108,7 +108,9 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
   const completedLessonIds = currentUser?.completedLessonIds ?? [];
 
   const handleLessonClick = (lesson: Lesson) => {
-    const access = courseService.canAccessLesson(currentUser, lesson);
+    // v1.2.8: course به گیت دسترسی پاس داده می‌شود — دورهٔ خریداری‌شده از سایت
+    // (owned=true از سرور) بدون اشتراک باز می‌شود.
+    const access = courseService.canAccessLesson(currentUser, lesson, course);
     if (access.canAccess) {
       onPlayLesson(course, lesson);
     } else {
@@ -180,13 +182,21 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
               </button>
             )}
 
-            <button
-              onClick={onOpenMembership}
-              className="bg-amber-100 hover:bg-amber-200 text-amber-900 font-semibold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 transition"
-            >
-              <Crown className="w-4 h-4 text-amber-700" />
-              <span>خرید اشتراک جهت دسترسی کامل</span>
-            </button>
+            {/* v1.2.8: دورهٔ خریداری‌شده از سایت — نشان فعال به‌جای CTA اشتراک */}
+            {course.owned ? (
+              <span className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold px-4 py-2.5 rounded-xl text-xs">
+                <CheckCircle className="w-4 h-4 text-emerald-600" />
+                <span>این دوره در حساب شما فعال است — تمام جلسات باز است</span>
+              </span>
+            ) : (
+              <button
+                onClick={onOpenMembership}
+                className="bg-amber-100 hover:bg-amber-200 text-amber-900 font-semibold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 transition"
+              >
+                <Crown className="w-4 h-4 text-amber-700" />
+                <span>خرید اشتراک جهت دسترسی کامل</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -267,7 +277,8 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
 
               <div className="divide-y divide-stone-100">
                 {section.lessons.map((lesson) => {
-                  const access = courseService.canAccessLesson(currentUser, lesson);
+                  // v1.2.8: course پاس داده می‌شود — جلسات دورهٔ خریداری‌شده باز است
+                  const access = courseService.canAccessLesson(currentUser, lesson, course);
                   // DEV-4: ✓ mark for lessons already completed by this user
                   const isCompleted = completedLessonIds.includes(lesson.id);
 

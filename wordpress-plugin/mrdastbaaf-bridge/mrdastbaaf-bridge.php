@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.3.4
+ * Version: 1.3.5
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.3.4');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.3.5');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -40,6 +40,17 @@ define('MRDASTBAAF_BRIDGE_VERSION', '1.3.4');
  *     (صفحهٔ NEW «اتصال خرید سایت»)؛ پرداخت موفق (processing/completed) محصولِ
  *     نگاشت‌شده، با هستهٔ مشترک grant_or_extend و دفتر ایدمپوتنسی woo-{order_id}
  *     اشتراک کاربر را فعال/تمدید می‌کند.
+ * v1.3.5: سه قابلیت NEW بدون هیچ تغییری در اسکیما (۱.۳.۰ ثابت) —
+ *  ۱) بازنشستگی سکشن «categories» + «دوره‌های برگزیده» انتخابی از پیشخوان
+ *     (featuredCourseIds در /app-ui) — کارت چک‌باکسی NEW در «محتوای وب‌اپ».
+ *  ۲) خرید تک‌دوره‌ای: سفارش پرداخت‌شدهٔ ووکامرس (customer_id یا billing_phone
+ *     مهمان با نرمال‌سازی شماره؛ HPOS + postmeta قدیمی) → پرچم owned در جزئیات
+ *     دوره و بازشدن تمام جلسات همان دوره در گیت بلیط پخش — بدون نگاشت دستی.
+ *  ۳) رندر صفحات وب‌اپ با پارامتر mrdapp=1: فیلتر template_include صفحهٔ
+ *     برگزیدهٔ وردپرس را با قالب Canvas (قالب خود المنتور در صورت وجود؛ در
+ *     نبودش قالب مینیمال افزونه در templates/mrdapp-canvas.php) رندر می‌کند تا
+ *     استایل صفحات المنتور در iframe وب‌اپ به‌هم نریزد؛ همان سطح دسترسی
+ *     صفحات وب‌اپ (fail-closed) + سربرگ‌های no-store روی این مسیر اعمال می‌شود.
  */
 
 /**
@@ -132,6 +143,82 @@ class MrDastbaaf_Bridge_Plugin {
 
         // v1.3.0: پوستهٔ سبک پیشخوان — فقط روی چهار صفحهٔ همین افزونه بارگذاری می‌شود
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_assets'));
+
+        // v1.3.5: رندر مخصوص وب‌اپ برای صفحات سایت (؟mrdapp=1) — قالب Canvas بدون
+        // هدر/فوتر سایت؛ استایل صفحات المنتور در iframe اپ سالم می‌ماند.
+        add_filter('template_include', array($this, 'maybe_render_app_page'), 20);
+    }
+
+    /**
+     * v1.3.5: رندر مخصوص وب‌اپ — وقتی صفحه‌ای از سایت با پارامتر mrdapp=1 باز
+     * می‌شود (iframe وب‌اپ)، به‌جای قالب کامل سایت (هدر/فوتر/سایدبار که استایل
+     * صفحات المنتور را در اپ به‌هم می‌ریزد)، قالب Canvas رندر می‌شود:
+     *  - اگر المنتور فعال باشد و قالب canvas.php موجود باشد → قالب رسمی المنتور
+     *    (CSS/JS کامل المنتور شامل post-{id}.css و کیت سراسری اجرا می‌شود)
+     *  - در نبود المنتور → قالب مینیمال افزونه (templates/mrdapp-canvas.php)
+     *
+     * امنیت (fail-closed): فقط صفحه‌ای که در «صفحات وب‌اپ» پیشخوان فعال ثبت شده
+     * باشد رندر می‌شود و دقیقاً همان سطح دسترسی REST (all/members/admins) با
+     * هستهٔ مشترک App_Pages_Controller اعمال می‌شود — دانستن پارامتر mrdapp=1
+     * هیچ راهِ دورزدنی نمی‌سازد. پاسخ هم با سربرگ‌های no-store سرو می‌شود تا
+     * LiteSpeed/CDN نسخهٔ سطح‌دار را برای کاربر دیگر کش نکند.
+     *
+     * @param string $template مسیر قالب جاری
+     * @return string مسیر قالب نهایی
+     */
+    public function maybe_render_app_page($template) {
+        // فقط برای درخواست‌های front-end صفحهٔ تکی با پارامتر mrdapp
+        if (empty($_GET['mrdapp']) || !is_singular('page')) {
+            return $template;
+        }
+
+        $page_id = (int) get_queried_object_id();
+        if ($page_id <= 0) {
+            return $template;
+        }
+
+        // صفحه باید در «صفحات وب‌اپ» فعال ثبت شده باشد
+        $entry = null;
+        foreach (MrDastbaaf_App_Pages_Controller::get_pages_option() as $candidate) {
+            if ((int) $candidate['page_id'] === $page_id) {
+                $entry = $candidate;
+                break;
+            }
+        }
+
+        if (null === $entry || empty($entry['is_active']) || 'publish' !== get_post_status($page_id)) {
+            wp_die(
+                esc_html__('این صفحه برای نمایش در وب‌اپلیکیشن فعال نشده است.', 'mrdastbaaf-bridge'),
+                esc_html__('صفحهٔ یافت‌نشده', 'mrdastbaaf-bridge'),
+                array('response' => 404)
+            );
+        }
+
+        // همان هستهٔ سطح دسترسی REST (Bearer اینجا بی‌اثر است؛ کوکی/نشست کاربر ملاک است)
+        $level = MrDastbaaf_App_Pages_Controller::current_access_level();
+        if (!MrDastbaaf_App_Pages_Controller::access_satisfied($entry['access'], $level)) {
+            wp_die(
+                esc_html__('دسترسی به این صفحه نیازمند سطح عضویت بالاتری است.', 'mrdastbaaf-bridge'),
+                esc_html__('دسترسی محدود', 'mrdastbaaf-bridge'),
+                array('response' => 403)
+            );
+        }
+
+        // ضدکش — نسخهٔ سطح‌دار هرگز نباید در LiteSpeed/CDN کش شود
+        if (!headers_sent()) {
+            header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+            header('X-LiteSpeed-Cache-Control: no-cache');
+            header('Expires: Wed, 11 Jan 1984 05:00:00 GMT');
+            header('Pragma: no-cache');
+        }
+
+        // قالب Canvas المنتور ( fidelity کامل المنتور ) یا قالب مینیمال افزونه
+        if (defined('ELEMENTOR_PATH') && is_string(ELEMENTOR_PATH)
+            && file_exists(ELEMENTOR_PATH . 'modules/page-templates/canvas.php')) {
+            return ELEMENTOR_PATH . 'modules/page-templates/canvas.php';
+        }
+
+        return MRDASTBAAF_BRIDGE_PATH . 'templates/mrdapp-canvas.php';
     }
 
     /**

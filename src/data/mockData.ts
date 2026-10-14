@@ -683,14 +683,7 @@ export const INITIAL_HOMEPAGE_SECTIONS: HomepageSectionConfig[] = [
     },
   },
   {
-    id: 'sec-categories',
-    key: 'categories',
-    title: 'دسته‌بندی‌های آموزشی',
-    subtitle: 'رشته‌های متنوع صنایع دستی از دار قالی تا مکرمه مدرن',
-    isEnabled: true,
-    sortOrder: 2,
-  },
-  {
+    // v1.2.8: سکشن «categories» بازنشسته شد — دسته‌بندی‌های آموزشی از صفحهٔ نخست حذف شد
     id: 'sec-featured',
     key: 'featured_courses',
     title: 'دوره‌های برگزیده و پیشنهادی اساتید',

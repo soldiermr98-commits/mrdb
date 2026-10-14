@@ -8,6 +8,7 @@ import {
   Play,
   Pause,
   RotateCcw,
+  RotateCw,
   Volume2,
   VolumeX,
   Maximize,
@@ -25,7 +26,7 @@ import {
 } from 'lucide-react';
 import { Course, Lesson, LessonNote, UserProfile, VideoStreamingTicket } from '../../types';
 import { videoSecurityService } from '../../services/videoSecurityService';
-import { isRealApiMode } from '../../services/apiClient';
+// v1.2.8: isRealApiMode حذف شد (تنها مصرفش تب حذف‌شدهٔ «امنیت ویدیو» بود)
 import { courseService } from '../../services/courseService';
 import { authService } from '../../services/authService';
 import { acquireScrollLock } from '../../utils/scrollLock';
@@ -71,7 +72,14 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
   const [ticket, setTicket] = useState<VideoStreamingTicket | null>(null);
   // v1.1.0 Real-API: وقتی بلیط videoUrl واقعی دارد، پخش بومی <video> جایگزین شبیه‌ساز می‌شود.
   const isRealPlayback = !!ticket?.videoUrl;
-  const [activeTab, setActiveTab] = useState<'syllabus' | 'notes' | 'security'>('syllabus');
+  // v1.2.8: نسخهٔ کیفیت فعال — وقتی سرور فهرست qualities دارد، سوییچ نسخه جای پخش را حفظ می‌کند
+  // (resumeTimeRef در timeupdate به‌روز می‌شود و onLoadedMetadata همان‌جا ادامه می‌دهد).
+  const [activeQualityUrl, setActiveQualityUrl] = useState<string | null>(null);
+  // v1.2.8: رزولوشن واقعی ویدیوی بارگذاری‌شده — نمایش صادقانهٔ «کیفیت خودکار (۷۲۰p)»
+  const [videoHeight, setVideoHeight] = useState(0);
+  // v1.2.8: حالت افقی — تمام‌صفحه + قفل orientation landscape (در پشتیبانی‌نشده‌ها راهنمای چرخش دستی)
+  const [isLandscape, setIsLandscape] = useState(false);
+  const [activeTab, setActiveTab] = useState<'syllabus' | 'notes'>('syllabus');
   const [newNoteText, setNewNoteText] = useState('');
   const [notes, setNotes] = useState<LessonNote[]>([]);
   const [simulatedNetworkState, setSimulatedNetworkState] = useState<'good' | 'buffering' | 'error'>('good');
@@ -175,12 +183,58 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // v1.2.8 — حالت افقی (به انتخاب کاربر): تمام‌صفحه + قفل landscape از
+  // Screen Orientation API. در iOS/مرورگرهای بدون پشتیبانی lock، پیام راهنمای
+  // چرخش دستی نمایش داده می‌شود (به‌جای خطای خام) — رفتار fail-safe.
+  // ---------------------------------------------------------------------------
+  const orientationApi = ():
+    | (ScreenOrientation & { lock?: (o: string) => Promise<void>; unlock?: () => void })
+    | undefined =>
+    typeof screen !== 'undefined' ? (screen.orientation as any) : undefined;
+
+  const enterLandscape = async () => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    try {
+      if (!document.fullscreenElement && stage.requestFullscreen) {
+        await stage.requestFullscreen().catch(() => {});
+      }
+    } catch {
+      // تمام‌صفحه رد شد — قفل orientation مستقل ادامه می‌یابد
+    }
+    const orient = orientationApi();
+    if (orient && typeof orient.lock === 'function') {
+      try {
+        await orient.lock('landscape');
+        setIsLandscape(true);
+      } catch {
+        showLocalToast('چرخش خودکار ممکن نشد؛ گوشی را به‌صورت دستی بچرخانید.');
+      }
+    } else {
+      showLocalToast('گوشی خود را به حالت افقی بچرخانید.');
+    }
+  };
+
+  const exitLandscape = () => {
+    try {
+      orientationApi()?.unlock?.();
+    } catch {
+      // ignore
+    }
+    setIsLandscape(false);
+    if (document.fullscreenElement && document.exitFullscreen) {
+      document.exitFullscreen().catch(() => {});
+    }
+  };
+
   // BUG-62: manual ticket renewal from the expired/failed overlay.
   const handleRenewTicket = async () => {
     setIsTicketFailed(false);
     setIsRenewing(true);
     try {
-      const access = courseService.canAccessLesson(currentUser, currentLesson);
+      // v1.2.8: course پاس داده می‌شود — دورهٔ خریداری‌شده از سایت هم بلیط می‌گیرد.
+      const access = courseService.canAccessLesson(currentUser, currentLesson, course);
       const t = await videoSecurityService.requestPlaybackTicket(
         currentLesson,
         currentUser,
@@ -269,10 +323,20 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
   }, [isOpen, onClose, totalDuration]);
 
   // BUG-58: track fullscreen state so the toggle icon switches.
+  // v1.2.8: خروج از تمام‌صفحه (به هر روشی، حتی دکمهٔ سیستم) قفل landscape را هم آزاد می‌کند.
   useEffect(() => {
     if (!isOpen) return;
     const handleFullscreenChange = () => {
-      setIsFullscreen(document.fullscreenElement === stageRef.current);
+      const active = document.fullscreenElement === stageRef.current;
+      setIsFullscreen(active);
+      if (!active) {
+        setIsLandscape(false);
+        try {
+          orientationApi()?.unlock?.();
+        } catch {
+          // ignore
+        }
+      }
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
@@ -300,7 +364,8 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
     // unhandled rejection / leaves a permanent ticketless state; the
     // «اعتبار پخش منقضی شد» overlay takes over.
     // BUG-62: pass the canAccessLesson verdict as 3rd arg (defense-in-depth).
-    const access = courseService.canAccessLesson(currentUser, currentLesson);
+    // v1.2.8: course هم پاس داده می‌شود (خرید تک‌دوره‌ای از سایت).
+    const access = courseService.canAccessLesson(currentUser, currentLesson, course);
     videoSecurityService
       .requestPlaybackTicket(currentLesson, currentUser, access.canAccess)
       .then((t) => {
@@ -325,6 +390,9 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
     // v1.1.0 Real-API: مدت/رزومهٔ ویدیوی درس قبلی نباید به درس بعدی نشت کند.
     setRealVideoDuration(0);
     resumeTimeRef.current = null;
+    // v1.2.8: کیفیت فعال و رزولوشن خوانده‌شدهٔ درس قبلی هم ریست شود.
+    setActiveQualityUrl(null);
+    setVideoHeight(0);
     // BUG-60/61: also reset the ended panel, note freeze/error and the
     // once-per-lesson auto-complete guard.
     setIsEnded(false);
@@ -480,6 +548,14 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
 
   const watermarkString = ticket?.watermarkText || (currentUser ? currentUser.maskedPhone : '۰۹۱۲***۶۷۸۹');
 
+  // v1.2.8: منبع فعال پخش — نسخهٔ کیفیت انتخاب‌شده اگر در بلیط جاری معتبر باشد؛
+  // در غیر این صورت خودبه‌خود به videoUrl پیش‌فرض بلیط برمی‌گردد (خودترمیم پس از تمدید بلیط).
+  const activeVideoSrc =
+    activeQualityUrl && ticket?.qualities?.some((q) => q.url === activeQualityUrl)
+      ? activeQualityUrl
+      : ticket?.videoUrl ?? '';
+  const hasQualitySelector = !!ticket?.qualities && ticket.qualities.length > 0;
+
   return (
     <div className="fixed inset-0 z-50 bg-black/95 text-white flex flex-col animate-in fade-in duration-200">
       {/* Top Navbar */}
@@ -527,7 +603,7 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
           )}
           <span className="hidden md:inline-flex items-center gap-1 bg-amber-950/80 text-amber-300 border border-amber-800/60 px-2 py-0.5 rounded-md text-[10px]">
             <Shield className="w-3 h-3" />
-            پلیر آزمایشی با واترمارک پویا
+            پخش امن با واترمارک اختصاصی
           </span>
           {/* BUG-59: completion button now persists (parent handler or authService
               fallback) and shows a ✓ state for already-completed lessons. */}
@@ -553,31 +629,50 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
 
       {/* Main View Area: Video Canvas + Sidebar */}
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
-        {/* Video Player Display Container (BUG-58: fullscreen stage) */}
-        <div ref={stageRef} className="flex-1 flex flex-col justify-center bg-black relative select-none">
-          {/* The Video Mock Screen — v1.1.0 Real-API: وقتی بلیط videoUrl واقعی دارد، خود <video> رندر می‌شود */}
-          <div className="relative w-full h-[52vw] max-h-[65vh] lg:max-h-full lg:h-full bg-gradient-to-b from-stone-900 via-stone-950 to-black flex items-center justify-center overflow-hidden">
+        {/* Video Player Display Container (BUG-58: fullscreen stage)
+            v1.2.8: جلوگیری از منوی ذخیره/اشتراک لمس طولانی روی ویدیو */}
+        <div
+          ref={stageRef}
+          onContextMenu={(e) => e.preventDefault()}
+          className="flex-1 flex flex-col justify-center bg-black relative select-none [-webkit-touch-callout:none]"
+        >
+          {/* The Video Mock Screen — v1.1.0 Real-API: وقتی بلیط videoUrl واقعی دارد، خود <video> رندر می‌شود
+              v1.2.8: در تمام‌صفحه، ناحیهٔ ویدیو کل ارتفاع را می‌گیرد (قبلاً روی موبایل ۵۲vw می‌ماند) */}
+          <div
+            className={`relative w-full bg-gradient-to-b from-stone-900 via-stone-950 to-black flex items-center justify-center overflow-hidden ${
+              isFullscreen || isLandscape
+                ? 'h-full max-h-full'
+                : 'h-[52vw] max-h-[65vh] lg:max-h-full lg:h-full'
+            }`}
+          >
             {/* Background Handcraft Visual Motif Mockup */}
             {!ticket?.videoUrl && <div className="absolute inset-0 opacity-25 bg-[radial-gradient(#d97706_1px,transparent_1px)] [background-size:16px_16px]" />}
 
             {/* v1.1.0 Real-API: منبع واقعی پخش — تنها وقتی که زنجیرهٔ ticket→playback موفق بوده
-                و سرور videoUrl داده است. تمام اورلی‌ها (واترمارک/بافرینگ/انقضا/تمام جلسه) روی آن می‌مانند. */}
-            {ticket?.videoUrl && (
+                و سرور videoUrl داده است. تمام اورلی‌ها (واترمارک/بافرینگ/انقضا/تمام جلسه) روی آن می‌مانند.
+                v1.2.8: سخت‌سازی ضد دانلود — بدون کنترل بومی دانلود، بدون PiP، بدون منوی راست‌کلیک */}
+            {activeVideoSrc && (
               <video
                 ref={videoRef}
-                key={ticket.videoUrl}
-                src={ticket.videoUrl}
+                key={activeVideoSrc}
+                src={activeVideoSrc}
                 className="absolute inset-0 z-10 h-full w-full bg-black object-contain"
                 autoPlay
                 playsInline
                 preload="metadata"
+                controlsList="nodownload noplaybackrate noremoteplayback"
+                disablePictureInPicture
+                draggable={false}
+                onContextMenu={(e) => e.preventDefault()}
                 onLoadedMetadata={(e) => {
                   const video = e.currentTarget;
                   setRealVideoDuration(video.duration || 0);
+                  // v1.2.8: رزولوشن واقعی فایل فعال — برای نمایش «کیفیت خودکار»
+                  setVideoHeight(Number.isFinite(video.videoHeight) ? video.videoHeight : 0);
                   const resume = resumeTimeRef.current;
                   if (resume !== null && Number.isFinite(resume) && resume > 1) {
                     try {
-                      video.currentTime = resume; // ادامهٔ پخش پس از تمدید بلیط
+                      video.currentTime = resume; // ادامهٔ پخش پس از تمدید بلیط/سوییچ کیفیت
                     } catch {
                       // ignore
                     }
@@ -835,15 +930,30 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
 
               {/* Quality & Next/Prev */}
               <div className="flex items-center gap-2">
-                {/* Hardening (prelive 18-b — یافتهٔ 1-8): سوییچ کیفیت جعلی فقط در دمو
-                    معنا دارد؛ در پخش واقعی کیفیت وابسته به فایل مرجع MP4 سرور است —
-                    به‌جای انتخاب‌گر، نشان ثابت صادقانه نمایش داده می‌شود. */}
-                {isRealPlayback ? (
-                  <span
-                    className="bg-stone-800 text-stone-300 text-[11px] rounded px-1.5 py-1 border border-stone-700 select-none"
-                    title="کیفیت پخش وابسته به فایل اصلی ویدیو روی سرور است"
+                {/* v1.2.8 — کیفیت:
+                    ۱) سرور نسخه‌های چندکیفیته بفرستد (فیلتر mrdastbaaf_stream_video_qualities)
+                       → انتخاب‌گر واقعی با حفظ جای پخش.
+                    ۲) در غیر این صورت نمایش صادقانهٔ «خودکار» با رزولوشن واقعی فایل فعال. */}
+                {hasQualitySelector ? (
+                  <select
+                    value={activeVideoSrc}
+                    onChange={(e) => setActiveQualityUrl(e.target.value)}
+                    aria-label="انتخاب کیفیت پخش"
+                    className="bg-stone-800 text-stone-300 text-[11px] rounded px-1.5 py-1 border border-stone-700 focus:outline-none"
                   >
-                    کیفیت: طبق فایل اصلی
+                    <option value={ticket?.videoUrl ?? ''}>خودکار</option>
+                    {ticket?.qualities?.map((q) => (
+                      <option key={q.url} value={q.url}>
+                        {q.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : isRealPlayback ? (
+                  <span
+                    className="bg-stone-800 text-stone-300 text-[11px] rounded px-1.5 py-1 border border-stone-700 select-none whitespace-nowrap"
+                    title="کیفیت پخش به‌صورت خودکار مطابق فایل اصلی ویدیو روی سرور است"
+                  >
+                    کیفیت: خودکار{videoHeight > 0 ? ` · ${videoHeight}p` : ''}
                   </span>
                 ) : (
                   <select
@@ -881,6 +991,19 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
                     aria-label="درس بعدی"
                   >
                     <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  {/* v1.2.8: حالت افقی — تمام‌صفحه + قفل landscape به انتخاب کاربر */}
+                  <button
+                    onClick={isLandscape ? exitLandscape : enterLandscape}
+                    className={`p-1 rounded transition ${
+                      isLandscape
+                        ? 'bg-amber-700 text-white'
+                        : 'bg-stone-800 text-stone-300 hover:text-white'
+                    }`}
+                    title={isLandscape ? 'بازگشت به حالت عمودی' : 'حالت افقی (تمام‌صفحه)'}
+                    aria-label={isLandscape ? 'بازگشت به حالت عمودی' : 'حالت افقی (تمام‌صفحه)'}
+                  >
+                    <RotateCw className="w-4 h-4" />
                   </button>
                   {/* BUG-58: fullscreen toggle via the Fullscreen API. */}
                   <button
@@ -923,17 +1046,8 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
               <FileText className="w-3.5 h-3.5" />
               یادداشت‌ها ({notes.length})
             </button>
-            <button
-              onClick={() => setActiveTab('security')}
-              className={`flex-1 py-3 text-center font-medium border-b-2 transition flex items-center justify-center gap-1.5 ${
-                activeTab === 'security'
-                  ? 'border-amber-600 text-amber-400 bg-stone-900'
-                  : 'border-transparent text-stone-400 hover:text-stone-200'
-              }`}
-            >
-              <Shield className="w-3.5 h-3.5" />
-              امنیت ویدیو
-            </button>
+            {/* v1.2.8: تب «امنیت ویدیو» و متن «هشدار فنی مهم» کاملاً حذف شدند —
+                جزئیات معماری امنیت برای کاربر نهایی ضروری نیست (درخواست کارفرما). */}
           </div>
 
           {/* Drawer Content */}
@@ -949,7 +1063,8 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
                     <div className="space-y-1">
                       {sec.lessons.map((lsn) => {
                         const isCurrent = lsn.id === currentLesson.id;
-                        const access = courseService.canAccessLesson(currentUser, lsn);
+                        // v1.2.8: course پاس داده می‌شود — جلسات دورهٔ خریداری‌شده در فهرست هم باز است
+                        const access = courseService.canAccessLesson(currentUser, lsn, course);
                         const isDone = (currentUser?.completedLessonIds ?? []).includes(lsn.id) ||
                           localCompletedIds.includes(lsn.id);
                         return (
@@ -1058,47 +1173,9 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
               </div>
             )}
 
-            {/* 3. SECURITY ARCHITECTURE DETAILS */}
-            {activeTab === 'security' && (
-              <div className="space-y-3 text-xs leading-relaxed text-stone-300">
-                <div className="p-3 rounded-xl bg-stone-800/60 border border-stone-700/80 space-y-2">
-                  <h4 className="font-bold text-amber-300 flex items-center gap-1.5">
-                    <Shield className="w-4 h-4 text-amber-400" />
-                    معماری امنیت ویدیو در مستر دستباف
-                  </h4>
-                  {/* Hardening (prelive 18-b — یافتهٔ 1-8): متن پروتوتایپ فقط در دمو
-                      نمایش داده می‌شود؛ در حالت واقعی بیانیهٔ صادقانهٔ بلیط/واترمارک می‌آید. */}
-                  <p className="text-[11px] text-stone-400">
-                    {isRealApiMode
-                      ? 'در حالت اتصال واقعی، ویدیو فقط با بلیط کوتاه‌مدت سرور و واترمارک پویا پخش می‌شود:'
-                      : 'این پلیر نسخه پروتوتایپ است و تعمداً از هیچ لینک مستقیم فایل MP4 استفاده نمی‌کند:'}
-                  </p>
-                  <ul className="list-disc list-inside space-y-1 text-[11px] text-stone-300">
-                    {isRealApiMode ? (
-                      <li>آدرس ویدیو فقط با بلیط کوتاه‌مدت سرور و برای مدت محدود صادر می‌شود</li>
-                    ) : (
-                      <li>عدم ارائه لینک خام ویدیو در کدهای کلاینت</li>
-                    )}
-                    <li>واترمارک پویا با شماره تلفن ماسک‌شده و شناسه کاربر</li>
-                    {/* یافتهٔ 1-8: ادعای «HLS چندکیفیت» فقط در شبیه‌ساز دمو درست است؛
-                        در حالت واقعی متن صادقانهٔ بلیط/واترمارک جایگزین می‌شود. */}
-                    <li>
-                      {isRealApiMode
-                        ? 'پخش امن ویدیو با بلیط اختصاصی و واترمارک پویا'
-                        : 'طراحی شده برای پروتکل استریم چندکیفیته HLS در نسخه نهایی'}
-                    </li>
-                    <li>نیاز به توکن کوتاه‌مدت (Tokenized Signature) از سمت سرور وردپرس</li>
-                  </ul>
-                </div>
-
-                <div className="p-2.5 rounded-xl bg-amber-950/40 border border-amber-900/60 text-[11px] text-amber-200/90">
-                  <strong>هشدار فنی مهم:</strong>
-                  <p className="mt-1 text-stone-300">
-                    هیچ پلیر تحت وب HTML5 به تنهایی قادر به جلوگیری کامل از دانلود یا ضبط صفحه نیست. حفاظت در مقیاس عملیاتی نیازمند سرویس‌های اختصاصی مانند ابرآروان یا سیستم‌های DRM نظیر Widevine / FairPlay است.
-                  </p>
-                </div>
-              </div>
-            )}
+            {/* v1.2.8: بخش «معماری امنیت ویدیو» + بلوک «هشدار فنی مهم» حذف شدند —
+                این متن‌ها برای کاربر نهایی نوشته نشده بودند و طبق درخواست کارفرما
+                هیچ توضیح فنی حذفیاتی در پلیر نمایش داده نمی‌شود. */}
           </div>
         </div>
       </div>

@@ -183,6 +183,16 @@ class MrDastbaaf_Courses_Controller {
         $course['lessons'] = $this->get_product_lessons_public((int) $post_found->ID);
         $course['freePreviewCount'] = $this->count_free_lessons((int) $post_found->ID);
 
+        // ─── v1.3.5: پرچم «خرید تک‌دوره‌ای از سایت» ───
+        // کاربرِ لاگین‌شده (Bearer یا کوکی) که این محصول را در سفارش پرداخت‌شدهٔ
+        // ووکامرس دارد → تمام جلسات همین دوره بدون اشتراک باز می‌شود. مهمان همیشه
+        // false (پرچم هرگز سمت کلاینت استنتاج نمی‌شود — هم‌راستا با گیت بلیط پخش).
+        MrDastbaaf_Auth_Controller::maybe_authenticate_bearer();
+        $viewer_id = get_current_user_id();
+        $course['owned'] = $viewer_id
+            ? $this->user_owns_course_product($viewer_id, (int) $post_found->ID)
+            : false;
+
         return rest_ensure_response($course);
     }
 
@@ -513,10 +523,20 @@ class MrDastbaaf_Courses_Controller {
      *
      * v1.1.0: tier موردنیاز ابتدا از جدول درس‌ها خوانده می‌شود؛ در نبود ردیف،
      * فیلتر قبلی mrdastbaaf_get_lesson_required_tier به‌عنوان fallback حفظ شده است.
+     * v1.3.5: خرید تک‌دوره‌ای — اگر کاربر محصولِ والدِ این درس را در سفارش
+     * پرداخت‌شدهٔ ووکامرس داشته باشد، tier نادیده گرفته می‌شود (خرید دوره =
+     * دسترسی کامل به تمام جلسات همان دوره؛ حتی درس‌های tier بالاتر).
      */
     private function user_has_lesson_access($user_id, $lesson_id, $lesson_row = null) {
         if (user_can($user_id, 'manage_options')) {
             return true; // ادمین به تمام جلسات دسترسی دارد
+        }
+
+        // v1.3.5: مسیر خرید تک‌دوره‌ای — محصولِ والدِ درس در سفارش‌های پرداخت‌شدهٔ کاربر؟
+        if ($lesson_row && isset($lesson_row->product_id) && (int) $lesson_row->product_id > 0) {
+            if ($this->user_owns_course_product($user_id, (int) $lesson_row->product_id)) {
+                return true;
+            }
         }
 
         global $wpdb;
@@ -547,6 +567,200 @@ class MrDastbaaf_Courses_Controller {
         $req_rank = isset($ranks[$required_tier]) ? $ranks[$required_tier] : 1;
 
         return $user_rank >= $req_rank;
+    }
+
+    /**
+     * v1.3.5: آیا کاربر این محصول (دوره) را در سفارش پرداخت‌شدهٔ ووکامرس دارد؟
+     *
+     * پوشش کامل هر دو سناریو:
+     *  ۱) سفارش‌های حساب کاربری (customer_id) — خرید لاگین‌شده
+     *  ۲) سفارش‌های مهمان با همان شماره موبایل (billing_phone) — کاربرِ OTP
+     *     دقیقاً با شماره‌ای که هنگام خرید مهمان وارد کرده، حساب پیدا می‌کند
+     *     (user_login = شماره، الگوی همان auth controller؛ نرمال‌سازی +98/0098)
+     *
+     * وضعیت‌های معتبر: wc-completed و wc-processing (در انتظار تکمیل سفارش فیزیکی).
+     * یکپارچگی با HPOS: کوئری billing_phone اول wc_get_orders (پشتیبانی رسمی)،
+     * سپس جدول wp_wc_orders (HPOS) و در نهایت postmeta قدیمی (_billing_phone)
+     * امتحان می‌شود — روی هر نصبی یکی حتماً جواب می‌دهد.
+     *
+     * کارایی: بدون کش — کوئری فقط هنگام بازکردن جزئیات دوره/صدور بلیط اجرا
+     * می‌شود و روی فروشگاه‌های کوچک/متوسط به‌شدت ارزان است؛ بدون کش، نتیجهٔ
+     * خریدِ همین لحظه هم بلافاصله دیده می‌شود (رفتار مورد انتظار کارفرما).
+     *
+     * @param int $user_id    شناسهٔ کاربر فعلی
+     * @param int $product_id شناسهٔ محصول ووکامرس (دوره)
+     * @return bool
+     */
+    private function user_owns_course_product($user_id, $product_id) {
+        if (!$user_id || $product_id <= 0 || !class_exists('WooCommerce') || !function_exists('wc_get_order')) {
+            return false;
+        }
+
+        $paid_statuses = array('wc-completed', 'wc-processing');
+        $order_ids = array();
+
+        // ۱) سفارش‌های حساب کاربری
+        $own_orders = wc_get_orders(array(
+            'customer_id' => (int) $user_id,
+            'status'      => $paid_statuses,
+            'limit'       => 100,
+        ));
+        if (is_array($own_orders)) {
+            foreach ($own_orders as $order) {
+                $order_ids[] = method_exists($order, 'get_id') ? (int) $order->get_id() : (int) $order;
+            }
+        }
+
+        // ۲) سفارش‌های مهمان با همان شماره موبایل
+        $user = get_user_by('ID', (int) $user_id);
+        if ($user) {
+            $phone_candidates = $this->phone_normalization_candidates((string) $user->user_login);
+            foreach ($phone_candidates as $phone) {
+                foreach ($this->get_paid_order_ids_by_phone($phone, $paid_statuses) as $oid) {
+                    $order_ids[] = (int) $oid;
+                }
+            }
+        }
+
+        if (empty($order_ids)) {
+            return false;
+        }
+        $order_ids = array_values(array_unique(array_map('intval', $order_ids)));
+
+        // تطبیق اقلام سفارش‌ها با محصول — شامل variation (والدش چک می‌شود)
+        foreach ($order_ids as $order_id) {
+            $order = wc_get_order($order_id);
+            if (!$order || !method_exists($order, 'get_items')) {
+                continue;
+            }
+            foreach ($order->get_items() as $item) {
+                if (!method_exists($item, 'get_product_id')) {
+                    continue;
+                }
+                $item_product_id = (int) $item->get_product_id();
+                $item_variation_id = method_exists($item, 'get_variation_id') ? (int) $item->get_variation_id() : 0;
+
+                if ($item_product_id === $product_id) {
+                    return true;
+                }
+                if ($item_variation_id > 0) {
+                    $variation = wc_get_product($item_variation_id);
+                    if ($variation && method_exists($variation, 'get_parent_id') && (int) $variation->get_parent_id() === $product_id) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * v1.3.5: فرم‌های نرمال‌سازی شماره موبایل (هم‌راستا با auth controller) —
+     * [۰۹...، ۹۸...، +۹۸...، ۰۰۹۸...] برای تطبیق با billing_phone سفارش‌ها
+     *
+     * @param string $raw_phone شمارهٔ خام (user_login)
+     * @return string[] کاندیداهای یکتا
+     */
+    private function phone_normalization_candidates($raw_phone) {
+        $digits = preg_replace('/\D+/', '', (string) $raw_phone);
+        if ('' === $digits) {
+            return array();
+        }
+
+        // تبدیل ارقام فارسی/عربی اگر از مسیرهای دیگر آمده باشد
+        $fa = array('۰','۱','۲','۳','۴','۵','۶','۷','۸','۹');
+        $en = array('0','1','2','3','4','5','6','7','8','9');
+        $digits = str_replace($fa, $en, $digits);
+
+        $candidates = array();
+        if (preg_match('/^(9\d{9})$/', $digits)) {
+            $candidates[] = '0' . $digits;      // 912... → 0912...
+            $candidates[] = '+98' . $digits;    // شکل بین‌المللی
+        } elseif (preg_match('/^(0\d{10})$/', $digits)) {
+            $candidates[] = $digits;            // 0912...
+            $candidates[] = '+98' . substr($digits, 1);
+        } elseif (preg_match('/^(?:98|0098)(\d{10})$/', $digits, $m)) {
+            $candidates[] = '0' . $m[1];        // 98/0098 + 912... → 0912...
+            $candidates[] = $digits;
+        } else {
+            $candidates[] = $digits;
+        }
+
+        return array_values(array_unique(array_filter($candidates)));
+    }
+
+    /**
+     * v1.3.5: یافتن سفارش‌های پرداخت‌شده با شمارهٔ موبایل — سه استراتژی پشت‌سرهم
+     * (wc_get_orders، HPOS مستقیم، postmeta قدیمی) تا روی هر نصبی کار کند.
+     *
+     * @param string $phone         شمارهٔ نرمال‌شده
+     * @param array  $paid_statuses وضعیت‌های معتبر (wc-completed/wc-processing)
+     * @return int[] شناسه‌های سفارش
+     */
+    private function get_paid_order_ids_by_phone($phone, array $paid_statuses) {
+        global $wpdb;
+        $order_ids = array();
+
+        // استراتژی ۱ — wc_get_orders (پشتیبانی رسمی billing_phone در نسخه‌های جدید)
+        try {
+            $found = wc_get_orders(array(
+                'billing_phone' => (string) $phone,
+                'status'        => $paid_statuses,
+                'limit'         => 100,
+            ));
+            if (is_array($found)) {
+                foreach ($found as $order) {
+                    $order_ids[] = method_exists($order, 'get_id') ? (int) $order->get_id() : (int) $order;
+                }
+            }
+        } catch (Throwable $e) {
+            // نسخه‌های قدیمی ووکامرس آرگومان billing_phone را نمی‌شناسند — مسیرهای بعدی
+        }
+        if (!empty($order_ids)) {
+            return $order_ids;
+        }
+
+        // استراتژی ۲ — جدول HPOS (wp_wc_orders با ستون billing_phone)
+        // نکته: در جدول HPOS وضعیت‌ها «بدون» پیشوند wc- ذخیره می‌شوند (completed/processing)
+        // — هر دو فرم برای پوشش کامل نسخه‌های مختلف ووکامرس چک می‌شوند.
+        $hpos_table = $wpdb->prefix . 'wc_orders';
+        $table_exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $hpos_table));
+        if ($table_exists === $hpos_table) {
+            $bare_statuses = array_map(
+                static function ($status) {
+                    return 'wc-' === substr((string) $status, 0, 3) ? substr((string) $status, 3) : (string) $status;
+                },
+                $paid_statuses
+            );
+            $all_statuses = array_values(array_unique(array_merge($paid_statuses, $bare_statuses)));
+            $placeholders = implode(',', array_fill(0, count($all_statuses), '%s'));
+            $sql = "SELECT id FROM {$hpos_table} WHERE billing_phone = %s AND status IN ({$placeholders}) LIMIT 100";
+            $params = array_merge(array($phone), $all_statuses);
+            $rows = call_user_func_array(array($wpdb, 'get_col'), array_merge(array($sql), $params));
+            if (is_array($rows) && !empty($rows)) {
+                return array_map('intval', $rows);
+            }
+        }
+
+        // استراتژی ۳ — ذخیره‌سازی قدیمی (postmeta با کلید _billing_phone)
+        // ترتیب پارامترهای prepare بر اساس ترتیب ظاهرشدن در SQL: وضعیت‌ها سپس شماره
+        $placeholders = implode(',', array_fill(0, count($paid_statuses), '%s'));
+        $sql = "SELECT DISTINCT p.ID FROM {$wpdb->posts} p
+                INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID
+                WHERE p.post_type = 'shop_order'
+                  AND p.post_status IN ({$placeholders})
+                  AND pm.meta_key = '_billing_phone'
+                  AND pm.meta_value = %s
+                LIMIT 100";
+        $ordered_params = array_merge($paid_statuses, array($phone));
+        $prepared = call_user_func_array(array($wpdb, 'prepare'), array_merge(array($sql), $ordered_params));
+        $rows = $wpdb->get_col($prepared);
+        if (is_array($rows) && !empty($rows)) {
+            return array_map('intval', $rows);
+        }
+
+        return $order_ids;
     }
 
     /**

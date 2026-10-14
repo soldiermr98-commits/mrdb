@@ -73,11 +73,14 @@ class MrDastbaaf_App_Pages_Controller {
     /**
      * آیا سطح جاری به سطحِ درخواستیِ رکورد می‌رسد؟
      *
+     * v1.3.5: public شد — فیلتر template_include (رندر mrdapp=1) هم همین منطق
+     * را بازمصرف می‌کند تا سطح دسترسی فقط یک‌جا تعریف شده باشد.
+     *
      * @param string $required 'all' | 'members' | 'admins'
      * @param string $current  'guest' | 'member' | 'admin'
      * @return bool
      */
-    private static function access_satisfied($required, $current) {
+    public static function access_satisfied($required, $current) {
         $required = (string) $required;
         if (self::ACCESS_ALL === $required) {
             return true;
@@ -137,6 +140,8 @@ class MrDastbaaf_App_Pages_Controller {
                 'title'  => '' !== $entry['title'] ? $entry['title'] : $this->page_title($entry['page_id']),
                 'access' => $entry['access'],
                 'sortOrder' => $entry['sort'],
+                // v1.3.5: نشانی برگه (فقط publish) — PWA برای رندر iframe با mrdapp=1 استفاده می‌کند
+                'url'    => $this->page_permalink($entry['page_id']),
             );
         }
 
@@ -190,7 +195,23 @@ class MrDastbaaf_App_Pages_Controller {
             'html'   => $html,
             'access' => $entry['access'],
             'updatedAtJalali' => $modified > 0 ? date_i18n('Y/m/d', $modified) : '',
+            // v1.3.5: نشانی واقعی برگه — PWA با پارامتر mrdapp=1 و قالب Canvas افزونه
+            // صفحه را در iframe رندر می‌کند (فیکس به‌هم‌ریختگی استایل صفحات المنتور).
+            // HTML بالا هم به‌عنوان فال‌بک سر جایش می‌ماند.
+            'url'    => get_permalink($post),
         ));
+    }
+
+    /**
+     * v1.3.5: نشانی برگهٔ وردپرسی — فقط برای صفحات publish؛ در غیر این صورت رشتهٔ خالی
+     */
+    private function page_permalink($page_id) {
+        $page_id = (int) $page_id;
+        if ($page_id <= 0 || 'publish' !== get_post_status($page_id)) {
+            return '';
+        }
+        $permalink = get_permalink($page_id);
+        return is_string($permalink) ? $permalink : '';
     }
 
     /**
