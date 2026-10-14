@@ -43,6 +43,22 @@ export const CatalogueView: React.FC<CatalogueViewProps> = ({
 
   const levels = ['all', 'مقدماتی', 'متوسط', 'پیشرفته'];
 
+  // DEV-2 follow-up: keep the address bar in sync when the user switches
+  // categories inside the catalogue, so a filtered view is copy/share-able
+  // (deep link format matches App's serializeRoute exactly: #/catalogue?cat=…).
+  // history.replaceState — not pushState — so Back still leaves the catalogue
+  // entirely (no per-category history spam) and no popstate echo is fired.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hash =
+      selectedCategory && selectedCategory !== 'all'
+        ? `#/catalogue?cat=${encodeURIComponent(selectedCategory)}`
+        : '#/catalogue';
+    if (window.location.hash !== hash) {
+      window.history.replaceState(window.history.state, '', hash);
+    }
+  }, [selectedCategory]);
+
   // BUG-42: the old effect fired getCourses on every keystroke (200ms artificial
   // delay each) with no catch and no stale-response guard. Now: a 300ms debounce
   // timer (cleaned up on re-render), a request counter so a slower older response

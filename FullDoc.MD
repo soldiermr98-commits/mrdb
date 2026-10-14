@@ -518,7 +518,7 @@ npm run build
 
 | شناسه | فیچر | شرح | فایل |
 |---|---|---|---|
-| DEV-2 | **روتر Hash با دکمه Back و دیپ‌لینک** | ناوبری واقعی با URL: `#/` ، `#/catalogue?cat=…` ، `#/course/{id}` ، `#/membership` ، `#/dashboard` ، `#/admin` ، `#/page/{slug}`؛ sync با popstate/hashchange، دیپ‌لینک روی لود سرد، دکمه Back/Forward مرورگر و اندروید بین نماها جابجا می‌شود (خروج از اپ نیست). | `App.tsx` |
+| DEV-2 | **روتر Hash با دکمه Back و دیپ‌لینک** | ناوبری واقعی با URL: `#/` ، `#/catalogue?cat=…` ، `#/course/{id}` ، `#/membership` ، `#/dashboard` ، `#/admin` ، `#/page/{slug}`؛ sync با popstate/hashchange، دیپ‌لینک روی لود سرد، دکمه Back/Forward مرورگر و اندروید بین نماها جابجا می‌شود (خروج از اپ نیست). فالوآپ: سوییچ دسته داخل کاتالوگ با `history.replaceState` آدرس را همگام نگه می‌دارد (بدون آلودگی تاریخچه). | `App.tsx`، `CatalogueView.tsx` |
 | DEV-3 | **ErrorBoundary + AsyncState** | مرز خطای React با UI فارسی «خطایی رخ داد» دور کل اپ + کامپوننت مشترک loading/error/empty با «تلاش مجدد» (پذیرفته‌شده در نماها). | `ErrorBoundary.tsx`، `AsyncState.tsx` (جدید) |
 | DEV-4 | **پیشرفت دوره و «ادامه یادگیری»** | ذخیره واقعی `completedLessonIds`، نوار پیشرفت per-course در داشبورد، ✓ کنار درس‌های تکمیل‌شده در سرفصل، کارت «ادامه یادگیری» (باز کردن اولین درس ناتمام). | `UserDashboardView.tsx`، `CourseDetailView.tsx`، `LessonPlayerModal.tsx` |
 | DEV-5 | **نشان‌شده‌ها (Bookmarks)** | بوکمارک درس از هدر پلیر + بخش «نشان‌شده‌ها» در داشبورد با پخش مستقیم. | `LessonPlayerModal.tsx`، `UserDashboardView.tsx` |
