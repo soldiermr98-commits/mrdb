@@ -119,8 +119,9 @@ describe('v1.3.0 app-ui section keys contract', () => {
     const legacy = normalizeAppUi({ sections: [{ key: 'faq' }] });
 
     const shop = legacy.sections.find((s) => s.key === 'physical_products');
+    // v1.4.0: عنوان پیش‌فرض «محصولات» (هم‌قرارداد افزونهٔ ۱.۵.۰) — زیرنویس ثابت
     expect(shop).toMatchObject({
-      title: 'محصولات دست‌ساز',
+      title: 'محصولات',
       subtitle: 'آثار هنری آمادهٔ ارسال مستقیم',
       enabled: true,
       sortOrder: 7,

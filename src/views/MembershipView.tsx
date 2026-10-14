@@ -259,21 +259,21 @@ export const MembershipView: React.FC<MembershipViewProps> = ({
                 <td className="py-2.5 text-center text-emerald-600 font-bold">✓</td>
               </tr>
               <tr>
-                <td className="py-2.5">دوره‌های سطح مقدماتی (قالی‌بافی و مکرمه)</td>
+                <td className="py-2.5">دوره‌های مقدماتی (جت بافت و گلیم‌بافی)</td>
                 <td className="py-2.5 text-center text-stone-300">-</td>
                 <td className="py-2.5 text-center text-emerald-600 font-bold">✓</td>
                 <td className="py-2.5 text-center text-emerald-600 font-bold">✓</td>
                 <td className="py-2.5 text-center text-emerald-600 font-bold">✓</td>
               </tr>
               <tr>
-                <td className="py-2.5">دوره‌های متوسط (گلیم قشقایی و پته کرمان)</td>
+                <td className="py-2.5">دوره‌های تخصصی (گلیم ورنی، گلیم چاکدار و تابلوفرش)</td>
                 <td className="py-2.5 text-center text-stone-300">-</td>
                 <td className="py-2.5 text-center text-stone-300">-</td>
                 <td className="py-2.5 text-center text-emerald-600 font-bold">✓</td>
                 <td className="py-2.5 text-center text-emerald-600 font-bold">✓</td>
               </tr>
               <tr>
-                <td className="py-2.5">دوره‌های پیشرفته (رنگرزی گیاهی و طراحی نقشه)</td>
+                <td className="py-2.5">دوره‌های حرفه‌ای (جراحی و مرمت فرش و درآمد دلاری)</td>
                 <td className="py-2.5 text-center text-stone-300">-</td>
                 <td className="py-2.5 text-center text-stone-300">-</td>
                 <td className="py-2.5 text-center text-stone-300">-</td>

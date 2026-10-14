@@ -13,6 +13,7 @@
  * import دینامیک ست می‌شود تا isRealApiMode=true شود.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Course } from '../../src/types';
 
 type AuthServiceModule = typeof import('../../src/services/authService');
 type PaymentServiceModule = typeof import('../../src/services/paymentService');
@@ -309,5 +310,141 @@ describe('Real-API v1.2.0 contracts', () => {
     // درس‌ها: عدد → دقیقه؛ null → ۰ (چیپ دقیقه در UI حذف می‌شود)
     expect(courses[0].sections[0].lessons[0]).toMatchObject({ id: 'lsn-1', durationMinutes: 30 });
     expect(courses[0].sections[0].lessons[1]).toMatchObject({ id: 'lsn-2', durationMinutes: 0 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v1.4.0 — قرارداد فیکس «خطای قفل» (هدر Bearer در درخواست‌های دوره) + خرید مستقیم
+// تک‌دوره‌ای (POST /payment/zibal/initiate {product_id})
+// ---------------------------------------------------------------------------
+describe('Real-API v1.4.0 owned-flag auth + direct course checkout contracts', () => {
+  it('getCourses/getCourseById carry the Authorization header when a token exists (owned resolves server-side)', async () => {
+    const { auth, course } = await loadRealServices();
+    await auth.authService.verifyOtp('09123456789', '12345'); // توکن '42.secret' ذخیره می‌شود
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // مسیرهای مخصوص این تست — /courses آیتم با productId می‌دهد تا pid-map پر شود
+    fetchMock.mockImplementation(async (url: string, init: { method?: string; headers: Record<string, string>; body?: string }) => {
+      calls.push({
+        url: String(url),
+        method: init.method ?? 'GET',
+        headers: init.headers,
+        body: init.body,
+      });
+      if (String(url).endsWith('/courses')) {
+        return jsonResponse([
+          { id: 'c-verneh', title: 'دوره ورنی', productId: 42, owned: false, priceToman: 420000 },
+        ]);
+      }
+      if (String(url).endsWith('/courses/by-id/42')) {
+        return jsonResponse({ id: 'c-verneh', title: 'دوره ورنی', productId: 42, owned: true });
+      }
+      return jsonResponse({ success: true });
+    });
+
+    const courses = await course.courseService.getCourses();
+    const listCall = calls.find((c) => c.url.endsWith('/courses'));
+    expect(listCall).toBeDefined();
+    // FIX «خطای قفل»: لیست دوره‌ها با توکن می‌رود (سرور owned هر آیتم را می‌فهمد)
+    expect(listCall?.headers.Authorization).toBe('Bearer 42.secret');
+    expect(courses[0]).toMatchObject({ id: 'c-verneh', productId: 42 });
+
+    const detail = await course.courseService.getCourseById('c-verneh');
+    const byIdCall = calls.find((c) => c.url.endsWith('/courses/by-id/42'));
+    expect(byIdCall).toBeDefined();
+    expect(byIdCall?.headers.Authorization).toBe('Bearer 42.secret');
+    expect(detail?.owned).toBe(true);
+  });
+
+  it('guest course requests omit the Authorization header and never throw 401', async () => {
+    const { course } = await loadRealServices();
+    // بدون توکن (مهمان) — باید resolve شود، نه throw 401 برآمده از auth:true
+    await expect(course.courseService.getCourses()).resolves.toBeDefined();
+    await expect(course.courseService.getCourseById('unknown-slug')).resolves.toBeDefined();
+
+    const courseCalls = calls.filter((c) => c.url.includes('/courses'));
+    expect(courseCalls.length).toBeGreaterThan(0);
+    for (const c of courseCalls) {
+      expect(c.headers.Authorization).toBeUndefined();
+    }
+  });
+
+  it('initiateCourseZibalPayment POSTs {product_id} with Bearer and builds a course PaymentOrder', async () => {
+    const { auth, payment } = await loadRealServices();
+    await auth.authService.verifyOtp('09123456789', '12345');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    fetchMock.mockImplementation(async (url: string, init: { method?: string; headers: Record<string, string>; body?: string }) => {
+      calls.push({
+        url: String(url),
+        method: init.method ?? 'GET',
+        headers: init.headers,
+        body: init.body,
+      });
+      return jsonResponse({
+        orderId: 'woo-77',
+        orderNumber: 'MD-90001',
+        trackId: 'TRK-1',
+        paymentUrl: 'https://gateway.zibal.ir/start/TRK-1',
+      });
+    });
+
+    const courseObj = {
+      id: 'c-verneh',
+      title: 'دوره آزمایشی ورنی',
+      productId: 42,
+      priceToman: 420000,
+    } as unknown as Course;
+
+    const user = auth.authService.getCurrentUser();
+    expect(user).not.toBeNull();
+    const res = await payment.paymentService.initiateCourseZibalPayment(user!, courseObj);
+
+    const call = calls.find((c) => c.url.endsWith('/payment/zibal/initiate'));
+    expect(call).toBeDefined();
+    expect(call?.method).toBe('POST');
+    // قرارداد فریز افزونهٔ 1.5.0: بدنهٔ snake_case با product_id (به‌جای plan_id)
+    expect(JSON.parse(call?.body ?? '{}')).toEqual({ product_id: 42 });
+    expect(call?.headers.Authorization).toBe('Bearer 42.secret');
+
+    expect(res.gatewayUrl).toBe('https://gateway.zibal.ir/start/TRK-1');
+    expect(res.zibalTrackId).toBe('TRK-1');
+    expect(res.order).toMatchObject({
+      id: 'woo-77',
+      orderNumber: 'MD-90001',
+      itemType: 'course',
+      itemId: '42',
+      itemTitle: 'دوره آزمایشی ورنی',
+      amountToman: 420000,
+      gateway: 'zibal',
+      status: 'pending',
+    });
+    // سفارش دوره‌ای snapshot پلن ندارد و در orderStore هم ذخیره نمی‌شود
+    expect(res.order.planSnapshot).toBeUndefined();
+  });
+
+  it('initiateCourseZibalPayment surfaces the Persian 409 already-owned error from the server', async () => {
+    const { auth, payment } = await loadRealServices();
+    await auth.authService.verifyOtp('09123456789', '12345');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    fetchMock.mockImplementation(async () =>
+      jsonResponse(
+        { code: 'mrd_course_owned', message: 'شما قبلاً این دوره را خریداری کرده‌اید.', data: { status: 409 } },
+        409
+      )
+    );
+
+    const courseObj = {
+      id: 'c-verneh',
+      title: 'دوره آزمایشی ورنی',
+      productId: 42,
+      priceToman: 420000,
+    } as unknown as Course;
+
+    const user = auth.authService.getCurrentUser()!;
+    await expect(payment.paymentService.initiateCourseZibalPayment(user, courseObj)).rejects.toThrow(
+      'شما قبلاً این دوره را خریداری کرده‌اید.'
+    );
   });
 });

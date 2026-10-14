@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 // BUG-52: unused icon imports removed (Award, HelpCircle, Layers). BookOpen
 // stays — it is used by the DEV/BUG-53 featured empty-state card.
-import { Course, HomepageSectionConfig, MembershipPlan, ShopCategory, UserProfile, AppUiConfig } from '../types';
+import { Course, HomepageSectionConfig, MembershipPlan, ShopCategory, ShopFeed, ShopProduct, UserProfile, AppUiConfig } from '../types';
 import { INITIAL_HOMEPAGE_SECTIONS } from '../data/mockData';
 import { adminService } from '../services/adminService';
 import { courseService } from '../services/courseService';
@@ -84,8 +84,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const [plans, setPlans] = useState<MembershipPlan[]>([]);
   const [isCoursesLoading, setIsCoursesLoading] = useState(true);
   const [isPlansLoading, setIsPlansLoading] = useState(true);
-  // v1.3.0 — «محصولات دست‌ساز» (GET /shop/products): خالی = سکشن محتوایی ندارد
+  // v1.3.0 — «محصولات» (GET /shop/products): خالی = سکشن محتوایی ندارد
+  // v1.4.0 — «محصولات ویژه» (فهرست سطح‌بالای featured در همان پاسخ — سرور قدیمی: [])
   const [shopCategories, setShopCategories] = useState<ShopCategory[]>([]);
+  const [featuredProducts, setFeaturedProducts] = useState<ShopProduct[]>([]);
   const [isShopLoading, setIsShopLoading] = useState(true);
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
 
@@ -117,14 +119,15 @@ export const HomeView: React.FC<HomeViewProps> = ({
         if (!stale) setIsPlansLoading(false);
       });
 
-    // v1.3.0 — «محصولات دست‌ساز» (GET /shop/products): شکست ساکت است — سکشن
+    // v1.3.0 — «محصولات» (GET /shop/products): شکست ساکت است — سکشن
     // خالی می‌ماند و کل صفحهٔ نخست هرگز با شکست فروشگاه نمی‌شکند (همان الگوی
-    // تحمل‌خطای بقیهٔ سکشن‌ها).
+    // تحمل‌خطای بقیهٔ سکشن‌ها). v1.4.0: خوراک کامل {featured, categories}.
     shopService
       .fetchShopProducts()
-      .then((cats) => {
+      .then((feed: ShopFeed) => {
         if (!stale) {
-          setShopCategories(cats);
+          setShopCategories(feed.categories);
+          setFeaturedProducts(feed.featured);
           setIsShopLoading(false);
         }
       })
@@ -254,7 +257,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
                     <p className="text-stone-300 text-xs sm:text-sm leading-relaxed max-w-xl">
                       {heroData.subheadline ||
-                        'مجموعه مسترکلاس‌های تصویری قالی‌بافی، گلیم، پته و منسوجات دستباف، همراه با هدایت گام‌به‌گام استادکاران نام‌آور'}
+                        'مجموعه مسترکلاس‌های تصویری قالی‌بافی، گلیم‌بافی و منسوجات دستباف، همراه با هدایت گام‌به‌گام استادکاران نام‌آور'}
                     </p>
 
                     <div className="pt-2 flex flex-wrap items-center gap-3">
@@ -495,6 +498,63 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 </div>
               ) : (
                 <div className="space-y-8">
+                  {/* v1.4.0 — «محصولات ویژه»: کاروسل افقی scroll-snap بالای دسته‌ها.
+                      کل کارت یک <a> امن (safeExternalUrl) است — هم‌شکل کارت محصول
+                      دسته‌ها اما بدون دکمهٔ داخلی. RTL طبیعی اسکرول می‌شود. */}
+                  {featuredProducts.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-bold text-stone-900 mb-3 flex items-center gap-1.5">
+                        <Sparkles className="w-4 h-4 text-amber-700" />
+                        <span>محصولات ویژه</span>
+                      </h3>
+                      <div className="flex gap-3 overflow-x-auto pb-2 snap-x snap-mandatory [-ms-overflow-style:none] [scrollbar-width:thin]">
+                        {featuredProducts.map((p) => {
+                          // همان گارد امنیتی configData این فایل — فقط http/https/mailto/tel
+                          const safeProductUrl = safeExternalUrl(p.url);
+                          if (!safeProductUrl) return null;
+                          const safeImageUrl = safeExternalUrl(p.imageUrl);
+                          return (
+                            <a
+                              key={p.id}
+                              href={safeProductUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="w-40 sm:w-48 shrink-0 snap-start bg-white rounded-2xl border border-stone-200/90 overflow-hidden shadow-xs hover:shadow-md transition flex flex-col"
+                            >
+                              {safeImageUrl ? (
+                                <img
+                                  src={safeImageUrl}
+                                  alt={p.title}
+                                  loading="lazy"
+                                  className="aspect-square w-full object-cover bg-stone-100"
+                                />
+                              ) : (
+                                // کاشی حرف‌اول — دمو و محصولات بدون تصویر (بدون هیچ تصویر بیرونی)
+                                <div className="aspect-square w-full bg-gradient-to-br from-amber-100 to-amber-200 flex items-center justify-center">
+                                  <span className="text-2xl font-black text-amber-800">
+                                    {p.title.slice(0, 1)}
+                                  </span>
+                                </div>
+                              )}
+
+                              <div className="p-3 flex-1 flex flex-col justify-between gap-2.5">
+                                <h4 className="text-xs font-bold text-stone-900 leading-snug line-clamp-2">
+                                  {p.title}
+                                </h4>
+                                <p className="text-[11px] text-stone-500">
+                                  <span className="font-black text-amber-900 font-mono">
+                                    {p.price.toLocaleString('fa-IR')}
+                                  </span>{' '}
+                                  تومان
+                                </p>
+                              </div>
+                            </a>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   {shopCategories.map((cat) => (
                     <div key={cat.id}>
                       <h3 className="text-sm font-bold text-stone-900 mb-3 flex items-center gap-2">
