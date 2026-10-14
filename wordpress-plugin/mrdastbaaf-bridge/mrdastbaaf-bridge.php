@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.4.0
+ * Version: 1.5.0
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.4.0');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.5.0');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -65,6 +65,15 @@ define('MRDASTBAAF_BRIDGE_VERSION', '1.4.0');
  *  ۴) فروشگاه: زیرصفحهٔ NEW «محصولات فیزیکی» (آپشن mrdastbaaf_physical_products)
  *     و اندپوینت عمومی NEW GET /shop/products برای بخش «محصولات دست‌ساز» وب‌اپ.
  *  ۵) «محتوای وب‌اپ»: سکشن پنجم NEW با کلید physical_products.
+ * v1.5.0: سه قابلیت NEW بدون هیچ تغییری در اسکیما (۱.۴.۰ ثابت) —
+ *  ۱) خرید تک‌دوره‌ای از درگاه زیبال: initiate با product_id اختیاری؛ پس از تایید
+ *     پرداخت، سفارشِ واقعی ووکامرس در وضعیت processing ساخته می‌شود (بازشدن آنی دوره
+ *     از طریق تشخیص مالکیت + ایمیل استاندارد ووکامرس برای ادمین) و plan_id سفارش
+ *     افزونه «course-{id}» ذخیره می‌شود.
+ *  ۲) GET /shop/products آرایهٔ top-level «featured» (محصولات ویژهٔ اسلایدر وب‌اپ)
+ *     از آپشن mrdastbaaf_featured_products برمی‌گرداند.
+ *  ۳) فیلدست «محصولات ویژه» روی صفحهٔ پیشخوان «محصولات فیزیکی» + گرید واکنش‌گرای
+ *     چک‌باکس‌ها؛ عنوان پیش‌فرض سکشن فروشگاه «محصولات» شد و متن‌های seed پاکسازی شد.
  */
 
 /**

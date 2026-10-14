@@ -1,6 +1,11 @@
 <?php
 /**
  * کنترلر پرداخت آنلاین زیبال و فیش‌های کارت به کارت (Payment & Checkout Controller)
+ *
+ * v1.5.0: علاوه بر پلن‌های عضویت، initiate با پارامتر اختیاری product_id مسیر
+ * «خرید تک‌دوره‌ای» را می‌سازد (plan_id = course-{id})؛ در تایید، سفارشِ واقعی
+ * ووکامرس در وضعیت processing ساخته می‌شود و بقیهٔ هستهٔ تایید/ریکنسیلیشن عیناً
+ * مشترک باقی می‌ماند.
  */
 
 if (!defined('ABSPATH')) {
@@ -143,6 +148,72 @@ class MrDastbaaf_Payment_Controller {
     }
 
     /**
+     * v1.5.0: اعتبارسنجی محصول دوره برای خرید تک‌دوره‌ای از وب‌اپ — چهار گارد:
+     *  ۱) محصول موجود و منتشرشده؛
+     *  ۲) عضو دستهٔ دوره‌ها (آپشن mrdastbaaf_course_category — دقیقاً همان گارد
+     *     has_term کنترلر دوره‌ها)؛
+     *  ۳) قیمت مثبت (get_price با فال‌بک wc_get_price_to_display)؛
+     *  ۴) خرید تکراری — بررسی سبک درون همین کلاس: سفارش‌های پرداخت‌شدهٔ حساب کاربر
+     *     (همان دو وضعیت تشخیص مالکیت دوره: wc-completed + wc-processing) و نگاشت
+     *     اقلام به شناسهٔ محصول (variation هم اضافه می‌شود، همان سبک کنترلر دوره‌ها).
+     *
+     * @param int $product_id شناسهٔ محصول ووکامرس
+     * @param int $user_id    شناسهٔ کاربر خریدار
+     * @return array|WP_Error {title:string, price:int} در موفقیت
+     */
+    private function validate_course_product_for_purchase($product_id, $user_id) {
+        $product = function_exists('wc_get_product') ? wc_get_product($product_id) : null;
+        if (!$product || 'publish' !== get_post_status($product_id)) {
+            return new WP_Error('invalid_product', 'دوره انتخاب‌شده یافت نشد یا منتشر نشده است.', array('status' => 400));
+        }
+
+        $course_category = (string) get_option('mrdastbaaf_course_category', 'courses');
+        if ('' !== $course_category && !has_term($course_category, 'product_cat', $product_id)) {
+            return new WP_Error('not_a_course', 'محصول انتخاب‌شده دوره نیست.', array('status' => 400));
+        }
+
+        $price = (int) $product->get_price();
+        if ($price <= 0 && function_exists('wc_get_price_to_display')) {
+            $price = (int) wc_get_price_to_display($product);
+        }
+        if ($price <= 0) {
+            return new WP_Error('course_not_purchasable', 'این دوره قابل خرید آنلاین نیست؛ با پشتیبانی تماس بگیرید.', array('status' => 400));
+        }
+
+        $owned_ids = array();
+        $paid_orders = function_exists('wc_get_orders') ? wc_get_orders(array(
+            'customer_id' => (int) $user_id,
+            'status'      => array('wc-completed', 'wc-processing'),
+            'limit'       => 100,
+        )) : array();
+        if (is_array($paid_orders)) {
+            foreach ($paid_orders as $paid_order) {
+                if (!$paid_order || !method_exists($paid_order, 'get_items')) {
+                    continue;
+                }
+                foreach ($paid_order->get_items() as $item) {
+                    if (!method_exists($item, 'get_product_id')) {
+                        continue;
+                    }
+                    $owned_ids[] = (int) $item->get_product_id();
+                    $variation_id = method_exists($item, 'get_variation_id') ? (int) $item->get_variation_id() : 0;
+                    if ($variation_id > 0) {
+                        $owned_ids[] = $variation_id;
+                    }
+                }
+            }
+        }
+        if (in_array((int) $product_id, $owned_ids, true)) {
+            return new WP_Error('already_owned', 'شما قبلاً این دوره را خریداری کرده‌اید؛ از بخش «دوره‌های من» داشبورد به آن دسترسی دارید.', array('status' => 409));
+        }
+
+        return array(
+            'title' => (string) $product->get_name(),
+            'price' => $price,
+        );
+    }
+
+    /**
      * ایجاد فاکتور و درخواست شناسه پرداخت از زیبال (Server-to-Server Request)
      */
     public function handle_zibal_initiate(WP_REST_Request $request) {
@@ -157,17 +228,45 @@ class MrDastbaaf_Payment_Controller {
             return new WP_Error('unauthorized', 'برای شروع پرداخت ابتدا وارد حساب کاربری خود شوید.', array('status' => 401));
         }
         $plan_id = sanitize_text_field($request->get_param('plan_id'));
+        // v1.5.0: خرید تک‌دوره‌ای — شناسهٔ اختیاری محصول ووکامرس (وقتی plan_id خالی است)
+        $product_id = absint($request->get_param('product_id'));
 
-        $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
-        $plan = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_plans WHERE id = %s AND is_active = 1", $plan_id));
+        /**
+         * v1.5.0: دو مسیر سفارش با یک هستهٔ مشترک — اشتراک (plan_id) یا خرید
+         * تک‌دوره‌ای (product_id). هر دو مسیر به همان رکورد جدول orders ختم می‌شوند؛
+         * برای دوره‌ها plan_id با پیشوند «course-» ذخیره می‌شود (finalize_verified_order
+         * شاخه‌اش را جدا می‌کند) و همهٔ گاردهای پایین (درگاه، سقف pending، BUG-15،
+         * insert_or_fail) بدون استثنا روی هر دو اعمال می‌شوند.
+         */
+        if ('' !== $plan_id) {
+            $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
+            $plan = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_plans WHERE id = %s AND is_active = 1", $plan_id));
 
-        if (!$plan) {
+            if (!$plan) {
+                return new WP_Error('invalid_plan', 'پلن انتخاب‌شده معتبر نیست.', array('status' => 400));
+            }
+
+            // BUG-36: پلن رایگان هرگز نباید به درگاه پرداخت هدایت شود
+            if ((int) $plan->price_toman <= 0) {
+                return new WP_Error('free_plan_no_gateway', 'پلن رایگان نیازی به پرداخت درگاه ندارد.', array('status' => 400));
+            }
+
+            $order_plan_id = (string) $plan->id;
+            $item_title = (string) $plan->title;
+            $amount_toman = (int) $plan->price_toman;
+            $zibal_description = 'خرید اشتراک ' . $plan->title . ' در مستر دستباف';
+        } elseif ($product_id > 0) {
+            $course_check = $this->validate_course_product_for_purchase($product_id, $user_id);
+            if (is_wp_error($course_check)) {
+                return $course_check;
+            }
+
+            $order_plan_id = 'course-' . $product_id; // در محدودهٔ varchar(64)
+            $item_title = $course_check['title'];
+            $amount_toman = $course_check['price'];
+            $zibal_description = 'خرید دوره ' . $course_check['title'] . ' در مستر دستباف';
+        } else {
             return new WP_Error('invalid_plan', 'پلن انتخاب‌شده معتبر نیست.', array('status' => 400));
-        }
-
-        // BUG-36: پلن رایگان هرگز نباید به درگاه پرداخت هدایت شود
-        if ((int) $plan->price_toman <= 0) {
-            return new WP_Error('free_plan_no_gateway', 'پلن رایگان نیازی به پرداخت درگاه ندارد.', array('status' => 400));
         }
 
         // SECURITY FIX (v1.2.0 — یافتهٔ ۱-۱): گارد پیکربندی درگاه — قبل از ثبت هر سفارشی؛
@@ -199,9 +298,9 @@ class MrDastbaaf_Payment_Controller {
             'user_id' => $user_id,
             'user_phone' => $user->user_login,
             'user_fullname' => $user->display_name,
-            'plan_id' => $plan->id,
-            'item_title' => $plan->title,
-            'amount_toman' => $plan->price_toman,
+            'plan_id' => $order_plan_id,
+            'item_title' => $item_title,
+            'amount_toman' => $amount_toman,
             'gateway' => 'zibal',
             'status' => 'pending',
         ));
@@ -214,7 +313,7 @@ class MrDastbaaf_Payment_Controller {
          * v1.2.0: مرچنت فقط از آپشن تنظیمات؛ بدون پیش‌فرض سندباکس (گارد بالا).
          */
         $merchant = trim((string) get_option('mrdastbaaf_zibal_merchant', ''));
-        $amount_rial = $plan->price_toman * 10;
+        $amount_rial = $amount_toman * 10;
         $cb_token = $this->generate_callback_token($order_id);
 
         /**
@@ -232,7 +331,7 @@ class MrDastbaaf_Payment_Controller {
                 'merchant' => $merchant,
                 'amount' => $amount_rial,
                 'callbackUrl' => $callback_url,
-                'description' => 'خرید اشتراک ' . $plan->title . ' در مستر دستباف',
+                'description' => $zibal_description,
                 'orderId' => $order_number,
                 'mobile' => $user->user_login,
             )),
@@ -499,11 +598,21 @@ class MrDastbaaf_Payment_Controller {
     /**
      * BUG-33a: تکمیل سفارش تاییدشده — فعال‌سازی اشتراک قبل از completed (الگوی
      * BUG-14) و انتقال نهایی فقط از وضعیت verifying با بررسی نتیجه update.
+     *
+     * v1.5.0: سفارش‌های «course-{id}» (خرید تک‌دوره‌ای) پیش از پرس‌وجوی پلن به
+     * شاخهٔ اختصاصی finalize_course_order می‌روند — همان هستهٔ ادعای اتمیک، گاردهای
+     * مبلغ و انتقال نهایی verifying→completed برای هر دو مسیر مشترک است و از طریق
+     * همین متد هم مسیر کال‌بک و هم ریکنسیلیشن کرون به شاخهٔ دوره می‌رسد.
      */
     private function finalize_verified_order($order, $ref_number) {
         global $wpdb;
         $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
         $now = current_time('mysql');
+
+        // v1.5.0: شاخهٔ خرید تک‌دوره‌ای — plan_id با پیشوند «course-»
+        if (strpos((string) $order->plan_id, 'course-') === 0) {
+            return $this->finalize_course_order($order, $ref_number);
+        }
 
         /**
          * SECURITY FIX (BUG-14 caller): فعال‌سازی اشتراک «قبل از» علامت‌گذاری
@@ -559,6 +668,96 @@ class MrDastbaaf_Payment_Controller {
             'membershipMode' => $membership_result['mode'], // 'created' یا 'extended' یا 'upgraded'
             'membershipExpiresAt' => $membership_result['expires_at'],
             'message' => 'پرداخت با موفقیت در شاپرک تایید شد و اشتراک فعال گردید.',
+        );
+    }
+
+    /**
+     * v1.5.0: تکمیل سفارش تاییدشدهٔ خرید تک‌دوره‌ای — ساخت «سفارش واقعی ووکامرس»
+     * در وضعیت processing (هر دو وضعیت wc-completed/wc-processing در تشخیص مالکیت
+     * دوره معتبرند → دوره همان لحظه در اپ باز می‌شود) + ایمیل استاندارد «سفارش جدید»
+     * ووکامرس برای ادمین.
+     *
+     * الگوی BUG-14: فعال‌سازی قبل از completed؛ اگر ساخت سفارش ووکامرس به هر دلیل
+     * شکست بخورد (محصول حذف‌شده/خطای DB/Exception)، رکورد سفارش افزونه به pending
+     * برمی‌گردد تا ریکنسیلیشن/پشتیبانی دستی بررسی کند و پول کاربر گم نشود —
+     * خطا هرگز بلعیده نمی‌شود.
+     *
+     * @param object $order      رکورد سفارش افزونه (plan_id = course-{id})
+     * @param string $ref_number شماره مرجع زیبال
+     * @return array|WP_Error پاسخ قراردادی در موفقیت
+     */
+    private function finalize_course_order($order, $ref_number) {
+        global $wpdb;
+        $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
+        $now = current_time('mysql');
+
+        $product_id = absint(substr((string) $order->plan_id, 7));
+        $product = ($product_id > 0 && function_exists('wc_get_product')) ? wc_get_product($product_id) : false;
+        if (!$product) {
+            // الگوی membership_grant_failed — سفارش برای بررسی دستی باقی می‌ماند
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_orders SET status = 'pending', updated_at = %s WHERE id = %s AND status = 'verifying'",
+                $now, $order->id
+            ));
+            error_log('MrDastbaaf: course product missing for verified order ' . $order->id . ' (plan_id: ' . $order->plan_id . ')');
+            return new WP_Error('course_order_failed', 'پرداخت تایید شد اما ایجاد سفارش دوره ممکن نشد؛ سفارش برای بررسی دستی باقی ماند.', array('status' => 409));
+        }
+
+        try {
+            $wc_order = wc_create_order(array('customer_id' => (int) $order->user_id, 'created_via' => 'mrdastbaaf-webapp'));
+            if (is_wp_error($wc_order)) {
+                throw new Exception($wc_order->get_error_message());
+            }
+            $wc_order->add_product($product, 1);
+            $wc_order->set_address(array(
+                'first_name' => (string) $order->user_fullname,
+                'phone'      => (string) $order->user_phone,
+            ), 'billing');
+            $wc_order->set_payment_method_title('درگاه زیبال (وب‌اپ مستر دستباف)');
+            $wc_order->update_meta_data('_mrdastbaaf_order_number', (string) $order->order_number);
+            $wc_order->update_meta_data('_mrdastbaaf_zibal_track', (string) $order->zibal_track_id);
+            $wc_order->add_order_note('خرید تک‌دوره‌ای از وب‌اپ — کد پیگیری زیبال: ' . (string) $order->zibal_track_id);
+            $wc_order->update_status('processing');
+            $wc_order->save();
+        } catch (Exception $e) {
+            error_log('MrDastbaaf: WC course order creation failed for order ' . $order->id . ' — ' . $e->getMessage());
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_orders SET status = 'pending', updated_at = %s WHERE id = %s AND status = 'verifying'",
+                $now, $order->id
+            ));
+            return new WP_Error('course_order_failed', 'پرداخت تایید شد اما ایجاد سفارش دوره ممکن نشد؛ سفارش برای بررسی دستی باقی ماند.', array('status' => 409));
+        } catch (Throwable $e) {
+            error_log('MrDastbaaf: WC course order creation error (Throwable) for order ' . $order->id . ' — ' . $e->getMessage());
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_orders SET status = 'pending', updated_at = %s WHERE id = %s AND status = 'verifying'",
+                $now, $order->id
+            ));
+            return new WP_Error('course_order_failed', 'پرداخت تایید شد اما ایجاد سفارش دوره ممکن نشد؛ سفارش برای بررسی دستی باقی ماند.', array('status' => 409));
+        }
+
+        // ثبت موفقیت فاکتور — کپی همان انتقال نهایی هستهٔ اشتراک (فقط از verifying)
+        $completed_updated = $wpdb->update($table_orders, array(
+            'status' => 'completed',
+            'zibal_ref_number' => $ref_number,
+            'verified_at' => $now,
+            'updated_at' => $now,
+        ), array('id' => $order->id, 'status' => 'verifying'));
+
+        if (false === $completed_updated) {
+            error_log('MrDastbaaf: final completed update failed for order ' . $order->id . ' — ' . $wpdb->last_error);
+            return new WP_Error('completion_update_failed', 'ثبت نهایی پرداخت ناموفق بود؛ سفارش در وضعیت پردازش باقی ماند و دوباره بررسی می‌شود.', array('status' => 500));
+        }
+
+        // آینهٔ mrdastbaaf_membership_granted برای پیاده‌سازی اعلان خرید دوره در کار آینده
+        do_action('mrdastbaaf_course_purchased', (int) $order->user_id, $product_id, $order->id);
+
+        return array(
+            'success' => true,
+            'orderNumber' => $order->order_number,
+            'refNumber' => $ref_number,
+            'membershipMode' => 'course',
+            'membershipExpiresAt' => null,
+            'message' => 'پرداخت با موفقیت تایید شد و دوره به حساب شما اضافه شد.',
         );
     }
 
