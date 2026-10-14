@@ -92,7 +92,9 @@ export const Header: React.FC<HeaderProps> = ({
               داشبورد من
             </button>
           )}
-          {currentUser?.role === 'admin' && (
+          {/* v1.1.0: demo-only — in Real-API mode management happens in the
+              WordPress dashboard, so the in-app admin tab is hidden entirely. */}
+          {currentUser?.role === 'admin' && !isRealApiMode && (
             <button
               onClick={() => onNavigate('admin')}
               className={`flex items-center gap-1 text-red-800 font-bold ${

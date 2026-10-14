@@ -185,6 +185,14 @@ export default function App() {
       route.view = 'home';
       route.params = {};
     }
+    // v1.1.0: in Real-API mode the in-app admin panel is demo-only (editorial
+    // sections / mock receipts) — real management lives in the WordPress
+    // dashboard («مستر دستباف» menu). Deep links to #/admin fall back to home
+    // so a production user can never see fabricated commercial data.
+    if (route.view === 'admin' && isRealApiMode) {
+      route.view = 'home';
+      route.params = {};
+    }
     const key = serializeRoute(route.view, route.params);
     if (routeKeyRef.current === key) return;
     routeKeyRef.current = key;
