@@ -12,8 +12,9 @@
  */
 
 import { INITIAL_USERS } from '../data/mockData';
-import { UserProfile, UserRole } from '../types';
-import { toEnglishDigits } from '../utils/format';
+import { MembershipTier, UserMembership, UserProfile, UserRole } from '../types';
+import { formatJalali, toEnglishDigits } from '../utils/format';
+import { ApiError, apiFetch, isRealApiMode, setStoredAuthToken, getStoredAuthToken } from './apiClient';
 import { hasStringId, readJsonArray } from './storageGuard';
 
 const STORAGE_KEY_USER = 'mrdastbaaf_current_user';
@@ -45,6 +46,107 @@ let userSeq = 0;
 function generateUserId(): string {
   userSeq = (userSeq + 1) % 10000;
   return `user-${Date.now().toString(36)}-${userSeq.toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+// ---------------------------------------------------------------------------
+// v1.1.0 — Real-API: نرمال‌سازی شکل کاربر برگشتی از «/auth/verify-otp» و «/auth/me».
+// قرارداد: {id, name|fullName, phone, role: admin|student, avatar?, membership:{tier,
+// status, expiresAt?}...} — فیلدهای جاافتاده با default پر می‌شوند تا UserProfile
+// کاملِ کلاینت (maskedPhone/completedLessonIds/...) همیشه برقرار بماند.
+// ---------------------------------------------------------------------------
+
+/** شکل خام کاربر از پل وردپرس — همهٔ فیلدها optional/unknown تا پاسخ ناقص هم کرش نکند. */
+interface ApiUserProfileShape {
+  id?: unknown;
+  name?: unknown;
+  fullName?: unknown;
+  phone?: unknown;
+  phoneNumber?: unknown;
+  maskedPhone?: unknown;
+  role?: unknown;
+  avatar?: unknown;
+  avatarUrl?: unknown;
+  membership?: {
+    tier?: unknown;
+    planId?: unknown;
+    planName?: unknown;
+    status?: unknown;
+    startedAt?: unknown;
+    expiresAt?: unknown;
+    formattedExpireDateJalali?: unknown;
+    daysRemaining?: unknown;
+  } | null;
+  completedLessonIds?: unknown;
+  bookmarkedLessonIds?: unknown;
+  createdAt?: unknown;
+}
+
+function asTrimmedString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' && value.trim() !== '' ? value : fallback;
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+const API_MEMBERSHIP_TIERS: MembershipTier[] = ['free', 'bronze', 'silver', 'gold'];
+
+function tierLabelFa(tier: MembershipTier): string {
+  if (tier === 'gold') return 'طلایی';
+  if (tier === 'silver') return 'نقره‌ای';
+  if (tier === 'bronze') return 'برنزی';
+  return 'رایگان';
+}
+
+function normalizeApiMembership(
+  raw: ApiUserProfileShape['membership']
+): UserMembership | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const tier: MembershipTier = API_MEMBERSHIP_TIERS.includes(raw.tier as MembershipTier)
+    ? (raw.tier as MembershipTier)
+    : 'free';
+  const status: UserMembership['status'] =
+    raw.status === 'expired' || raw.status === 'pending' ? raw.status : 'active';
+  const expiresAt = asTrimmedString(raw.expiresAt);
+  const expiresMs = expiresAt ? new Date(expiresAt).getTime() : NaN;
+  const daysFromExpiry = Number.isFinite(expiresMs)
+    ? Math.max(0, Math.ceil((expiresMs - Date.now()) / (1000 * 60 * 60 * 24)))
+    : 0;
+  const daysRemaining =
+    typeof raw.daysRemaining === 'number' && Number.isFinite(raw.daysRemaining)
+      ? Math.max(0, Math.round(raw.daysRemaining))
+      : daysFromExpiry;
+  return {
+    tier,
+    planId: asTrimmedString(raw.planId),
+    planName: asTrimmedString(raw.planName, `اشتراک ${tierLabelFa(tier)}`),
+    status,
+    startedAt: asTrimmedString(raw.startedAt, new Date().toISOString()),
+    expiresAt,
+    formattedExpireDateJalali: asTrimmedString(raw.formattedExpireDateJalali, formatJalali(expiresAt || undefined)),
+    daysRemaining,
+  };
+}
+
+/** تبدیل پاسخ خام سرور به UserProfile کامل کلاینت — فیلدهای جاافتاده با default پر می‌شوند. */
+function normalizeApiUser(raw: ApiUserProfileShape | null | undefined): UserProfile {
+  const source: ApiUserProfileShape = raw && typeof raw === 'object' ? raw : {};
+  const phoneNumber = asTrimmedString(source.phoneNumber ?? source.phone, '00000000000');
+  return {
+    id: asTrimmedString(source.id) || generateUserId(),
+    phoneNumber,
+    maskedPhone:
+      asTrimmedString(source.maskedPhone) ||
+      (phoneNumber.length >= 8 ? `${phoneNumber.slice(0, 4)}***${phoneNumber.slice(-4)}` : phoneNumber),
+    fullName: asTrimmedString(source.fullName ?? source.name, 'هنرجوی مستر دستباف'),
+    // قرارداد v1.1.0: role فقط admin|student است — avatar از avatarUrl یا avatar خوانده می‌شود.
+    role: source.role === 'admin' ? 'admin' : 'student',
+    avatarUrl: asTrimmedString(source.avatarUrl ?? source.avatar) || undefined,
+    membership: normalizeApiMembership(source.membership),
+    completedLessonIds: asStringArray(source.completedLessonIds),
+    bookmarkedLessonIds: asStringArray(source.bookmarkedLessonIds),
+    createdAt: asTrimmedString(source.createdAt) || new Date().toISOString(),
+  };
 }
 
 /**
@@ -142,6 +244,24 @@ export const authService = {
       throw new Error('شماره موبایل وارد شده معتبر نیست. لطفاً شماره را با فرمت ۰۹xxxxxxxxx وارد کنید.');
     }
 
+    // v1.1.0 Real-API: POST /auth/request-otp {phone} → {success, message, expires_in_seconds, smsWarning?}
+    if (isRealApiMode) {
+      const res = await apiFetch<{
+        success?: unknown;
+        message?: unknown;
+        expires_in_seconds?: unknown;
+        smsWarning?: unknown;
+      }>('/auth/request-otp', { method: 'POST', body: { phone: cleanPhone } });
+      const baseMessage = asTrimmedString(res.message, `کد تایید پیامکی برای شماره ${cleanPhone} ارسال شد.`);
+      const smsWarning = asTrimmedString(res.smsWarning);
+      return {
+        success: res.success !== false,
+        // هشدار سرور (مثلاً تأخیر پیامک) بدون تغییر UI به همان پیام چسبانده می‌شود.
+        message: smsWarning ? `${baseMessage} ${smsWarning}` : baseMessage,
+        mockOtpCode: '',
+      };
+    }
+
     // Simulate network delay
     await new Promise((res) => setTimeout(res, 600));
 
@@ -152,7 +272,6 @@ export const authService = {
       mockOtpCode: '12345',
     };
   },
-
   /**
    * Verify mock OTP
    */
@@ -165,6 +284,36 @@ export const authService = {
       throw new Error('شماره موبایل وارد شده معتبر نیست. لطفاً شماره را با فرمت ۰۹xxxxxxxxx وارد کنید.');
     }
     const cleanOtp = toEnglishDigits(otpCode ?? '').trim();
+
+    // v1.1.0 Real-API: POST /auth/verify-otp {phone, otp_code} → {success, token, user}
+    if (isRealApiMode) {
+      const res = await apiFetch<{
+        success?: unknown;
+        token?: unknown;
+        user?: ApiUserProfileShape;
+      }>('/auth/verify-otp', { method: 'POST', body: { phone: cleanPhone, otp_code: cleanOtp } });
+
+      const token = asTrimmedString(res.token);
+      if (!token) {
+        throw new Error('پاسخ ورود از سرور معتبر نیست؛ توکن دریافت نشد. لطفاً دوباره تلاش کنید.');
+      }
+
+      // شکل کاربر سرور با defaultها کامل می‌شود (completedLessonIds و ...)
+      const user = normalizeApiUser(res.user);
+
+      // همان کلید توکن دمو (mrdastbaaf_auth_token) — منبع واحد apiClient
+      setStoredAuthToken(token);
+      currentUser = user;
+      try {
+        localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(user));
+      } catch (e) {
+        // ignore
+      }
+      // BUG-25: هویت Real هم در رجیستری محلی mirror می‌شود تا پیشرفت/بوکمارک دمو حفظ بماند
+      upsertRegistryUser(user);
+
+      return { user, token };
+    }
 
     // Simulate network delay
     await new Promise((res) => setTimeout(res, 700));
@@ -254,9 +403,50 @@ export const authService = {
     currentUser = null;
     try {
       localStorage.removeItem(STORAGE_KEY_USER);
+      // در حالت Real هم همین کلید توکن opaque را پاک می‌کند (apiClient همان کلید را می‌خواند).
       localStorage.removeItem(STORAGE_KEY_TOKEN);
     } catch (e) {
       // ignore
+    }
+  },
+
+  /**
+   * v1.1.0 Real-API — همگام‌سازی سشن از سرور هنگام boot:
+   * اگر حالت Real فعال باشد و توکن ذخیره‌شده وجود داشته باشد، «GET /auth/me» صدا زده
+   * می‌شود و عضویت/هویت از سرور تازه می‌شود. در دمو (بدون env) بدونِ touch سشن null برمی‌گرداند.
+   *
+   * - 401: توکن توسط apiClient پاک شده → سشن محلی هم بسته می‌شود (خروج خودکار).
+   * - خطای شبکه/سرور: سشن محلی حفظ می‌شود (تحمل آفلاین) و null برمی‌گردد.
+   */
+  async syncSessionFromServer(): Promise<UserProfile | null> {
+    if (!isRealApiMode) return null;
+    if (!getStoredAuthToken()) return null;
+
+    try {
+      const res = await apiFetch<{ user?: ApiUserProfileShape }>('/auth/me', { auth: true });
+      // قرارداد: {user: {...}} — برای سازگاری، پاسخِ خودِ پروفایل هم پذیرفته می‌شود.
+      const rawUser =
+        res.user && typeof res.user === 'object' ? res.user : (res as unknown as ApiUserProfileShape);
+      const user = normalizeApiUser(rawUser);
+      currentUser = user;
+      try {
+        localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(user));
+      } catch (e) {
+        // ignore
+      }
+      upsertRegistryUser(user);
+      return user;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) {
+        // توکن توسط apiClient پاک شده — سشن محلی هم باید بسته شود.
+        currentUser = null;
+        try {
+          localStorage.removeItem(STORAGE_KEY_USER);
+        } catch (e2) {
+          // ignore
+        }
+      }
+      return null;
     }
   },
 };

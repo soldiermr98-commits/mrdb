@@ -14,6 +14,8 @@ import { Course, CourseCategory, Lesson, MembershipPlan, PaymentGatewayType, Pay
 import { authService } from './services/authService';
 import { courseService } from './services/courseService';
 import { paymentService } from './services/paymentService';
+import { isRealApiMode } from './services/apiClient';
+import { detectZibalCallback, clearZibalCallbackParams } from './services/zibalCallback';
 import { mutateOrder, orderStore } from './services/orderStore';
 
 // Common Components
@@ -236,6 +238,25 @@ export default function App() {
   };
 
   const handleOpenLessonPreview = (course: Course) => {
+    // v1.1.0 Real-API: فهرست دوره‌ها lessons ندارد — برای پخش پیش‌نمایش، جزئیات کامل از سرور گرفته می‌شود.
+    if (isRealApiMode && course.sections.length === 0) {
+      void courseService
+        .getCourseById(course.id)
+        .then((full) => {
+          const effectiveCourse = full || course;
+          const allLessons = effectiveCourse.sections.flatMap((s) => s.lessons);
+          const firstPreview = allLessons.find((l) => l.isFreePreview) || allLessons[0];
+          if (!firstPreview) return;
+          setActivePlayerCourse(effectiveCourse);
+          setActivePlayerLesson(firstPreview);
+          setIsPlayerOpen(true);
+        })
+        .catch(() => {
+          // بدون جزئیات، پخش باز نمی‌شود (فهرست خالی درس‌ها) — رفتار امن.
+        });
+      return;
+    }
+
     // Find first preview lesson or first lesson
     const allLessons = course.sections.flatMap((s) => s.lessons);
     const firstPreview = allLessons.find((l) => l.isFreePreview) || allLessons[0];
@@ -282,7 +303,13 @@ export default function App() {
 
     if (gateway === 'zibal') {
       try {
-        const { order } = await paymentService.initiateZibalPayment(currentUser, plan);
+        const { order, gatewayUrl } = await paymentService.initiateZibalPayment(currentUser, plan);
+        // v1.1.0 Real-API: خروج واقعی به درگاه زیبال — شبیه‌ساز فقط در دمو اجرا می‌شود؛
+        // تایید پس از بازگشت، از طریق boot callback (verifyZibalCallback) انجام می‌شود.
+        if (isRealApiMode) {
+          window.location.href = gatewayUrl;
+          return;
+        }
         // BUG-45: the active zibal order is tracked in App state so an outcome-
         // less close of the gateway can be swept to 'cancelled'.
         setCurrentZibalOrder(order);
@@ -342,6 +369,64 @@ export default function App() {
       // DEV-13: mutateOrder throws on storage failure — the boot sweep is
       // best-effort and must never block the app from rendering.
     }
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // v1.1.0 — Real-API boot (تنها تغییر boot اپ؛ در دمو بدون env این اثر no-op است):
+  //   ۱) کال‌بک زیبال: پس از بازگشت از درگاه، پارامترها detect→clear و verify می‌شود؛
+  //      نتیجه با toast موجود اعلام و به dashboard (موفق) یا catalogue (ناموفق) هدایت می‌شود.
+  //   ۲) همگام‌سازی سشن: اگر توکن Real موجود باشد، عضویت/هویت از /auth/me تازه می‌شود.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!isRealApiMode) return;
+    let cancelled = false;
+
+    const runBoot = async () => {
+      const callback = detectZibalCallback();
+      if (callback) {
+        // پارامترها فوراً پاک می‌شوند تا refresh صفحه هرگز دوباره verify نزند.
+        clearZibalCallbackParams(callback.source);
+        try {
+          const result = await paymentService.verifyZibalCallback(callback);
+          if (cancelled) return;
+          if (result.success) {
+            // اشتراک سمت سرور فعال شده — سشن از سرور تازه می‌شود تا داشبورد آن را نشان دهد.
+            const synced = await authService.syncSessionFromServer();
+            if (cancelled) return;
+            if (synced) setCurrentUser(synced);
+            showToast(result.message || 'پرداخت با موفقیت تایید شد و اشتراک فعال گردید.', 'success');
+            handleNavigate('dashboard');
+          } else {
+            showToast(result.message || 'پرداخت ناموفق بود یا لغو گردید.', 'error');
+            handleNavigate('catalogue');
+          }
+        } catch (err) {
+          if (cancelled) return;
+          showToast(err instanceof Error ? err.message : 'تایید پرداخت با خطا مواجه شد؛ در صورت کسر وجه با پشتیبانی تماس بگیرید.', 'error');
+          handleNavigate('catalogue');
+        }
+        return;
+      }
+
+      try {
+        const synced = await authService.syncSessionFromServer();
+        if (cancelled) return;
+        if (synced) {
+          setCurrentUser(synced);
+        } else if (!authService.getCurrentUser()) {
+          // 401 در boot → سشن محلی هم بسته شده — state اپ هم باید خارج‌شده را نشان دهد.
+          setCurrentUser(null);
+        }
+      } catch (err) {
+        // خطای شبکه در boot — سشن محلی حفظ می‌شود (تحمل آفلاین).
+      }
+    };
+
+    void runBoot();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleZibalPaymentComplete = (order: PaymentOrder, success: boolean) => {

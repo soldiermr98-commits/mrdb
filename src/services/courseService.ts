@@ -8,7 +8,8 @@
  */
 
 import { INITIAL_COURSES } from '../data/mockData';
-import { Course, CourseCategory, Lesson, LessonNote, MembershipTier, UserProfile } from '../types';
+import { Course, CourseCategory, CourseLevel, CourseSection, Lesson, LessonNote, MembershipTier, UserProfile } from '../types';
+import { ApiError, apiFetch, isRealApiMode } from './apiClient';
 import { authService } from './authService';
 import { hasStringId, readJsonArray } from './storageGuard';
 import { isLive } from '../utils/format';
@@ -58,6 +59,146 @@ function persistNotes(): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// v1.1.0 — Real-API: نرمال‌سازی شکل دوره/درس از «GET /courses» و «GET /courses/{id}».
+// قرارداد فریز‌شده: id=slug، تصاویر URL کامل، lessonsCount...؛ درس‌های جزئیات:
+// [{id: string, title, isFreePreview, requiredTier: 'bronze'|'silver'|'gold', duration: null}]
+// فیلدهای جاافتاده با default پر می‌شوند تا شکل Course/Lesson کلاینت همیشه برقرار بماند.
+// ---------------------------------------------------------------------------
+
+interface ApiLessonShape {
+  id?: unknown;
+  title?: unknown;
+  isFreePreview?: unknown;
+  requiredTier?: unknown;
+  /** قرارداد: null در سرور — در صورت عدد، همان استفاده می‌شود. */
+  duration?: unknown;
+  description?: unknown;
+}
+
+interface ApiCourseShape {
+  id?: unknown;
+  slug?: unknown;
+  title?: unknown;
+  shortDescription?: unknown;
+  fullDescription?: unknown;
+  category?: unknown;
+  level?: unknown;
+  instructorName?: unknown;
+  instructorBio?: unknown;
+  instructorAvatar?: unknown;
+  thumbnailUrl?: unknown;
+  coverImageUrl?: unknown;
+  image?: unknown;
+  totalDurationHours?: unknown;
+  lessonsCount?: unknown;
+  totalLessonsCount?: unknown;
+  requiredTier?: unknown;
+  priceToman?: unknown;
+  featured?: unknown;
+  lessons?: unknown;
+  sections?: unknown;
+  learningOutcomes?: unknown;
+  prerequisites?: unknown;
+}
+
+const API_TIERS: MembershipTier[] = ['free', 'bronze', 'silver', 'gold'];
+
+function apiTier(value: unknown, fallback: MembershipTier = 'bronze'): MembershipTier {
+  return API_TIERS.includes(value as MembershipTier) ? (value as MembershipTier) : fallback;
+}
+
+function apiCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value) : 0;
+}
+
+function apiString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' && value.trim() !== '' ? value : fallback;
+}
+
+function apiStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function normalizeApiLesson(raw: ApiLessonShape, courseId: string, index: number): Lesson {
+  return {
+    id: apiString(raw.id, `lesson-${courseId}-${index + 1}`),
+    courseId,
+    sectionId: `${courseId}-curriculum`,
+    title: apiString(raw.title, `جلسه ${index + 1}`),
+    // قرارداد v1.1.0: duration از سرور null است → ۰ (پلیر در حالت Real از مدت واقعی ویدیو استفاده می‌کند).
+    durationMinutes: typeof raw.duration === 'number' && Number.isFinite(raw.duration) && raw.duration > 0
+      ? Math.round(raw.duration)
+      : 0,
+    order: index + 1,
+    isFreePreview: raw.isFreePreview === true,
+    requiredTier: apiTier(raw.requiredTier),
+    description: apiString(raw.description),
+  };
+}
+
+function normalizeApiSection(rawSection: unknown, courseId: string, index: number): CourseSection {
+  const section = (rawSection && typeof rawSection === 'object' ? rawSection : {}) as {
+    id?: unknown;
+    title?: unknown;
+    lessons?: unknown;
+  };
+  const lessons = Array.isArray(section.lessons)
+    ? section.lessons.map((l, i) => normalizeApiLesson(l as ApiLessonShape, courseId, i))
+    : [];
+  return {
+    id: apiString(section.id, `${courseId}-section-${index + 1}`),
+    courseId,
+    title: apiString(section.title, 'سرفصل‌های دوره'),
+    order: index + 1,
+    lessons,
+  };
+}
+
+function normalizeApiCourse(raw: ApiCourseShape): Course {
+  const id = apiString(raw.id) || apiString(raw.slug) || `course-${Date.now()}`;
+  const thumbnail = apiString(raw.thumbnailUrl) || apiString(raw.coverImageUrl) || apiString(raw.image);
+  const sections = Array.isArray(raw.sections)
+    ? (raw.sections as unknown[]).map((s, i) => normalizeApiSection(s, id, i))
+    : Array.isArray(raw.lessons)
+      ? [
+          // قرارداد v1.1.0: جزئیات دوره فهرست درس‌های تخت (flat) دارد — یک سکشن مصنوعی
+          // ساخته می‌شود تا UI فعلی (course.sections.flatMap(...)) دست‌نخورده کار کند.
+          {
+            id: `${id}-curriculum`,
+            courseId: id,
+            title: 'سرفصل‌های دوره',
+            order: 1,
+            lessons: (raw.lessons as unknown[]).map((l, i) => normalizeApiLesson(l as ApiLessonShape, id, i)),
+          },
+        ]
+      : [];
+  const lessonsCount = sections.reduce((sum, s) => sum + s.lessons.length, 0);
+  return {
+    id,
+    slug: apiString(raw.slug) || id,
+    title: apiString(raw.title, 'دوره بدون عنوان'),
+    shortDescription: apiString(raw.shortDescription),
+    fullDescription: apiString(raw.fullDescription),
+    // دسته/سطح متن فارسی از سرور می‌آید؛ مقدار ناشناخته فقط فیلتر چیپ‌ها را از دست می‌دهد نه نمایش را.
+    category: apiString(raw.category, 'قالی‌بافی و گلیم') as CourseCategory,
+    level: apiString(raw.level, 'مقدماتی') as CourseLevel,
+    instructorName: apiString(raw.instructorName, 'استاد مستر دستباف'),
+    instructorBio: apiString(raw.instructorBio),
+    instructorAvatar: apiString(raw.instructorAvatar),
+    thumbnailUrl: thumbnail,
+    coverImageUrl: apiString(raw.coverImageUrl) || thumbnail,
+    totalDurationHours: apiCount(raw.totalDurationHours),
+    totalLessonsCount: apiCount(raw.totalLessonsCount ?? raw.lessonsCount) || lessonsCount,
+    requiredTier: apiTier(raw.requiredTier, 'bronze'),
+    priceToman: apiCount(raw.priceToman),
+    featured: raw.featured === true,
+    sections,
+    learningOutcomes: apiStringArray(raw.learningOutcomes),
+    prerequisites: apiStringArray(raw.prerequisites),
+  };
+}
+
 export const courseService = {
   /**
    * Get all courses with optional filters
@@ -67,6 +208,25 @@ export const courseService = {
     searchTerm?: string;
     level?: string;
   }): Promise<Course[]> {
+    // v1.1.0 Real-API: GET /courses?category=&search= → Course[] (id=slug، تصویر URL کامل)
+    if (isRealApiMode) {
+      const params = new URLSearchParams();
+      if (filters?.category && filters.category !== 'all') {
+        params.set('category', filters.category);
+      }
+      if (filters?.searchTerm && filters.searchTerm.trim() !== '') {
+        params.set('search', filters.searchTerm.trim());
+      }
+      const query = params.toString();
+      const data = await apiFetch<ApiCourseShape[]>(`/courses${query ? `?${query}` : ''}`);
+      const courses = (Array.isArray(data) ? data : []).map((c) => normalizeApiCourse(c));
+      // فیلتر سطح (level) در قرارداد API نیست — مثل دمو سمت کلاینت اعمال می‌شود.
+      if (filters?.level && filters.level !== 'all') {
+        return courses.filter((c) => c.level === filters.level);
+      }
+      return courses;
+    }
+
     await new Promise((res) => setTimeout(res, 200));
     let result = [...inMemoryCourses];
 
@@ -95,6 +255,18 @@ export const courseService = {
    * Get single course by ID or slug
    */
   async getCourseById(courseId: string): Promise<Course | null> {
+    // v1.1.0 Real-API: GET /courses/{id} → Course + lessons (تخت) → با سکشن مصنوعی نرمال می‌شود
+    if (isRealApiMode) {
+      try {
+        const data = await apiFetch<ApiCourseShape>(`/courses/${encodeURIComponent(courseId)}`);
+        return normalizeApiCourse(data);
+      } catch (e) {
+        // UI فعلی برای ۴۰۴ کارت «دوره یافت نشد» دارد — null معنای همان است.
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      }
+    }
+
     await new Promise((res) => setTimeout(res, 150));
     return inMemoryCourses.find((c) => c.id === courseId || c.slug === courseId) || null;
   },

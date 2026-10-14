@@ -5,6 +5,7 @@
 
 import { INITIAL_MEMBERSHIP_PLANS } from '../data/mockData';
 import { MembershipPlan, MembershipTier, PaymentOrder, PlanDuration, UserMembership, UserProfile } from '../types';
+import { apiFetch, isRealApiMode } from './apiClient';
 import { formatJalali, isLive } from '../utils/format';
 import { hasStringId, readJsonArray } from './storageGuard';
 
@@ -17,6 +18,82 @@ const inMemoryPlans: MembershipPlan[] = readJsonArray<MembershipPlan>(
   INITIAL_MEMBERSHIP_PLANS,
   hasStringId
 );
+
+// ---------------------------------------------------------------------------
+// v1.1.0 — Real-API: پلن‌ها از «GET /memberships/plans» می‌آیند. شکل PHP:
+// {id, tier, title, description, priceToman, originalPriceToman, duration:
+// 'N_days'، durationLabel, features, isPopular, isActive, colorScheme} —
+// duration به PlanDuration کلاینت نگاشت می‌شود (همان آستانه‌های planFromSnapshot).
+// ---------------------------------------------------------------------------
+
+interface ApiPlanShape {
+  id?: unknown;
+  tier?: unknown;
+  title?: unknown;
+  description?: unknown;
+  priceToman?: unknown;
+  originalPriceToman?: unknown;
+  duration?: unknown;
+  durationLabel?: unknown;
+  features?: unknown;
+  isPopular?: unknown;
+  isActive?: unknown;
+  colorScheme?: unknown;
+}
+
+const PLAN_DURATIONS: PlanDuration[] = ['1_month', '3_months', '6_months', '12_months'];
+const PLAN_TIERS: MembershipTier[] = ['free', 'bronze', 'silver', 'gold'];
+const PLAN_COLOR_SCHEMES: MembershipPlan['colorScheme'][] = ['slate', 'amber', 'stone', 'yellow'];
+
+function planString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' && value.trim() !== '' ? value : fallback;
+}
+
+/** نگاشت مدت سرور (روز یا PlanDuration) به PlanDuration کلاینت — آستانه‌های BUG-37. */
+function planDurationFromApi(value: unknown): PlanDuration {
+  if (typeof value === 'string' && PLAN_DURATIONS.includes(value as PlanDuration)) {
+    return value as PlanDuration;
+  }
+  const match = typeof value === 'string' ? /^(\d+)_days$/.exec(value) : null;
+  const days = match ? Number(match[1]) : NaN;
+  if (!Number.isFinite(days)) return '1_month';
+  if (days >= 365) return '12_months';
+  if (days >= 180) return '6_months';
+  if (days >= 90) return '3_months';
+  return '1_month';
+}
+
+function normalizeApiPlan(raw: ApiPlanShape): MembershipPlan {
+  const duration = planDurationFromApi(raw.duration);
+  const originalPrice =
+    typeof raw.originalPriceToman === 'number' && Number.isFinite(raw.originalPriceToman)
+      ? Math.round(raw.originalPriceToman)
+      : undefined;
+  return {
+    id: planString(raw.id, `plan-${Date.now()}`),
+    tier: PLAN_TIERS.includes(raw.tier as MembershipTier) ? (raw.tier as MembershipTier) : 'bronze',
+    title: planString(raw.title, 'اشتراک مستر دستباف'),
+    description: planString(raw.description),
+    priceToman:
+      typeof raw.priceToman === 'number' && Number.isFinite(raw.priceToman) && raw.priceToman >= 0
+        ? Math.round(raw.priceToman)
+        : 0,
+    originalPriceToman: originalPrice,
+    duration,
+    durationLabel: planString(raw.durationLabel, `${planDurationToDays(duration)} روزه`),
+    features: Array.isArray(raw.features)
+      ? (raw.features as unknown[]).filter((f): f is string => typeof f === 'string')
+      : [],
+    isPopular: raw.isPopular === true,
+    isActive: raw.isActive !== false,
+    colorScheme: PLAN_COLOR_SCHEMES.includes(raw.colorScheme as MembershipPlan['colorScheme'])
+      ? (raw.colorScheme as MembershipPlan['colorScheme'])
+      : 'stone',
+  };
+}
+
+/** v1.1.0: آخرین فهرست Real واکشی‌شده — برای getPlanById در حالت Real (بدون نیاز به اندپوینت تک). */
+let realPlansCache: MembershipPlan[] | null = null;
 
 /**
  * BUG-40: افزودن مدت اشتراک به تاریخ مبنا با «کلمپ آخر ماه».
@@ -89,6 +166,14 @@ export const membershipService = {
    * Get all active membership plans for checkout
    */
   async getActivePlans(): Promise<MembershipPlan[]> {
+    // v1.1.0 Real-API: GET /memberships/plans → Plan[] (فقط فعال‌ها)
+    if (isRealApiMode) {
+      const data = await apiFetch<ApiPlanShape[]>('/memberships/plans');
+      const plans = (Array.isArray(data) ? data : []).map((p) => normalizeApiPlan(p));
+      realPlansCache = plans;
+      return plans.filter((p) => p.isActive);
+    }
+
     await new Promise((res) => setTimeout(res, 100));
     return inMemoryPlans.filter((p) => p.isActive);
   },
@@ -105,6 +190,12 @@ export const membershipService = {
    * Get single plan by ID
    */
   getPlanById(planId: string): MembershipPlan | null {
+    // v1.1.0: در حالت Real اولویت با آخرین فهرست واکشی‌شده از سرور است تا مسیرهای
+    // گرنت محلی (fallback) به پلن‌های واقعی resolve شوند، نه داده‌های دمو.
+    if (isRealApiMode && realPlansCache) {
+      const realPlan = realPlansCache.find((p) => p.id === planId) || null;
+      if (realPlan) return realPlan;
+    }
     return inMemoryPlans.find((p) => p.id === planId) || null;
   },
 

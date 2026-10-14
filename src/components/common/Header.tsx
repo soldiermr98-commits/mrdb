@@ -6,6 +6,7 @@
 import React from 'react';
 import { User, ShieldCheck, LogIn, Sparkles, BookOpen } from 'lucide-react';
 import { UserProfile } from '../../types';
+import { isRealApiMode } from '../../services/apiClient';
 import { PWAInstallButton } from './PWAInstallButton';
 
 interface HeaderProps {
@@ -106,7 +107,8 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Actions & Role Switcher */}
         <div className="flex items-center gap-2">
-          {/* Quick prototype switcher for easy evaluation */}
+          {/* Quick prototype switcher for easy evaluation (demo mode only) */}
+          {!isRealApiMode && (
           <div className="hidden lg:flex items-center gap-1 bg-stone-100 p-1 rounded-xl border border-stone-200 text-xs">
             <span className="text-[10px] text-stone-500 px-1 font-mono">نقش تستی:</span>
             <button
@@ -130,6 +132,7 @@ export const Header: React.FC<HeaderProps> = ({
               مدیر ارشد
             </button>
           </div>
+          )}
 
           <PWAInstallButton variant="header" />
 

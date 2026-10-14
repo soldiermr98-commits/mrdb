@@ -57,11 +57,19 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
 }) => {
   const [isPlaying, setIsPlaying] = useState(true);
   const [currentTime, setCurrentTime] = useState(145); // simulated 2:25 into lesson
-  const totalDuration = currentLesson.durationMinutes * 60;
+  // v1.1.0 Real-API: مدت واقعی ویدیو از متادیتای <video> — قرارداد سرور duration: null می‌فرستد.
+  const [realVideoDuration, setRealVideoDuration] = useState(0);
+  // v1.1.0 Real-API: آخرین لحظهٔ پخش — برای resume پس از تمدید بلیط (ویدیوی تازه از همان‌جا ادامه می‌دهد).
+  const resumeTimeRef = useRef<number | null>(null);
+  const totalDuration =
+    currentLesson.durationMinutes * 60 ||
+    (Number.isFinite(realVideoDuration) && realVideoDuration > 0 ? Math.ceil(realVideoDuration) : 0);
   const [playbackSpeed, setPlaybackSpeed] = useState<'0.75' | '1' | '1.25' | '1.5'>('1');
   const [selectedQuality, setSelectedQuality] = useState('720p');
   const [isMuted, setIsMuted] = useState(false);
   const [ticket, setTicket] = useState<VideoStreamingTicket | null>(null);
+  // v1.1.0 Real-API: وقتی بلیط videoUrl واقعی دارد، پخش بومی <video> جایگزین شبیه‌ساز می‌شود.
+  const isRealPlayback = !!ticket?.videoUrl;
   const [activeTab, setActiveTab] = useState<'syllabus' | 'notes' | 'security'>('syllabus');
   const [newNoteText, setNewNoteText] = useState('');
   const [notes, setNotes] = useState<LessonNote[]>([]);
@@ -84,6 +92,8 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
   const [localToast, setLocalToast] = useState<string | null>(null);
 
   const stageRef = useRef<HTMLDivElement>(null);
+  // v1.1.0 Real-API: المان ویدیوی واقعی (فقط در حالت اتصال واقعی mount می‌شود).
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoCompletedRef = useRef<string | null>(null);
 
@@ -184,8 +194,20 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
   };
 
   // BUG-58: shared clamped ±5s seek helper for the keyboard shortcuts + slider.
+  // v1.1.0 Real-API: در پخش واقعی، همان seek روی خود <video> هم اعمال می‌شود.
   const seekBy = (delta: number) =>
-    setCurrentTime((t) => Math.max(0, Math.min(totalDuration, t + delta)));
+    setCurrentTime((t) => {
+      const next = Math.max(0, Math.min(totalDuration, t + delta));
+      const video = videoRef.current;
+      if (video) {
+        try {
+          video.currentTime = next;
+        } catch {
+          // برخی مرورگرها تا load کامل seek را نمی‌پذیرند — fatal نیست.
+        }
+      }
+      return next;
+    });
 
   // BUG-55: the raw fixed overlay participates in the ref-counted body
   // scroll lock so stacked overlays can't clobber each other's overflow.
@@ -299,6 +321,9 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
   // otherwise the scrubber/notes timestamps carry over from the previous lesson.
   useEffect(() => {
     setCurrentTime(0);
+    // v1.1.0 Real-API: مدت/رزومهٔ ویدیوی درس قبلی نباید به درس بعدی نشت کند.
+    setRealVideoDuration(0);
+    resumeTimeRef.current = null;
     // BUG-60/61: also reset the ended panel, note freeze/error and the
     // once-per-lesson auto-complete guard.
     setIsEnded(false);
@@ -310,7 +335,8 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
   // Simulated playback time advancement
   useEffect(() => {
     let timer: any;
-    if (isPlaying && simulatedNetworkState === 'good') {
+    // v1.1.0 Real-API: در پخش واقعی، تایم‌لاین از خود <video> (timeupdate) می‌آید — تایمر شبیه‌ساز خاموش است.
+    if (isPlaying && !isRealPlayback && simulatedNetworkState === 'good') {
       // PLAYER FIX (BUG-11b): the speed selector was dead UI. The interval now
       // advances the playhead according to the selected playback speed.
       const speed = parseFloat(playbackSpeed) || 1;
@@ -322,7 +348,23 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
       }, stepMs);
     }
     return () => clearInterval(timer);
-  }, [isPlaying, totalDuration, simulatedNetworkState, playbackSpeed]);
+  }, [isPlaying, totalDuration, simulatedNetworkState, playbackSpeed, isRealPlayback]);
+
+  // v1.1.0 Real-API: همگام‌سازی وضعیت پلیر با <video> واقعی — فقط وقتی videoUrl از سرور آمده
+  // (در دمو videoRef همیشه null است و این اثر no-op می‌ماند؛ رفتار دمو صددرصد مثل قبل).
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = isMuted;
+    video.playbackRate = parseFloat(playbackSpeed) || 1;
+    if (isPlaying) {
+      video.play().catch(() => {
+        // autoplay بدون تعامل کاربر ممکن است مسدود شود — کاربر با دکمه پخش ادامه می‌دهد.
+      });
+    } else {
+      video.pause();
+    }
+  }, [isPlaying, isMuted, playbackSpeed, isRealPlayback]);
 
   // BUG-60: reaching the end of the lesson shows the «جلسه تمام شد» panel and
   // pauses playback instead of looping.
@@ -512,12 +554,54 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         {/* Video Player Display Container (BUG-58: fullscreen stage) */}
         <div ref={stageRef} className="flex-1 flex flex-col justify-center bg-black relative select-none">
-          {/* The Video Mock Screen */}
+          {/* The Video Mock Screen — v1.1.0 Real-API: وقتی بلیط videoUrl واقعی دارد، خود <video> رندر می‌شود */}
           <div className="relative w-full h-[52vw] max-h-[65vh] lg:max-h-full lg:h-full bg-gradient-to-b from-stone-900 via-stone-950 to-black flex items-center justify-center overflow-hidden">
             {/* Background Handcraft Visual Motif Mockup */}
-            <div className="absolute inset-0 opacity-25 bg-[radial-gradient(#d97706_1px,transparent_1px)] [background-size:16px_16px]" />
+            {!ticket?.videoUrl && <div className="absolute inset-0 opacity-25 bg-[radial-gradient(#d97706_1px,transparent_1px)] [background-size:16px_16px]" />}
 
-            {/* Simulated Live Frame Graphic */}
+            {/* v1.1.0 Real-API: منبع واقعی پخش — تنها وقتی که زنجیرهٔ ticket→playback موفق بوده
+                و سرور videoUrl داده است. تمام اورلی‌ها (واترمارک/بافرینگ/انقضا/تمام جلسه) روی آن می‌مانند. */}
+            {ticket?.videoUrl && (
+              <video
+                ref={videoRef}
+                key={ticket.videoUrl}
+                src={ticket.videoUrl}
+                className="absolute inset-0 z-10 h-full w-full bg-black object-contain"
+                autoPlay
+                playsInline
+                preload="metadata"
+                onLoadedMetadata={(e) => {
+                  const video = e.currentTarget;
+                  setRealVideoDuration(video.duration || 0);
+                  const resume = resumeTimeRef.current;
+                  if (resume !== null && Number.isFinite(resume) && resume > 1) {
+                    try {
+                      video.currentTime = resume; // ادامهٔ پخش پس از تمدید بلیط
+                    } catch {
+                      // ignore
+                    }
+                  }
+                }}
+                onTimeUpdate={(e) => {
+                  const t = e.currentTarget.currentTime;
+                  resumeTimeRef.current = t;
+                  setCurrentTime(t);
+                }}
+                onEnded={(e) => {
+                  const duration = e.currentTarget.duration;
+                  // پنل «جلسه تمام شد» از اثر موجود (currentTime >= totalDuration) فعال می‌شود.
+                  if (Number.isFinite(duration)) setCurrentTime(duration);
+                  setIsPlaying(false);
+                }}
+                onError={() => {
+                  // خطای منبع ویدیو در حالت Real — اورلی تمدید دسترسی (BUG-62) مسیر تازه‌سازی را می‌دهد.
+                  if (ticket?.videoUrl) setIsTicketFailed(true);
+                }}
+              />
+            )}
+
+            {/* Simulated Live Frame Graphic (فقط دمو) */}
+            {!ticket?.videoUrl && (
             <div className="text-center p-6 z-10 max-w-md">
               <div className="w-16 h-16 rounded-full bg-amber-900/60 border border-amber-500/30 flex items-center justify-center mx-auto mb-3 shadow-lg">
                 <Play className="w-8 h-8 text-amber-200 fill-amber-300 ml-0.5" />
@@ -558,6 +642,7 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
                 </button>
               </div>
             </div>
+            )}
 
             {/* DYNAMIC MOVING WATERMARK OVERLAY */}
             <div className="absolute inset-0 pointer-events-none z-20 overflow-hidden">
@@ -677,12 +762,22 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
                   const rect = e.currentTarget.getBoundingClientRect();
                   const clickX = e.clientX - rect.left;
                   const ratio = Math.max(0, Math.min(1, clickX / rect.width));
-                  setCurrentTime(Math.floor(ratio * totalDuration));
+                  const next = Math.floor(ratio * totalDuration);
+                  setCurrentTime(next);
+                  // v1.1.0 Real-API: seek واقعی روی خود <video>.
+                  const video = videoRef.current;
+                  if (video) {
+                    try {
+                      video.currentTime = next;
+                    } catch {
+                      // ignore
+                    }
+                  }
                 }}
               >
                 <div
                   className="h-full bg-amber-600 rounded-full relative"
-                  style={{ width: `${(currentTime / totalDuration) * 100}%` }}
+                  style={{ width: `${totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0}%` }}
                 >
                   <div className="w-3 h-3 bg-amber-300 rounded-full absolute -right-1 -top-0.5 shadow-sm" />
                 </div>

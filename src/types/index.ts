@@ -178,6 +178,12 @@ export interface VideoStreamingTicket {
   expiresAt: string;
   watermarkText: string;
   watermarkUserId: string;
-  provider: 'ArvanCloud VoD / VideoCDN HLS Mock';
+  // v1.1.0 Real-API: در حالت دمو برچسب mock ثابت است؛ در حالت Real از streamType سرور ساخته می‌شود.
+  provider: string;
   qualityOptions: Array<{ label: string; resolution: string }>;
+  /**
+   * v1.1.0 Real-API: آدرس پخش واقعی دریافتی از «POST /lessons/{id}/playback» —
+   * تنها منبع مجاز <video> در حالت اتصال واقعی. در دمو undefined می‌ماند.
+   */
+  videoUrl?: string;
 }

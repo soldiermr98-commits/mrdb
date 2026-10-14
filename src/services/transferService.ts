@@ -4,6 +4,7 @@
  */
 
 import { ManualTransferDetails, MembershipPlan, PaymentOrder, UserProfile } from '../types';
+import { apiFetch, isRealApiMode } from './apiClient';
 import { authService, getUserRegistry, upsertRegistryUser } from './authService';
 import { membershipService, planDurationToDays, planFromSnapshot } from './membershipService';
 import { mutateOrder, orderStore } from './orderStore';
@@ -19,6 +20,63 @@ export const transferService = {
     plan: MembershipPlan,
     details: ManualTransferDetails
   ): Promise<PaymentOrder> {
+    // ----------------------------------------------------------------------
+    // v1.1.0 Real-API: POST /payment/manual-transfer/submit — دقیقاً snake_case PHP:
+    // {plan_id, tracking_code, card_last_four, deposit_date, notes}
+    // پاسخ: {success, orderId, orderNumber, status: 'pending', message}
+    // سفارش واقعی سمت سرور ثبت می‌شود؛ یک آینه محلی هم برای تاریخچه داشبورد ذخیره می‌شود.
+    // ----------------------------------------------------------------------
+    if (isRealApiMode) {
+      const res = await apiFetch<{
+        success?: unknown;
+        orderId?: unknown;
+        orderNumber?: unknown;
+        status?: unknown;
+        message?: unknown;
+      }>('/payment/manual-transfer/submit', {
+        method: 'POST',
+        auth: true,
+        body: {
+          plan_id: plan.id,
+          tracking_code: details.trackingCode,
+          card_last_four: details.sourceCardLastFour,
+          deposit_date: details.depositDateJalali,
+          notes: details.senderNotes ?? '',
+        },
+      });
+
+      const createdAt = new Date().toISOString();
+      const mirroredOrder: PaymentOrder = {
+        id: typeof res.orderId === 'string' && res.orderId ? res.orderId : orderStore.nextOrderId(),
+        orderNumber:
+          typeof res.orderNumber === 'string' && res.orderNumber
+            ? res.orderNumber
+            : orderStore.nextOrderNumber(),
+        userId: user.id,
+        userPhone: user.phoneNumber,
+        userFullName: user.fullName,
+        itemType: 'membership',
+        itemId: plan.id,
+        itemTitle: plan.title,
+        amountToman: plan.priceToman,
+        gateway: 'card_to_card',
+        // وضعیت واقعی سمت سرور است — آینه محلی همیشه همان وضعیت ثبت اولیه را نشان می‌دهد.
+        status: 'pending',
+        createdAt,
+        createdAtJalali: formatJalali(createdAt, true),
+        manualTransferDetails: details,
+        planSnapshot: { tier: plan.tier, durationDays: planDurationToDays(plan.duration) },
+      };
+
+      // آینه محلی best-effort است — شکست فضای localStorage نباید ثبتِ موفق سرور را پنهان کند.
+      try {
+        orderStore.add(mirroredOrder);
+      } catch (e) {
+        // ignore
+      }
+      return mirroredOrder;
+    }
+
     await new Promise((res) => setTimeout(res, 500));
 
     // DATA-INTEGRITY FIX (BUG-20): collision-safe identifiers for the financial ledger
@@ -54,6 +112,9 @@ export const transferService = {
 
   /**
    * Admin approves manual bank transfer order
+   *
+   * v1.1.0: مسیر تایید ادمین در قرارداد فریز‌شده v1.1.0 نیست (بدون اندپوینت فرانت);
+   * در حالت Real هم مانند دمو روی فروشگاه محلی کار می‌کند تا UI ادمین نشکند.
    */
   async approveTransferOrder(orderId: string, adminNotes?: string): Promise<PaymentOrder> {
     await new Promise((res) => setTimeout(res, 400));
@@ -121,6 +182,8 @@ export const transferService = {
 
   /**
    * Admin rejects manual bank transfer order with mandatory reason
+   *
+   * v1.1.0: مسیر رد ادمین در قرارداد فریز‌شده v1.1.0 نیست — همان مسیر دمو حفظ شده است.
    */
   async rejectTransferOrder(orderId: string, reason: string): Promise<PaymentOrder> {
     if (!reason || reason.trim().length === 0) {

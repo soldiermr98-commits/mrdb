@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { Smartphone, KeyRound, ShieldAlert, RefreshCw } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { authService } from '../../services/authService';
+import { isRealApiMode } from '../../services/apiClient';
 import { toEnglishDigits } from '../../utils/format';
 import { UserProfile } from '../../types';
 
@@ -22,7 +23,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
   onSuccess,
 }) => {
   const [step, setStep] = useState<'phone' | 'otp'>('phone');
-  const [phone, setPhone] = useState('09123456789');
+  const [phone, setPhone] = useState(isRealApiMode ? '' : '09123456789');
   const [otp, setOtp] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -45,7 +46,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
       await authService.requestOtp(phone);
       setStep('otp');
       setTimer(90);
-      setOtp('12345'); // Pre-fill mock code for ultimate demo convenience!
+      setOtp(isRealApiMode ? '' : '12345'); // Pre-fill mock code (demo mode only)
     } catch (err: any) {
       setErrorMessage(err.message || 'خطا در ارسال کد تایید');
     } finally {
@@ -92,7 +93,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
     try {
       await authService.requestOtp(phone);
       setTimer(90);
-      setOtp('12345'); // Pre-fill mock code again for demo convenience
+      setOtp(isRealApiMode ? '' : '12345'); // Pre-fill mock code (demo mode only)
     } catch (err: any) {
       setErrorMessage(err.message || 'خطا در ارسال مجدد کد تایید');
     } finally {
@@ -118,7 +119,8 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
       maxWidth="sm"
     >
       <div className="space-y-4">
-        {/* Prototype Mock Warning Banner */}
+        {/* Prototype Mock Warning Banner (demo mode only) */}
+        {!isRealApiMode && (
         <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-3 text-xs text-amber-900 flex items-start gap-2.5">
           <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
           <div className="leading-relaxed">
@@ -128,6 +130,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
             </p>
           </div>
         </div>
+        )}
 
         {errorMessage && (
           <div className="bg-red-50 border border-red-200 text-red-700 text-xs p-3 rounded-xl animate-in fade-in">
@@ -173,7 +176,8 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
               )}
             </button>
 
-            {/* Quick Demo Shortcuts */}
+            {/* Quick Demo Shortcuts (demo mode only) */}
+            {!isRealApiMode && (
             <div className="pt-3 border-t border-stone-100">
               <p className="text-[11px] font-medium text-stone-500 mb-2">ورود سریع برای بازبینی و تست:</p>
               <div className="grid grid-cols-2 gap-2 text-xs">
@@ -197,6 +201,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
                 </button>
               </div>
             </div>
+            )}
           </form>
         ) : (
           <form onSubmit={handleVerifyOtp} className="space-y-4">

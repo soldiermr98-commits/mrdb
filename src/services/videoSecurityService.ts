@@ -14,6 +14,36 @@
  */
 
 import { Lesson, UserProfile, VideoStreamingTicket } from '../types';
+import { apiFetch, getStoredAuthToken, isRealApiMode } from './apiClient';
+
+/** شکل بلیط برگشتی از «POST /lessons/{id}/playback-ticket» (قرارداد فریز v1.1.0). */
+interface ApiTicketShape {
+  ticketId?: unknown;
+  lessonId?: unknown;
+  expiresInSeconds?: unknown;
+  issuedAt?: unknown;
+  expiresAt?: unknown;
+  watermarkText?: unknown;
+  watermarkUserId?: unknown;
+  streamType?: unknown;
+}
+
+/** شکل پاسخ «POST /lessons/{id}/playback» — منبع واقعی پخش (v1.1.0 NEW). */
+interface ApiPlaybackShape {
+  videoUrl?: unknown;
+  watermarkText?: unknown;
+  expiresAt?: unknown;
+}
+
+function ticketString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' && value.trim() !== '' ? value : fallback;
+}
+
+const REAL_QUALITY_OPTIONS = [
+  { label: 'HD 720p (پیش‌فرض)', resolution: '720p' },
+  { label: 'SD 480p (حجم کمتر)', resolution: '480p' },
+  { label: 'Full HD 1080p', resolution: '1080p' },
+];
 
 export const videoSecurityService = {
   /**
@@ -30,6 +60,66 @@ export const videoSecurityService = {
     user: UserProfile | null,
     accessDecision?: boolean
   ): Promise<VideoStreamingTicket> {
+    // ----------------------------------------------------------------------
+    // v1.1.0 Real-API — زنجیرهٔ واقعی پخش:
+    //   ۱) POST /lessons/{id}/playback-ticket (Bearer) → بلیط امضاشده + واترمارک سرور
+    //   ۲) POST /lessons/{id}/playback {ticketId} (Bearer) → {videoUrl, watermarkText, expiresAt}
+    // videoUrl تنها منبع <video> در حالت Real است؛ تمام مکانیزم‌های تیکت/تمدید/واترمارک
+    // همان مسیر قبلی را طی می‌کنند (فقط منبع URL عوض می‌شود).
+    // ----------------------------------------------------------------------
+    if (isRealApiMode) {
+      if (accessDecision === false) {
+        throw new Error('دسترسی به این درس فعال نیست');
+      }
+
+      const lessonPath = `/lessons/${encodeURIComponent(lesson.id)}`;
+      // اندپوینت بلیط برای پیش‌نمایش رایگان عمومی است — هدر Bearer فقط وقتی توکن هست می‌رود.
+      const withAuth = !!getStoredAuthToken();
+      const apiTicket = await apiFetch<ApiTicketShape>(`${lessonPath}/playback-ticket`, {
+        method: 'POST',
+        auth: withAuth,
+      });
+
+      const playback = await apiFetch<ApiPlaybackShape>(`${lessonPath}/playback`, {
+        method: 'POST',
+        auth: withAuth,
+        body: { ticketId: ticketString(apiTicket.ticketId) },
+      });
+
+      const videoUrl = ticketString(playback.videoUrl);
+      if (!videoUrl) {
+        throw new Error('ویدیوی این درس در دسترس نیست؛ لطفاً بعداً دوباره تلاش کنید.');
+      }
+
+      const issuedAt = ticketString(apiTicket.issuedAt) || new Date().toISOString();
+      const expiresAt =
+        ticketString(playback.expiresAt) ||
+        ticketString(apiTicket.expiresAt) ||
+        new Date(Date.now() + 900 * 1000).toISOString();
+      const expiresInSeconds =
+        typeof apiTicket.expiresInSeconds === 'number' && Number.isFinite(apiTicket.expiresInSeconds)
+          ? Math.max(0, Math.round(apiTicket.expiresInSeconds))
+          : 900;
+      const streamType = ticketString(apiTicket.streamType, 'hls');
+
+      return {
+        ticketId: ticketString(apiTicket.ticketId, 'tkt-unknown'),
+        lessonId: lesson.id,
+        expiresInSeconds,
+        issuedAt,
+        expiresAt,
+        // واترمارک سرور (فرم ماسک‌شده شماره) اولویت دارد؛ playback ممکن است تازه‌تر باشد.
+        watermarkText:
+          ticketString(playback.watermarkText) ||
+          ticketString(apiTicket.watermarkText) ||
+          (user ? `${user.maskedPhone || user.phoneNumber} | مستر دستباف` : 'مهمان | مستر دستباف'),
+        watermarkUserId: ticketString(apiTicket.watermarkUserId) || user?.id || 'guest',
+        provider: `Secure Stream (${streamType})`,
+        qualityOptions: REAL_QUALITY_OPTIONS,
+        videoUrl,
+      };
+    }
+
     await new Promise((res) => setTimeout(res, 350));
 
     if (accessDecision === false) {

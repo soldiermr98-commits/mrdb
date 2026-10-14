@@ -15,6 +15,7 @@
  */
 
 import { MembershipPlan, PaymentOrder, UserProfile } from '../types';
+import { ApiError, apiFetch, isRealApiMode } from './apiClient';
 import { authService } from './authService';
 import { membershipService, planDurationToDays, planFromSnapshot } from './membershipService';
 import { mutateOrder, orderStore } from './orderStore';
@@ -57,6 +58,52 @@ export const paymentService = {
     user: UserProfile,
     plan: MembershipPlan
   ): Promise<{ order: PaymentOrder; zibalTrackId: string; gatewayUrl: string }> {
+    // ----------------------------------------------------------------------
+    // v1.1.0 Real-API: POST /payment/zibal/initiate {plan_id} (snake_case دقیق PHP)
+    // پاسخ PHP: {orderId, orderNumber, trackId, paymentUrl} — نام فیلد «paymentUrl»
+    // عیناً از class-payment-controller.php مصرف می‌شود (gatewayUrl فقط fallback).
+    // سفارش واقعی سمت سرور ثبت می‌شود؛ رکورد محلی فقط برای UI است و در orderStore ذخیره نمی‌شود.
+    // ----------------------------------------------------------------------
+    if (isRealApiMode) {
+      const res = await apiFetch<{
+        orderId?: unknown;
+        orderNumber?: unknown;
+        trackId?: unknown;
+        paymentUrl?: unknown;
+        gatewayUrl?: unknown;
+      }>('/payment/zibal/initiate', { method: 'POST', auth: true, body: { plan_id: plan.id } });
+
+      const trackId = typeof res.trackId === 'string' ? res.trackId : '';
+      const paymentUrl =
+        (typeof res.paymentUrl === 'string' && res.paymentUrl) ||
+        (typeof res.gatewayUrl === 'string' && res.gatewayUrl) ||
+        '';
+      if (!paymentUrl) {
+        throw new Error('لینک پرداخت از سرور دریافت نشد؛ لطفاً دوباره تلاش کنید.');
+      }
+
+      const createdAt = new Date().toISOString();
+      const gatewayOrder: PaymentOrder = {
+        id: typeof res.orderId === 'string' && res.orderId ? res.orderId : `ord-zibal-${trackId}`,
+        orderNumber: typeof res.orderNumber === 'string' ? res.orderNumber : '',
+        userId: user.id,
+        userPhone: user.phoneNumber,
+        userFullName: user.fullName,
+        itemType: 'membership',
+        itemId: plan.id,
+        itemTitle: plan.title,
+        amountToman: plan.priceToman,
+        gateway: 'zibal',
+        status: 'pending',
+        createdAt,
+        createdAtJalali: formatJalali(createdAt, true),
+        zibalTrackId: trackId,
+        planSnapshot: { tier: plan.tier, durationDays: planDurationToDays(plan.duration) },
+      };
+
+      return { order: gatewayOrder, zibalTrackId: trackId, gatewayUrl: paymentUrl };
+    }
+
     await new Promise((res) => setTimeout(res, 400));
 
     // DATA-INTEGRITY FIX (BUG-20): collision-safe identifiers for the financial ledger
@@ -111,6 +158,12 @@ export const paymentService = {
     refNumber?: string;
     serverLogExplanation: string;
   }> {
+    // v1.1.0 Real-API: شبیه‌ساز زیبال فقط در دمو اجرا می‌شود؛ تایید واقعی از طریق
+    // کال‌بک درگاه (verifyZibalCallback در boot اپ) انجام می‌شود.
+    if (isRealApiMode) {
+      throw new Error('تایید پرداخت آنلاین در حالت اتصال واقعی، پس از بازگشت از درگاه به‌صورت خودکار انجام می‌شود.');
+    }
+
     await new Promise((res) => setTimeout(res, 800));
 
     const order = orderStore.findById(orderId);
@@ -218,5 +271,47 @@ export const paymentService = {
       message: 'پرداخت با موفقیت انجام شد و اشتراک شما فعال گردید.',
       serverLogExplanation: `[امنیت سرور] فراخوانی موفقیت‌آمیز endpoint تایید زیبال (verify) در سرور با کد پیگیری ${order.zibalTrackId} و شماره مرجع شاپرک ${refNum}. رول کاربری با موفقیت در سیستم به‌روزرسانی شد.`,
     };
+  },
+
+  /**
+   * v1.1.0 Real-API — تایید کال‌بک زیبال پس از بازگشت از درگاه.
+   * قرارداد PHP (class-payment-controller.php): POST /payment/zibal/verify
+   * {track_id, success, cb_token} →
+   *  - موفق: {success: true, orderNumber, refNumber, membershipMode, membershipExpiresAt, message}
+   *  - خطا (WP_Error): {code, message, data:{status}} → apiFetch همیشه Error با پیام فارسی پرتاب می‌کند.
+   * عضویت سمت سرور فعال شده است؛ کلاینت فقط نتیجه را نشان می‌دهد و سشن را از /auth/me تازه می‌کند.
+   */
+  async verifyZibalCallback(params: {
+    trackId: string;
+    success: string;
+    cbToken: string;
+  }): Promise<{ success: boolean; message: string; orderNumber?: string; refNumber?: string }> {
+    if (!isRealApiMode) {
+      throw new Error('کال‌بک درگاه پرداخت فقط در حالت اتصال واقعی پردازش می‌شود.');
+    }
+
+    try {
+      const res = await apiFetch<{
+        success?: unknown;
+        message?: unknown;
+        orderNumber?: unknown;
+        refNumber?: unknown;
+      }>('/payment/zibal/verify', {
+        method: 'POST',
+        // دقیقاً snake_case قرارداد PHP
+        body: { track_id: params.trackId, success: params.success, cb_token: params.cbToken },
+      });
+      return {
+        success: res.success === true,
+        message: typeof res.message === 'string' && res.message ? res.message : 'نتیجه تایید پرداخت از سرور دریافت شد.',
+        orderNumber: typeof res.orderNumber === 'string' ? res.orderNumber : undefined,
+        refNumber: typeof res.refNumber === 'string' ? res.refNumber : undefined,
+      };
+    } catch (e) {
+      // WP_Errorها (لغو توسط کاربر/خطای مبلغ/...) همه Error با پیام فارسی‌اند؛
+      // فقط دوباره غلاف می‌کنیم تا caller پیام سرور را مستقیم toast کند.
+      if (e instanceof ApiError) throw e;
+      throw e instanceof Error ? e : new Error('تایید پرداخت با خطا مواجه شد؛ در صورت کسر وجه با پشتیبانی تماس بگیرید.');
+    }
   },
 };
