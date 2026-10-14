@@ -41,6 +41,19 @@ class MrDastbaaf_Admin_Controller {
             'callback' => array($this, 'handle_homepage_sections'),
             'permission_callback' => array($this, 'check_admin_permission'),
         ));
+
+        // v1.1.0: CRUD درس‌ها و ویدیوها از صفحهٔ پیشخوان «درس‌ها و ویدیوها»
+        register_rest_route(MRDASTBAAF_API_NAMESPACE, '/admin/lessons', array(
+            'methods' => array('GET', 'POST'),
+            'callback' => array($this, 'handle_admin_lessons'),
+            'permission_callback' => array($this, 'check_admin_permission'),
+        ));
+
+        register_rest_route(MRDASTBAAF_API_NAMESPACE, '/admin/lessons/(?P<id>[0-9]+)', array(
+            'methods' => array('PUT', 'DELETE'),
+            'callback' => array($this, 'handle_admin_lesson_mutation'),
+            'permission_callback' => array($this, 'check_admin_permission'),
+        ));
     }
 
     /**
@@ -381,5 +394,255 @@ class MrDastbaaf_Admin_Controller {
             update_option($option_key, $clean_sections, false); // autoload = false برای عملکرد بهتر
             return rest_ensure_response(array('success' => true, 'message' => 'چیدمان صفحه اصلی ذخیره شد.'));
         }
+    }
+
+    /**
+     * ===================== v1.1.0: CRUD درس‌ها و ویدیوها =====================
+     *
+     * نکتهٔ امنیتی: فیلد videoUrl فقط در همین CRUD ادمین برگردانده می‌شود؛
+     * اندپوینت‌های عمومی دوره‌ها هرگز آدرس ویدیو را افشا نمی‌کنند.
+     */
+
+    public function handle_admin_lessons(WP_REST_Request $request) {
+        if (!class_exists('WooCommerce')) {
+            return new WP_Error('woocommerce_missing', 'ووکامرس فعال نیست؛ مدیریت درس‌ها در دسترس نیست.', array('status' => 503));
+        }
+
+        if ('POST' === $request->get_method()) {
+            return $this->admin_lesson_create($request);
+        }
+
+        return $this->admin_lessons_list($request);
+    }
+
+    public function handle_admin_lesson_mutation(WP_REST_Request $request) {
+        if (!class_exists('WooCommerce')) {
+            return new WP_Error('woocommerce_missing', 'ووکامرس فعال نیست؛ مدیریت درس‌ها در دسترس نیست.', array('status' => 503));
+        }
+
+        if ('DELETE' === $request->get_method()) {
+            return $this->admin_lesson_delete($request);
+        }
+
+        return $this->admin_lesson_update($request);
+    }
+
+    /**
+     * اعتبارسنجی محصول ووکامرس مقصد
+     *
+     * @param int $product_id
+     * @return true|WP_Error
+     */
+    private function validate_woocommerce_product($product_id) {
+        if ($product_id <= 0) {
+            return new WP_Error('invalid_product', 'شناسهٔ محصول معتبر نیست.', array('status' => 400));
+        }
+
+        $post = get_post($product_id);
+        if (!$post || 'product' !== $post->post_type) {
+            return new WP_Error('invalid_product', 'محصول ووکامرس متناظر یافت نشد.', array('status' => 400));
+        }
+
+        return true;
+    }
+
+    /**
+     * فهرست درس‌های محصول — مرتب با sort_order
+     */
+    private function admin_lessons_list(WP_REST_Request $request) {
+        global $wpdb;
+        $table_lessons = $wpdb->prefix . 'mrdastbaaf_lessons';
+
+        $product_id = absint($request->get_param('product_id'));
+        $product_check = $this->validate_woocommerce_product($product_id);
+        if (is_wp_error($product_check)) {
+            return $product_check;
+        }
+
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM $table_lessons WHERE product_id = %d ORDER BY sort_order ASC, id ASC",
+            $product_id
+        ));
+
+        $lessons = array();
+        foreach ($rows as $row) {
+            $lessons[] = $this->format_admin_lesson($row);
+        }
+
+        return rest_ensure_response(array('lessons' => $lessons));
+    }
+
+    /**
+     * ساخت درس جدید برای محصول
+     */
+    private function admin_lesson_create(WP_REST_Request $request) {
+        global $wpdb;
+        $table_lessons = $wpdb->prefix . 'mrdastbaaf_lessons';
+
+        $product_id = absint($request->get_param('product_id'));
+        $product_check = $this->validate_woocommerce_product($product_id);
+        if (is_wp_error($product_check)) {
+            return $product_check;
+        }
+
+        $fields = $this->build_lesson_fields($request, false);
+        if (is_wp_error($fields)) {
+            return $fields;
+        }
+
+        $fields['product_id'] = $product_id;
+
+        $inserted = $wpdb->insert($table_lessons, $fields);
+        if (false === $inserted) {
+            error_log('MrDastbaaf: lesson insert failed — ' . $wpdb->last_error);
+            return new WP_Error('db_error', 'ثبت درس ناموفق بود؛ لطفاً دوباره تلاش کنید.', array('status' => 500));
+        }
+
+        $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_lessons WHERE id = %d", $wpdb->insert_id));
+
+        return rest_ensure_response(array(
+            'success' => true,
+            'message' => 'درس جدید ثبت شد.',
+            'lesson' => $row ? $this->format_admin_lesson($row) : null,
+        ));
+    }
+
+    /**
+     * ویرایش درس — فیلدهای ارسالی به‌روزرسانی می‌شوند؛ فیلدهای خالی حفظ می‌شوند
+     */
+    private function admin_lesson_update(WP_REST_Request $request) {
+        global $wpdb;
+        $table_lessons = $wpdb->prefix . 'mrdastbaaf_lessons';
+
+        $lesson_id = absint($request->get_param('id'));
+
+        $existing = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_lessons WHERE id = %d", $lesson_id));
+        if (!$existing) {
+            return new WP_Error('not_found', 'درس مورد نظر یافت نشد.', array('status' => 404));
+        }
+
+        $fields = $this->build_lesson_fields($request, true);
+        if (is_wp_error($fields)) {
+            return $fields;
+        }
+        if (empty($fields)) {
+            return new WP_Error('no_data', 'داده‌ای برای به‌روزرسانی ارسال نشد.', array('status' => 400));
+        }
+
+        $updated = $wpdb->update($table_lessons, $fields, array('id' => $lesson_id));
+        if (false === $updated) {
+            error_log('MrDastbaaf: lesson update failed — ' . $wpdb->last_error);
+            return new WP_Error('db_error', 'به‌روزرسانی درس ناموفق بود؛ لطفاً دوباره تلاش کنید.', array('status' => 500));
+        }
+
+        $row = (0 === $updated) ? $existing : $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_lessons WHERE id = %d", $lesson_id));
+
+        return rest_ensure_response(array(
+            'success' => true,
+            'message' => 'درس به‌روزرسانی شد.',
+            'lesson' => $row ? $this->format_admin_lesson($row) : null,
+        ));
+    }
+
+    /**
+     * حذف درس
+     */
+    private function admin_lesson_delete(WP_REST_Request $request) {
+        global $wpdb;
+        $table_lessons = $wpdb->prefix . 'mrdastbaaf_lessons';
+
+        $lesson_id = absint($request->get_param('id'));
+
+        $deleted = $wpdb->delete($table_lessons, array('id' => $lesson_id), array('%d'));
+        if (false === $deleted) {
+            error_log('MrDastbaaf: lesson delete failed — ' . $wpdb->last_error);
+            return new WP_Error('db_error', 'حذف درس ناموفق بود؛ لطفاً دوباره تلاش کنید.', array('status' => 500));
+        }
+        if (0 === $deleted) {
+            return new WP_Error('not_found', 'درس مورد نظر یافت نشد.', array('status' => 404));
+        }
+
+        return rest_ensure_response(array('success' => true, 'message' => 'درس حذف شد.'));
+    }
+
+    /**
+     * پاکسازی و اعتبارسنجی ورودی درس (create/update مشترک)
+     *
+     * video_url فقط https:// پذیرفته می‌شود (هاست دانلود dll.mrdastbaaf.com)؛
+     * در ویرایش، فیلدهای ارسال‌نشده/خالی دست‌نخورده می‌مانند.
+     *
+     * @return array|WP_Error فیلدهای مجاز برای ذخیره
+     */
+    private function build_lesson_fields(WP_REST_Request $request, $is_update) {
+        $title = sanitize_text_field((string) $request->get_param('title'));
+        $video_url = trim((string) $request->get_param('video_url'));
+        $is_free_param = $request->get_param('is_free');
+        $tier = sanitize_key((string) $request->get_param('required_tier'));
+        $sort_order = $request->get_param('sort_order');
+
+        $fields = array();
+
+        if ('' !== $title) {
+            if (mb_strlen($title) > 191) {
+                return new WP_Error('invalid_title', 'عنوان درس حداکثر ۱۹۱ کاراکتر است.', array('status' => 400));
+            }
+            $fields['title'] = $title;
+        } elseif (!$is_update) {
+            return new WP_Error('invalid_title', 'عنوان درس الزامی است.', array('status' => 400));
+        }
+
+        if ('' !== $video_url) {
+            // امنیت: فقط نشانی‌های https — هاست دانلود dll.mrdastbaaf.com
+            $validated_url = esc_url_raw($video_url);
+            if ('' === $validated_url || 0 !== strpos($validated_url, 'https://')) {
+                return new WP_Error('invalid_video_url', 'آدرس ویدیو باید یک نشانی معتبر با https:// باشد (هاست دانلود dll.mrdastbaaf.com).', array('status' => 400));
+            }
+            $fields['video_url'] = $validated_url;
+        } elseif (!$is_update) {
+            return new WP_Error('invalid_video_url', 'آدرس ویدیوی درس الزامی است و باید با https:// شروع شود.', array('status' => 400));
+        }
+
+        if (null !== $is_free_param) {
+            $fields['is_free'] = (int) (bool) rest_sanitize_boolean($is_free_param);
+        } elseif (!$is_update) {
+            $fields['is_free'] = 0;
+        }
+
+        if ('' !== $tier) {
+            $allowed_tiers = array('bronze', 'silver', 'gold');
+            if (!in_array($tier, $allowed_tiers, true)) {
+                return new WP_Error('invalid_tier', 'سطح دسترسی درس باید برنزی، نقره‌ای یا طلایی باشد.', array('status' => 400));
+            }
+            $fields['required_tier'] = $tier;
+        } elseif (!$is_update) {
+            $fields['required_tier'] = 'bronze';
+        }
+
+        if (null !== $sort_order && '' !== $sort_order) {
+            if (!is_numeric($sort_order)) {
+                return new WP_Error('invalid_sort_order', 'ترتیب نمایش باید عددی باشد.', array('status' => 400));
+            }
+            $fields['sort_order'] = max(0, min(9999, (int) $sort_order));
+        } elseif (!$is_update) {
+            $fields['sort_order'] = 0;
+        }
+
+        return $fields;
+    }
+
+    /**
+     * شکل خروجی درس برای پیشخوان (شامل videoUrl — فقط ادمین)
+     */
+    private function format_admin_lesson($row) {
+        return array(
+            'id'            => (int) $row->id,
+            'productId'     => (int) $row->product_id,
+            'title'         => (string) $row->title,
+            'videoUrl'      => (string) $row->video_url,
+            'isFree'        => (bool) $row->is_free,
+            'requiredTier'  => (string) $row->required_tier,
+            'sortOrder'     => (int) $row->sort_order,
+            'createdAt'     => (string) $row->created_at,
+        );
     }
 }

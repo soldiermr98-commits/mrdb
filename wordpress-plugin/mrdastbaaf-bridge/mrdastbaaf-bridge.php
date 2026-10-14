@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.0.3
+ * Version: 1.1.0
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,25 +16,36 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.0.3');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.1.0');
 
 /**
- * BUG-25: نسخه اسکیمای دیتابیس — با هر تغییر ساختار جداول (آخرین: BUG-26 ایندکس‌ها)
- * باید افزایش یابد تا چک نسخه در plugins_loaded، dbDelta را مجدداً اجرا کند.
+ * v1.1.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
  */
-define('MRDASTBAAF_DB_VERSION', '1.1.0');
+
+/**
+ * BUG-25: نسخه اسکیمای دیتابیس — با هر تغییر ساختار جداول باید افزایش یابد تا
+ * چک نسخه در plugins_loaded، dbDelta را مجدداً اجرا کند.
+ *
+ * v1.1.0 (اسکیما ۱.۲.۰): جدول جدید wp_mrdastbaaf_lessons (درس‌ها و ویدیوهای دوره‌ها).
+ * نکته مهم: افزونهٔ ۱.۰.۳ مقدار '1.1.0' را در آپشن mrdastbaaf_db_version ذخیره کرده
+ * بود؛ بنابراین برای این‌که مسیر آپگرید خودکار (چک عدم تساوی نسخه) روی سایت‌های
+ * موجود نیز فعال شود، اسکیمای جدید باید با '1.2.0' شروع شود نه '1.1.0'.
+ */
+define('MRDASTBAAF_DB_VERSION', '1.2.0');
 define('MRDASTBAAF_BRIDGE_PATH', plugin_dir_path(__FILE__));
 define('MRDASTBAAF_BRIDGE_URL', plugin_dir_url(__FILE__));
 define('MRDASTBAAF_API_NAMESPACE', 'mrdastbaaf/v1');
 
-// بارگذاری کلاس‌های ماژولار
+// بارگذاری کلاس‌های ماژولار (v1.1.0: سرویس پیامک پیش از کنترلر احراز هویت)
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-database.php';
+require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-sms-service.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-membership-helper.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-auth-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-courses-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-memberships-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-payment-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-admin-controller.php';
+require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-settings-controller.php';
 
 /**
  * کلاس اصلی راه‌اندازی افزونه
@@ -60,7 +71,19 @@ class MrDastbaaf_Bridge_Plugin {
         add_action('rest_api_init', array($this, 'register_rest_routes'));
 
         // تنظیم هدرهای CORS برای ارتباط امن با PWA
+        // v1.1.0: هدر Authorization (Bearer) باید در Access-Control-Allow-Headers
+        // بماند (در setup_cors_headers موجود است) وگرنه مرورگر درخواست‌های توکن‌دار
+        // PWA را در preflight بلاک می‌کند.
         add_action('rest_api_init', array($this, 'setup_cors_headers'), 15);
+
+        // v1.1.0: احراز هویت Bearer برای اندپوینت‌های REST — PWA توکن opaque دریافتی
+        // از verify-otp را در هدر «Authorization: Bearer» می‌فرستد. اولویت ۲۰:
+        // اگر کوکی/احراز قبلی کاربر را تعیین کرده بود، دست نمی‌زنیم.
+        add_filter('determine_current_user', array('MrDastbaaf_Auth_Controller', 'determine_current_user_from_bearer'), 20);
+
+        // v1.1.0: منوی پیشخوان «مستر دستباف» — تنظیمات + مدیریت درس‌ها و ویدیوها
+        $settings_controller = new MrDastbaaf_Settings_Controller();
+        $settings_controller->register();
     }
 
     /**

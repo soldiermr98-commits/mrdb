@@ -93,6 +93,9 @@ class MrDastbaaf_Payment_Controller {
      */
     public function handle_zibal_initiate(WP_REST_Request $request) {
         global $wpdb;
+        // v1.1.0: پشتیبانی احراز هویت Bearer در کنار کوکی
+        MrDastbaaf_Auth_Controller::maybe_authenticate_bearer();
+
         $user_id = get_current_user_id();
         $user = get_user_by('ID', $user_id);
         // BUG-36: گارد کاربر نامعتبر — رقابت با لاگ‌اوت نباید به خطای PHP روی $user ختم شود
@@ -152,7 +155,15 @@ class MrDastbaaf_Payment_Controller {
         $merchant = get_option('mrdastbaaf_zibal_merchant', 'zibal'); // 'zibal' = sandbox
         $amount_rial = $plan->price_toman * 10;
         $cb_token = $this->generate_callback_token($order_id);
-        $callback_url = add_query_arg('cb_token', $cb_token, get_option('mrdastbaaf_frontend_url', home_url()) . '/payment/callback?orderId=' . $order_id);
+
+        /**
+         * v1.1.0: کال‌بک هش‌محور برای هاست استاتیک PWA — فرانت hash router دارد و
+         * پارامترها (orderId و cb_token) داخل fragment خوانده می‌شوند؛ زیبال هم
+         * trackId/success را به انتهای همین URL اضافه می‌کند. مسیر قبلی
+         * «/payment/callback?orderId=…» (query-محور) جایگزین شده است.
+         * پارامترهای initiate/verify بدون تغییر مانده‌اند.
+         */
+        $callback_url = trailingslashit(get_option('mrdastbaaf_frontend_url', home_url())) . '#/payment/callback?orderId=' . $order_id . '&cb_token=' . $cb_token;
 
         $response = wp_remote_post('https://gateway.zibal.ir/v1/request', array(
             'headers' => array('Content-Type' => 'application/json'),
@@ -415,6 +426,9 @@ class MrDastbaaf_Payment_Controller {
      */
     public function handle_manual_transfer_submit(WP_REST_Request $request) {
         global $wpdb;
+        // v1.1.0: پشتیبانی احراز هویت Bearer در کنار کوکی
+        MrDastbaaf_Auth_Controller::maybe_authenticate_bearer();
+
         $user_id = get_current_user_id();
         $user = get_user_by('ID', $user_id);
         // BUG-36: گارد کاربر نامعتبر — بدون آن دسترسی به $user->user_login خطای PHP می‌دهد

@@ -102,6 +102,25 @@ class MrDastbaaf_Database {
         ) $charset_collate;";
         dbDelta($sql_transfers);
 
+        // ۵. جدول درس‌ها و ویدیوهای دوره‌ها (v1.1.0 — اسکیما ۱.۲.۰)
+        // هر درس به یک محصول ووکامرس (دوره) متصل است؛ آدرس ویدیو فقط در
+        // اندپوینت پخش (playback) با بلیط معتبر تحویل می‌شود و هرگز در
+        // اندپوینت‌های لیست عمومی نیست.
+        $table_lessons = $wpdb->prefix . 'mrdastbaaf_lessons';
+        $sql_lessons = "CREATE TABLE $table_lessons (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            product_id bigint(20) unsigned NOT NULL,
+            title varchar(191) NOT NULL,
+            video_url text NOT NULL,
+            is_free tinyint(1) DEFAULT 0 NOT NULL,
+            required_tier varchar(20) DEFAULT 'bronze' NOT NULL,
+            sort_order int(11) DEFAULT 0 NOT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            PRIMARY KEY  (id),
+            KEY product_sort_idx (product_id, sort_order)
+        ) $charset_collate;";
+        dbDelta($sql_lessons);
+
         // درج پلن‌های پیش‌فرض در صورت خالی بودن جدول
         self::seed_initial_plans();
     }

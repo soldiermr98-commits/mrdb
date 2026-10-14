@@ -87,16 +87,25 @@ class MrDastbaaf_Auth_Controller {
         update_option('mrdastbaaf_otp_hourly_started', $global_window_started, false);
 
         /**
-         * اتصال به افزونه اوتینو یا هوک پیامکی وردپرس
-         * TODO: دریافت الگوی پیامک اوتینو (Otino Hook/Pattern Code)
+         * v1.1.0: ارسال واقعی OTP از طریق سرویس پیامک (ملی‌پیامک با الگوی BaseServiceNumber).
+         * هوک سفارشی «mrdastbaaf_send_otp_sms» درون سرویس همچنان فراخوانی می‌شود تا
+         * افزونه‌های ثالث بدون تغییر کار کنند. نتیجه (موفق/خطا) در آپشن
+         * mrdastbaaf_sms_last_log ثبت می‌شود تا ادمین در تنظیمات ببیند.
          */
-        do_action('mrdastbaaf_send_otp_sms', $phone, $otp_code);
+        $sms_result = MrDastbaaf_Sms_Service::send_otp($phone, $otp_code);
 
-        return rest_ensure_response(array(
+        $response = array(
             'success' => true,
             'message' => 'کد تایید پیامکی ارسال گردید.',
             'expires_in_seconds' => 120,
-        ));
+        );
+        if (true !== $sms_result) {
+            // حتی اگر ارسال پیامک شکست خورد، کد در سیستم معتبر است — پاسخ موفق
+            // برگردانده می‌شود و فقط هشدار به کلاینت می‌رود.
+            $response['smsWarning'] = is_string($sms_result) ? $sms_result : 'ارسال پیامک با خطا مواجه شد؛ کد تایید شما در سامانه معتبر است.';
+        }
+
+        return rest_ensure_response($response);
     }
 
     /**
@@ -155,17 +164,27 @@ class MrDastbaaf_Auth_Controller {
             update_user_meta($user_id, 'billing_phone', $phone);
         }
 
-        // تنظیم کوکی ورود رسمی وردپرس
+        // تنظیم کوکی ورود رسمی وردپرس (سشن کوکی حفظ می‌شود)
         wp_set_current_user($user->ID);
         wp_set_auth_cookie($user->ID, true, is_ssl());
 
+        // v1.1.0: توکن opaque برای احراز هویت Bearer در PWA — هر ورود regenerate
+        // می‌شود و ۳۰ روز اعتبار دارد (زمان صدور در usermeta جداگانه ذخیره می‌شود).
+        $api_token = wp_generate_password(64, false);
+        update_user_meta($user->ID, 'mrdastbaaf_api_token', $api_token);
+        update_user_meta($user->ID, 'mrdastbaaf_api_token_issued', time());
+
         return rest_ensure_response(array(
             'success' => true,
+            'token' => $api_token,
             'user' => $this->format_user_profile($user),
         ));
     }
 
     public function handle_get_me() {
+        // v1.1.0: پشتیبانی Bearer — در کنار کوکی، توکن هدر Authorization نیز بررسی می‌شود
+        self::maybe_authenticate_bearer();
+
         $user_id = get_current_user_id();
         $user = get_user_by('ID', $user_id);
         // BUG-30: کوکی احراز هویت معتبر اما رکورد کاربر حذف‌شده → قبلاً fatal (500)
@@ -178,6 +197,96 @@ class MrDastbaaf_Auth_Controller {
 
     public function check_user_logged_in() {
         return is_user_logged_in();
+    }
+
+    /**
+     * v1.1.0: استخراج توکن opaque از هدر «Authorization: Bearer …»
+     * (برای سازگاری با آپاچی‌های بدون گذر هدر، REDIRECT_HTTP_AUTHORIZATION هم چک می‌شود)
+     *
+     * @return string توکن یا رشتهٔ خالی
+     */
+    public static function get_bearer_token() {
+        $header = '';
+        if (isset($_SERVER['HTTP_AUTHORIZATION'])) {
+            $header = sanitize_text_field(wp_unslash((string) $_SERVER['HTTP_AUTHORIZATION']));
+        } elseif (isset($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
+            $header = sanitize_text_field(wp_unslash((string) $_SERVER['REDIRECT_HTTP_AUTHORIZATION']));
+        }
+        if ('' === $header) {
+            return '';
+        }
+        if (!preg_match('/^Bearer\s+([A-Za-z0-9._\-]+)$/i', $header, $matches)) {
+            return '';
+        }
+        return $matches[1];
+    }
+
+    /**
+     * v1.1.0: یافتن کاربر از usermeta توکن + چک انقضای ۳۰ روزه
+     * توکن منقضی = نامعتبر (fail-closed).
+     *
+     * @param string $token توکن دریافتی از هدر
+     * @return WP_User|null
+     */
+    private static function get_user_by_api_token($token) {
+        if ('' === $token) {
+            return null;
+        }
+        $users = get_users(array(
+            'meta_key'   => 'mrdastbaaf_api_token',
+            'meta_value' => $token,
+            'number'     => 1,
+            'fields'     => 'all_with_meta',
+        ));
+        if (empty($users) || !isset($users[0])) {
+            return null;
+        }
+        $user = $users[0];
+        $issued = (int) get_user_meta($user->ID, 'mrdastbaaf_api_token_issued', true);
+        if ($issued <= 0 || (time() - $issued) > (30 * DAY_IN_SECONDS)) {
+            return null; // توکن منقضی است
+        }
+        return $user;
+    }
+
+    /**
+     * v1.1.0: هوک determine_current_user — اگر کوکی کاربر را تعیین نکرده باشد،
+     * هدر Bearer بررسی و کاربر از usermeta بازیابی می‌شود. فقط در درخواست‌های REST
+     * فعال است تا روی فرانت‌اند/پنل اثر جانبی نداشته باشد.
+     *
+     * @param int|false $user_id شناسهٔ کاربر تعیین‌شده توسط فیلترهای قبلی
+     * @return int|false
+     */
+    public static function determine_current_user_from_bearer($user_id) {
+        if ((int) $user_id > 0) {
+            return $user_id; // احراز قبلی (کوکی/اپلیکیشن‌پسورد) اولویت دارد
+        }
+        if (!defined('REST_REQUEST') || !REST_REQUEST) {
+            return $user_id;
+        }
+        $user = self::get_user_by_api_token(self::get_bearer_token());
+        if ($user) {
+            return (int) $user->ID;
+        }
+        return $user_id;
+    }
+
+    /**
+     * v1.1.0: گارد درون‌هندلری — اگر فیلتر determine_current_user زودتر اجرا نشده
+     * باشد (فراخوانی مستقیم هندلرها خارج از چرخهٔ REST)، هدر Bearer اینجا بررسی و
+     * کاربر جاری ست می‌شود. در حالت عادی بی‌اثر است.
+     *
+     * @return int شناسهٔ کاربر جاری (۰ برای مهمان)
+     */
+    public static function maybe_authenticate_bearer() {
+        if ((int) get_current_user_id() > 0) {
+            return (int) get_current_user_id();
+        }
+        $user = self::get_user_by_api_token(self::get_bearer_token());
+        if ($user) {
+            wp_set_current_user((int) $user->ID);
+        }
+        return (int) get_current_user_id();
     }
 
     /**
