@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.3.0
+ * Version: 1.3.2
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.3.0');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.3.2');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -26,6 +26,12 @@ define('MRDASTBAAF_BRIDGE_VERSION', '1.3.0');
  * تنظیم‌شده خوانده می‌شود (نام/لینک دوره از محصول — فقط فیلدهای جلسه دستی است) +
  * پوستهٔ سبک مدرن پیشخوان (assets/admin-ui.css فقط روی صفحات همین افزونه) —
  * اسکیما همچنان ۱.۳.۰ ثابت است (هیچ تغییر ساختاری در جداول).
+ * v1.3.1: گارد ضدکش REST — LiteSpeed Cache هدر Vary: Origin را نادیده می‌گیرد؛
+ * پاسخ‌های اندپوینت‌های افزونه با Cache-Control: no-store و X-LiteSpeed-Cache-Control:
+ * no-cache از کش مستثنی می‌شوند (هیچ تغییری در منطق/شکل پاسخ‌ها).
+ * v1.3.2: فیکس ۴۰۴ جزئیات دوره با اسلاگ فارسی — الگوی id اندپوینت /courses/{id}
+ * به [^/]+ گسترش یافت + جستجوی تحمل‌پذیر اسلاگ (خام/یک‌بار/دوبار encoded) چون
+ * وردپرس اسلاگ فارسی را به شکل «%d8%af...» ذخیره می‌کند و الگوی قبلی هرگز جور نمی‌شد.
  */
 
 /**
@@ -179,6 +185,21 @@ class MrDastbaaf_Bridge_Plugin {
 
         remove_filter('rest_pre_serve_request', 'rest_send_cors_headers');
         add_filter('rest_pre_serve_request', function ($value) {
+            /**
+             * v1.3.1: گارد ضدکش — LiteSpeed Cache (رایج روی هاست‌های اشتراکی) هدر
+             * Vary: Origin را نادیده می‌گیرد و پاسخ REST را «با سربرگ‌هایش» برای همهٔ
+             * Origin ها کش می‌کند؛ اولین درخواستِ بدون Origin (ربات/مانیتور/پیش‌نمایش)
+             * باعث می‌شود نسخهٔ کش‌شدهٔ بدون هدر CORS به مرورگر PWA برسد و همهٔ
+             * درخواست‌ها با خطای شبکه شکست بخورند. اندپوینت‌های این افزونه هرگز
+             * نباید کش شوند — هم Cache-Control استاندارد و هم سربرگ مخصوص LiteSpeed.
+             */
+            if (!headers_sent()) {
+                header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+                header('X-LiteSpeed-Cache-Control: no-cache');
+                header('Expires: Wed, 11 Jan 1984 05:00:00 GMT');
+                header('Pragma: no-cache');
+            }
+
             $origin = get_http_origin();
 
             // پیش‌فرض پروداکشن: فقط دامنه‌های رسمی. بدون localhost.

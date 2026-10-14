@@ -27,7 +27,11 @@ class MrDastbaaf_Courses_Controller {
             'permission_callback' => '__return_true',
         ));
 
-        register_rest_route(MRDASTBAAF_API_NAMESPACE, '/courses/(?P<id>[a-zA-Z0-9_-]+)', array(
+        // v1.3.2: الگوی id از [a-zA-Z0-9_-] به [^/]+ گسترش یافت — وردپرس اسلاگ‌های
+        // فارسی را با utf8_uri_encode به شکل «%d8%af...» ذخیره می‌کند و کاراکتر «%»
+        // (و خود حروف فارسی) در الگوی قبلی جور نمی‌شد → همهٔ درخواست‌های جزئیات دوره
+        // با «rest_no_route» ۴۰۴ می‌شدند (دوره‌ها در لیست دیده می‌شدند ولی بازشان نمی‌شد).
+        register_rest_route(MRDASTBAAF_API_NAMESPACE, '/courses/(?P<id>[^/]+)', array(
             'methods' => 'GET',
             'callback' => array($this, 'handle_get_single_course'),
             'permission_callback' => '__return_true',
@@ -104,6 +108,10 @@ class MrDastbaaf_Courses_Controller {
 
     /**
      * استعلام جزئیات یک دوره (با slug محصول) به همراه سرفصل‌ها (درس‌ها)
+     *
+     * v1.3.2: جستجوی تحمل‌پذیر با اسلاگ — فرم دریافتی می‌تواند خام (فارسی)،
+     * یک‌بار یا دوبار percent-encoded باشد و post_name دیتابیس هم بسته به نحوهٔ
+     * ذخیره، همان خام یا همان «%d8%af...» است؛ همهٔ فرم‌های معتبر امتحان می‌شوند.
      */
     public function handle_get_single_course(WP_REST_Request $request) {
         if (!class_exists('WooCommerce')) {
@@ -115,30 +123,55 @@ class MrDastbaaf_Courses_Controller {
             return new WP_Error('not_found', 'دوره مورد نظر یافت نشد.', array('status' => 404));
         }
 
-        $posts = get_posts(array(
-            'name' => $course_id,
-            'post_type' => 'product',
-            'post_status' => 'publish',
-            'numberposts' => 1,
-        ));
-        if (empty($posts)) {
+        // v1.3.2: کاندیداهای اسلاگ — [خام، یک‌بار decode، دوبار decode، encode خام]
+        // تا هر ترکیب «فرم درخواست × فرم ذخیره‌شده» پوشش داده شود (فقط جستجوی
+        // ایندکس‌شدهٔ post_name؛ تا ۴ پرس‌وجوی سبک با posts_per_page=1).
+        $candidates = array($course_id);
+        $form = $course_id;
+        for ($i = 0; $i < 2; $i++) {
+            $form = rawurldecode($form);
+            if (!in_array($form, $candidates, true)) {
+                $candidates[] = $form;
+            }
+        }
+        $encoded = rawurlencode($course_id);
+        if (!in_array($encoded, $candidates, true)) {
+            $candidates[] = $encoded;
+        }
+
+        $post_found = null;
+        foreach ($candidates as $candidate) {
+            $posts = get_posts(array(
+                'name' => $candidate,
+                'post_type' => 'product',
+                'post_status' => 'publish',
+                'numberposts' => 1,
+                'no_found_rows' => true,
+            ));
+            if (!empty($posts)) {
+                $post_found = $posts[0];
+                break;
+            }
+        }
+
+        if (null === $post_found) {
             return new WP_Error('not_found', 'دوره مورد نظر یافت نشد.', array('status' => 404));
         }
 
         // v1.2.0 (یافتهٔ ۳): محصول باید واقعاً در دستهٔ دوره‌ها باشد — قبلاً هر محصول
         // ووکامرسی (مثلاً ابزار بافندگی) با داشتن slug در این اندپوینت «دوره» جا می‌شد.
         $category_slug = (string) get_option('mrdastbaaf_course_category', 'courses');
-        if ('' !== $category_slug && !has_term($category_slug, 'product_cat', $posts[0]->ID)) {
+        if ('' !== $category_slug && !has_term($category_slug, 'product_cat', $post_found->ID)) {
             return new WP_Error('not_found', 'دوره یافت نشد.', array('status' => 404));
         }
 
-        $course = $this->map_product_to_course($posts[0]);
+        $course = $this->map_product_to_course($post_found);
 
         /**
          * SECURITY: درس‌ها بدون video_url برگردانده می‌شوند — تنها فیلدهای نمایشی.
          * آدرس ویدیو فقط از اندپوینت پخش با بلیط معتبر قابل دریافت است.
          */
-        $course['lessons'] = $this->get_product_lessons_public((int) $posts[0]->ID);
+        $course['lessons'] = $this->get_product_lessons_public((int) $post_found->ID);
 
         return rest_ensure_response($course);
     }
