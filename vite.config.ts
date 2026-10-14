@@ -30,7 +30,7 @@ export default defineConfig(({ command, mode }) => {
         // silently; PWAUpdatePrompt (virtual:pwa-register/react) surfaces the
         // update and only reloads when the user confirms.
         registerType: 'prompt',
-        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon.svg'],
+        includeAssets: ['favicon.ico', 'favicon-32.png', 'apple-touch-icon.png', 'logo-mrdastbaaf.png'],
         manifest: {
           id: '/',
           name: 'مستر دستباف | آموزش صنایع دستی',
