@@ -10,6 +10,11 @@ export default defineConfig(({ command, mode }) => {
   // بیلد build مجاز نیست؛ در غیر این صورت به‌سادگی یک باندل «دمو» روی پروداکشن
   // دیپلوی می‌شود (ریشهٔ دیباگ «چرا سایت من دمو است؟» — Task 17).
   // Dev (command === 'serve') و vitest از این گارد عبور می‌کنند و دمو همچنان کار می‌کند.
+  //
+  // v1.2.4: گارد دوم — مقدار باید «آدرس کامل پایهٔ پل» با مسیر /wp-json/... باشد.
+  // ریشهٔ قطع‌شدن ارتباط واقعی استقرار سوم (درس/پلن خالی + خطای OTP «ارتباط با
+  // سرور برقرار نشد») این بود که باندل با مقدار بدون مسیر (https://mrdastbaaf.com)
+  // ساخته شده بود → همهٔ درخواست‌ها به صفحهٔ عادی سایت می‌رفتند (بدون هدر CORS).
   // ---------------------------------------------------------------------------
   if (command === 'build') {
     const env = loadEnv(mode, process.cwd(), '');
@@ -17,6 +22,11 @@ export default defineConfig(({ command, mode }) => {
     if (!apiBase || !/^https:\/\//i.test(apiBase)) {
       throw new Error(
         'بیلد پروداکشن بدون VITE_API_BASE_URL معتبر (https) مجاز نیست — برای بیلد دمو از dev استفاده کنید یا متغیر را در .env.production ست کنید.'
+      );
+    }
+    if (!/\/wp-json\/[A-Za-z0-9_-]+\/v\d+/i.test(apiBase.replace(/\/+$/, ''))) {
+      throw new Error(
+        'VITE_API_BASE_URL باید آدرس کامل اندپوینت پل باشد؛ مثال صحیح: https://mrdastbaaf.com/wp-json/mrdastbaaf/v1 — مقدار بدون مسیر /wp-json/... باعث قطع ارتباط اپ با سرور می‌شود.'
       );
     }
   }
