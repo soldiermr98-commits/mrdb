@@ -475,6 +475,7 @@ class MrDastbaaf_Settings_Controller {
                                     <th>#</th>
                                     <th>عنوان</th>
                                     <th>آدرس ویدیو</th>
+                                    <th>مدت</th>
                                     <th>پیش‌نمایش رایگان</th>
                                     <th>سطح اشتراک لازم</th>
                                     <th>ترتیب</th>
@@ -482,7 +483,7 @@ class MrDastbaaf_Settings_Controller {
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr><td colspan="7" class="mrd-empty">ابتدا یک دوره را انتخاب کنید.</td></tr>
+                                <tr><td colspan="8" class="mrd-empty">ابتدا یک دوره را انتخاب کنید.</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -501,6 +502,28 @@ class MrDastbaaf_Settings_Controller {
                                 <input type="url" id="mrd-lesson-video" class="large-text code" dir="ltr" placeholder="https://dll.mrdastbaaf.com/..." />
                                 <p class="description">فقط نشانی‌های <code>https://</code> پذیرفته می‌شود.</p>
                             </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="mrd-lesson-duration">مدت (دقیقه)</label></th>
+                            <td>
+                                <input type="number" id="mrd-lesson-duration" class="small-text" min="0" max="1440" step="1" value="0" />
+                                <p class="description">مدت هر جلسه به دقیقه — در اپ جمعِ مدت‌ها به‌عنوان مدت دوره و مدت هر جلسه نمایش داده می‌شود؛ صفر یعنی بدون مدت.</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="mrd-lesson-q480">کیفیت 480p (URL)</label></th>
+                            <td>
+                                <input type="url" id="mrd-lesson-q480" class="large-text code" dir="ltr" placeholder="https://dll.mrdastbaaf.com/..." />
+                                <p class="description">هر سه کیفیت اختیاری‌اند — هر نشانی پرشده باید https و از هاست مجاز باشد؛ خالی یعنی آن کیفیت موجود نیست.</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="mrd-lesson-q720">کیفیت 720p (URL)</label></th>
+                            <td><input type="url" id="mrd-lesson-q720" class="large-text code" dir="ltr" placeholder="https://dll.mrdastbaaf.com/..." /></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="mrd-lesson-q1080">کیفیت 1080p (URL)</label></th>
+                            <td><input type="url" id="mrd-lesson-q1080" class="large-text code" dir="ltr" placeholder="https://dll.mrdastbaaf.com/..." /></td>
                         </tr>
                         <tr>
                             <th scope="row">وضعیت دسترسی</th>
@@ -553,6 +576,14 @@ class MrDastbaaf_Settings_Controller {
                         var editingId = null;
                         var lessonsCache = [];
 
+                        // v1.4.0: کیفیت‌های اختیاری درس (نشانی‌ها باید https و از هاست مجاز باشند؛
+                        // اعتبارسنجی نهایی سمت سرور است — اینجا فقط جمع‌آوری می‌شود)
+                        var qualityInputs = [
+                            { label: '480p',  el: document.getElementById('mrd-lesson-q480') },
+                            { label: '720p',  el: document.getElementById('mrd-lesson-q720') },
+                            { label: '1080p', el: document.getElementById('mrd-lesson-q1080') }
+                        ];
+
                         function escapeHtml(value) {
                             var box = document.createElement('div');
                             box.textContent = (value === null || value === undefined) ? '' : String(value);
@@ -588,7 +619,7 @@ class MrDastbaaf_Settings_Controller {
                         }
 
                         function emptyRow(text) {
-                            tableBody.innerHTML = '<tr><td colspan="7" class="mrd-empty">' + escapeHtml(text) + '</td></tr>';
+                            tableBody.innerHTML = '<tr><td colspan="8" class="mrd-empty">' + escapeHtml(text) + '</td></tr>';
                         }
 
                         function fetchLessons(productId) {
@@ -619,10 +650,14 @@ class MrDastbaaf_Settings_Controller {
                             }
                             var html = '';
                             lessons.forEach(function (lesson, index) {
+                                var durationText = (lesson.durationMinutes && lesson.durationMinutes > 0)
+                                    ? escapeHtml(lesson.durationMinutes) + ' دقیقه'
+                                    : '—';
                                 html += '<tr>'
                                     + '<td>' + (index + 1) + '</td>'
                                     + '<td>' + escapeHtml(lesson.title) + '</td>'
                                     + '<td dir="ltr"><code>' + escapeHtml(lesson.videoUrl || '') + '</code></td>'
+                                    + '<td>' + durationText + '</td>'
                                     + '<td>' + (lesson.isFree ? 'بله' : '—') + '</td>'
                                     + '<td>' + tierLabel(lesson.requiredTier) + '</td>'
                                     + '<td>' + escapeHtml(lesson.sortOrder) + '</td>'
@@ -639,6 +674,8 @@ class MrDastbaaf_Settings_Controller {
                             editingId = null;
                             document.getElementById('mrd-lesson-title').value = '';
                             document.getElementById('mrd-lesson-video').value = '';
+                            document.getElementById('mrd-lesson-duration').value = '0';
+                            qualityInputs.forEach(function (q) { q.el.value = ''; });
                             document.getElementById('mrd-lesson-free').checked = false;
                             document.getElementById('mrd-lesson-tier').value = 'bronze';
                             document.getElementById('mrd-lesson-sort').value = '0';
@@ -648,8 +685,16 @@ class MrDastbaaf_Settings_Controller {
                         }
 
                         function fillForm(lesson) {
+                            var storedQualities = {};
+                            (lesson.qualities || []).forEach(function (q) {
+                                storedQualities[q.label] = q.url;
+                            });
                             document.getElementById('mrd-lesson-title').value = lesson.title || '';
                             document.getElementById('mrd-lesson-video').value = lesson.videoUrl || '';
+                            document.getElementById('mrd-lesson-duration').value = String(lesson.durationMinutes === undefined ? 0 : lesson.durationMinutes);
+                            qualityInputs.forEach(function (q) {
+                                q.el.value = storedQualities[q.label] || '';
+                            });
                             document.getElementById('mrd-lesson-free').checked = !!lesson.isFree;
                             document.getElementById('mrd-lesson-tier').value = lesson.requiredTier || 'bronze';
                             document.getElementById('mrd-lesson-sort').value = String(lesson.sortOrder === undefined ? 0 : lesson.sortOrder);
@@ -679,6 +724,12 @@ class MrDastbaaf_Settings_Controller {
                                 product_id: productId,
                                 title: document.getElementById('mrd-lesson-title').value,
                                 video_url: document.getElementById('mrd-lesson-video').value,
+                                duration_minutes: document.getElementById('mrd-lesson-duration').value,
+                                qualities: qualityInputs.reduce(function (list, q) {
+                                    var url = (q.el.value || '').trim();
+                                    if (url) { list.push({ label: q.label, url: url }); }
+                                    return list;
+                                }, []),
                                 is_free: document.getElementById('mrd-lesson-free').checked,
                                 required_tier: document.getElementById('mrd-lesson-tier').value,
                                 sort_order: document.getElementById('mrd-lesson-sort').value

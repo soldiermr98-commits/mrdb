@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.3.5
+ * Version: 1.4.0
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.3.5');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.4.0');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -51,6 +51,20 @@ define('MRDASTBAAF_BRIDGE_VERSION', '1.3.5');
  *     نبودش قالب مینیمال افزونه در templates/mrdapp-canvas.php) رندر می‌کند تا
  *     استایل صفحات المنتور در iframe وب‌اپ به‌هم نریزد؛ همان سطح دسترسی
  *     صفحات وب‌اپ (fail-closed) + سربرگ‌های no-store روی این مسیر اعمال می‌شود.
+ * v1.4.0: هفت بهبود NEW —
+ *  ۱) ورود: پاسخ request-otp پرچم isRegistered می‌گیرد و verify-otp نام/نام‌خانوادگی
+ *     اختیاری (فقط حروف فارسی/فاصله/نیم‌فاصله، حداکثر ۶۰ کاراکتر) می‌پذیرد — نام
+ *     واقعی جای «هنرجو NNNN» می‌نشیند و متیاهای صورتحساب ووکامرس هم به‌روز می‌شوند.
+ *  ۲) دوره‌ها: فیلد duration عددی (جمع دقیقه‌های درس‌ها) + پرچم owned در لیست و
+ *     اندپوینت NEW GET /my/courses (دوره‌های خریداری‌شدهٔ کاربر جاری).
+ *  ۳) درس‌ها: دو ستون NEW در جدول lessons (duration_minutes / qualities_json —
+ *     اسکیما ۱.۴.۰ با dbDelta روی نصب‌های موجود آپگرید می‌شود) + فیلدهای مدت و
+ *     کیفیت ۴۸۰/۷۲۰/۱۰۸۰ در صفحهٔ «درس‌ها و ویدیوها» + پاسخ playback کلید
+ *     qualities می‌گیرد (فیلتر مستند mrdastbaaf_stream_video_qualities اکنون واقعاً
+ *     موجود است).
+ *  ۴) فروشگاه: زیرصفحهٔ NEW «محصولات فیزیکی» (آپشن mrdastbaaf_physical_products)
+ *     و اندپوینت عمومی NEW GET /shop/products برای بخش «محصولات دست‌ساز» وب‌اپ.
+ *  ۵) «محتوای وب‌اپ»: سکشن پنجم NEW با کلید physical_products.
  */
 
 /**
@@ -68,8 +82,15 @@ define('MRDASTBAAF_BRIDGE_VERSION', '1.3.5');
  *   ۲) wp_mrdastbaaf_audit_log (ثبت ردپای اقدامات ادمین/سیستم)؛
  * به‌علاوه ستون NEW: orders.updated_at (پنجرهٔ بازبینی‌پذیری سفارش‌های شکست‌خورده
  * و بازیابی سفارش‌های verifying گیرکرده توسط ریکنسیلیشن).
+ *
+ * v1.4.0 (اسکیما ۱.۴.۰): دو ستون NEW در جدول wp_mrdastbaaf_lessons —
+ *   duration_minutes (smallint unsigned؛ مدت هر درس به دقیقه — جمع آن فیلد
+ *   duration را در /courses و /courses/{slug} عددی می‌کند) و qualities_json
+ *   (text NULL؛ کیفیت‌های ۴۸۰p/۷۲۰p/۱۰۸۰p هر درس برای پاسخ playback). چک نسخهٔ
+ *   پایین (mrdastbaaf_bridge_maybe_upgrade_db) dbDelta را دوباره اجرا می‌کند و
+ *   ستون‌ها روی نصب‌های موجود بدون دستور دستی اضافه می‌شوند.
  */
-define('MRDASTBAAF_DB_VERSION', '1.3.0');
+define('MRDASTBAAF_DB_VERSION', '1.4.0');
 define('MRDASTBAAF_BRIDGE_PATH', plugin_dir_path(__FILE__));
 define('MRDASTBAAF_BRIDGE_URL', plugin_dir_url(__FILE__));
 define('MRDASTBAAF_API_NAMESPACE', 'mrdastbaaf/v1');
@@ -80,6 +101,9 @@ require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-sms-service.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-membership-helper.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-auth-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-courses-controller.php';
+// v1.4.0: فروشگاه — محصولات فیزیکی دست‌ساز (پیش از کنترلر صفحات ادمین تا
+// زیرصفحهٔ «محصولات فیزیکی» به آپشن مشترک آن دسترسی داشته باشد)
+require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-shop-controller.php';
 // v1.3.3: صفحات وب‌اپ (منوی اپ + سطح دسترسی از پیشخوان)
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-app-pages-controller.php';
 // v1.3.4: محتوای وب‌اپ (REST /app-ui) + پل ووکامرس (پیش از کنترلر صفحات ادمین —
@@ -240,6 +264,7 @@ class MrDastbaaf_Bridge_Plugin {
             MrDastbaaf_Admin_Pages_Controller::APP_PAGES_SLUG, // mrdastbaaf-app-pages (v1.3.3)
             MrDastbaaf_Admin_Pages_Controller::APP_UI_SLUG,    // mrdastbaaf-app-ui (v1.3.4)
             MrDastbaaf_Admin_Pages_Controller::WOO_MAP_SLUG,   // mrdastbaaf-woo-map (v1.3.4)
+            MrDastbaaf_Admin_Pages_Controller::PHYSICAL_SLUG,  // mrdastbaaf-physical (v1.4.0)
         );
         if (in_array($page, $allowed, true)) {
             wp_enqueue_style(
@@ -268,6 +293,10 @@ class MrDastbaaf_Bridge_Plugin {
         // v1.3.4: محتوای وب‌اپ (متن‌های بنر/سکشن‌ها/منو — GET /app-ui)
         $app_ui_controller = new MrDastbaaf_App_UI_Controller();
         $app_ui_controller->register_routes();
+
+        // v1.4.0: فروشگاه (محصولات فیزیکی دست‌ساز — GET /shop/products)
+        $shop_controller = new MrDastbaaf_Shop_Controller();
+        $shop_controller->register_routes();
 
         $memberships_controller = new MrDastbaaf_Memberships_Controller();
         $memberships_controller->register_routes();
