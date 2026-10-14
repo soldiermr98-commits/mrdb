@@ -24,7 +24,8 @@ export const transferService = {
     // v1.1.0 Real-API: POST /payment/manual-transfer/submit — دقیقاً snake_case PHP:
     // {plan_id, tracking_code, card_last_four, deposit_date, notes}
     // پاسخ: {success, orderId, orderNumber, status: 'pending', message}
-    // سفارش واقعی سمت سرور ثبت می‌شود؛ یک آینه محلی هم برای تاریخچه داشبورد ذخیره می‌شود.
+    // سفارش واقعی سمت سرور ثبت می‌شود؛ از v1.2.0 (hardening) تاریخچه داشبورد
+    // از GET /me/orders خوانده می‌شود و دیگر آینهٔ محلی نوشته نمی‌شود.
     // ----------------------------------------------------------------------
     if (isRealApiMode) {
       const res = await apiFetch<{
@@ -46,7 +47,14 @@ export const transferService = {
       });
 
       const createdAt = new Date().toISOString();
-      const mirroredOrder: PaymentOrder = {
+      // ---------------------------------------------------------------------
+      // Hardening (prelive 18-b): آینهٔ محلی در حالت Real حذف شد — دفتر مالی
+      // سرور است (GET /me/orders) و نوشتن محلی، وضعیت سروری را می‌تواند گمراه
+      // کند (سفارش rejected/completed سمت سرور هرگز به آینه منتقل نمی‌شد).
+      // یک رکورد گذرا (بدون ذخیره در orderStore) فقط برای UI فرم (شماره پیگیری
+      // روی صفحهٔ موفقیت) ساخته و برگردانده می‌شود.
+      // ---------------------------------------------------------------------
+      const transientOrder: PaymentOrder = {
         id: typeof res.orderId === 'string' && res.orderId ? res.orderId : orderStore.nextOrderId(),
         orderNumber:
           typeof res.orderNumber === 'string' && res.orderNumber
@@ -60,7 +68,7 @@ export const transferService = {
         itemTitle: plan.title,
         amountToman: plan.priceToman,
         gateway: 'card_to_card',
-        // وضعیت واقعی سمت سرور است — آینه محلی همیشه همان وضعیت ثبت اولیه را نشان می‌دهد.
+        // وضعیت واقعی سمت سرور است — رکورد گذرا فقط وضعیت ثبت اولیه را نشان می‌دهد.
         status: 'pending',
         createdAt,
         createdAtJalali: formatJalali(createdAt, true),
@@ -68,13 +76,7 @@ export const transferService = {
         planSnapshot: { tier: plan.tier, durationDays: planDurationToDays(plan.duration) },
       };
 
-      // آینه محلی best-effort است — شکست فضای localStorage نباید ثبتِ موفق سرور را پنهان کند.
-      try {
-        orderStore.add(mirroredOrder);
-      } catch (e) {
-        // ignore
-      }
-      return mirroredOrder;
+      return transientOrder;
     }
 
     await new Promise((res) => setTimeout(res, 500));

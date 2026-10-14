@@ -20,7 +20,8 @@ import {
 // Sparkles). Play + Bookmark stay — they are used by the DEV-4 «ادامه یادگیری»
 // and DEV-5 «نشان‌شده‌ها» features below.
 import { Course, Lesson, PaymentOrder, UserProfile } from '../types';
-import { paymentService } from '../services/paymentService';
+import { isRealApiMode } from '../services/apiClient';
+import { ORDER_GATEWAY_LABELS, ORDER_STATUS_LABELS, paymentService } from '../services/paymentService';
 import { courseService } from '../services/courseService';
 import { membershipService } from '../services/membershipService';
 import { formatJalali, daysUntil, formatToman } from '../utils/format';
@@ -33,6 +34,92 @@ interface UserDashboardViewProps {
   onOpenMembership: () => void;
   onPlayLesson: (course: Course, lesson: any) => void;
 }
+
+// ---------------------------------------------------------------------------
+// Hardening (prelive 18-b — یافتهٔ 1-9): ردیف سفارش مشترک دمو/Real.
+// مارک‌آپ و کلاس‌ها عیناً همان لیست دموی قبلی است؛ فقط برچسب وضعیت/درگاه از
+// ORDER_STATUS_LABELS / ORDER_GATEWAY_LABELS می‌آید تا متن دمو و Real یکسان بماند.
+// در حالت Real دکمه‌های دمویی (تایید شبیه‌ساز) در این لیست وجود ندارد — ردیف‌ها
+// فقط نمایشی‌اند و هیچ کنش محلی روی سفارش سروری گرفته نمی‌شود.
+// ---------------------------------------------------------------------------
+interface OrderRowProps {
+  order: PaymentOrder;
+}
+
+const OrderRow: React.FC<OrderRowProps> = ({ order }) => {
+  const statusLabel = ORDER_STATUS_LABELS[order.status] ?? order.status;
+
+  return (
+    <div
+      className="p-3.5 rounded-2xl border border-stone-200 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-stone-50/60"
+    >
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-stone-900">{order.itemTitle}</span>
+          <span className="font-mono text-[10px] text-stone-500">
+            ({order.orderNumber})
+          </span>
+        </div>
+
+        <div className="flex items-center gap-3 text-[11px] text-stone-500">
+          {/* LIVE-DATE FIX (BUG-23): render from the ISO timestamp; the
+              stored createdAtJalali is only a fallback for legacy records. */}
+          <span>{order.createdAt ? formatJalali(order.createdAt, true) : order.createdAtJalali}</span>
+          <span>·</span>
+          <span>روش: {ORDER_GATEWAY_LABELS[order.gateway] ?? (order.gateway === 'zibal' ? 'درگاه زیبال' : 'کارت به کارت')}</span>
+          {order.zibalRefNumber && (
+            <span>· پیگیری: {order.zibalRefNumber}</span>
+          )}
+        </div>
+
+        {order.manualTransferDetails?.adminReviewNote && (
+          <p className="text-[11px] text-amber-900 bg-amber-100/60 px-2 py-0.5 rounded-md mt-1 inline-block">
+            پیام پشتیبانی: {order.manualTransferDetails.adminReviewNote}
+          </p>
+        )}
+      </div>
+
+      <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end pt-2 sm:pt-0 border-t sm:border-t-0 border-stone-200">
+        <span className="font-bold font-mono text-amber-900">
+          {formatToman(order.amountToman)} تومان
+        </span>
+
+        {/* چیپ وضعیت — همان کلاس‌های رنگی موجود دمو، برچسب از ORDER_STATUS_LABELS */}
+        {order.status === 'completed' && (
+          <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1">
+            <CheckCircle className="w-3 h-3 text-emerald-600" />
+            {statusLabel}
+          </span>
+        )}
+
+        {order.status === 'pending' && (
+          <span className="bg-amber-100 text-amber-900 text-[10px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1">
+            <Clock className="w-3 h-3 text-amber-700" />
+            {statusLabel}
+          </span>
+        )}
+
+        {(order.status === 'rejected' || order.status === 'failed') && (
+          <span className="bg-red-100 text-red-800 text-[10px] font-bold px-2.5 py-1 rounded-full">
+            {statusLabel}
+          </span>
+        )}
+
+        {order.status === 'cancelled' && (
+          <span className="bg-stone-200 text-stone-700 text-[10px] font-bold px-2.5 py-1 rounded-full">
+            {statusLabel}
+          </span>
+        )}
+
+        {(order.status === 'verifying' || order.status === 'processing') && (
+          <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold px-2.5 py-1 rounded-full">
+            {statusLabel}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
 
 export const UserDashboardView: React.FC<UserDashboardViewProps> = ({
   currentUser,
@@ -53,7 +140,9 @@ export const UserDashboardView: React.FC<UserDashboardViewProps> = ({
     // silently stale) and isLoading was never rendered, so the orders section
     // falsely showed «تاکنون سفارشی ثبت نکرده‌اید» while loading.
     Promise.all([
-      paymentService.getUserOrders(currentUser.id),
+      // Hardening (prelive 18-b — یافتهٔ 1-9): در حالت Real تاریخچهٔ سفارش از سرور
+      // (GET /me/orders) می‌آید؛ دمو همان orderStore محلی را می‌خواند.
+      isRealApiMode ? paymentService.fetchOrders() : paymentService.getUserOrders(currentUser.id),
       courseService.getCourses(),
     ])
       .then(([ords, loadedCourses]) => {
@@ -94,8 +183,6 @@ export const UserDashboardView: React.FC<UserDashboardViewProps> = ({
   const isMembershipActive = membershipService.isMembershipLive(currentUser);
   // BUG-48: daysUntil returns number|null — null must render as «—», never «۰ روز».
   const liveDaysRemaining = membership ? daysUntil(membership.expiresAt) : null;
-
-  const formatPrice = (p: number) => formatToman(p);
 
   // ------------------------------------------------------------------
   // DEV-4: course progress + continue watching
@@ -407,87 +494,9 @@ export const UserDashboardView: React.FC<UserDashboardViewProps> = ({
           </p>
         ) : (
           <div className="space-y-2.5">
-            {orders.map((ord) => {
-              const isCompleted = ord.status === 'completed';
-              const isPending = ord.status === 'pending';
-              const isRejected = ord.status === 'rejected' || ord.status === 'failed';
-              // PHASE-3: وضعیت‌های جدید فاز ۳ — سفارش لغوشده/در حال بررسی بی‌برچسب نماند
-              const isCancelled = ord.status === 'cancelled';
-              const isProcessing = ord.status === 'verifying' || ord.status === 'processing';
-
-              return (
-                <div
-                  key={ord.id}
-                  className="p-3.5 rounded-2xl border border-stone-200 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-stone-50/60"
-                >
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-stone-900">{ord.itemTitle}</span>
-                      <span className="font-mono text-[10px] text-stone-500">
-                        ({ord.orderNumber})
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-3 text-[11px] text-stone-500">
-                      {/* LIVE-DATE FIX (BUG-23): render from the ISO timestamp; the
-                          stored createdAtJalali is only a fallback for legacy records. */}
-                      <span>{ord.createdAt ? formatJalali(ord.createdAt, true) : ord.createdAtJalali}</span>
-                      <span>·</span>
-                      <span>
-                        روش: {ord.gateway === 'zibal' ? 'درگاه زیبال' : 'کارت به کارت'}
-                      </span>
-                      {ord.zibalRefNumber && (
-                        <span>· پیگیری: {ord.zibalRefNumber}</span>
-                      )}
-                    </div>
-
-                    {ord.manualTransferDetails?.adminReviewNote && (
-                      <p className="text-[11px] text-amber-900 bg-amber-100/60 px-2 py-0.5 rounded-md mt-1 inline-block">
-                        پیام پشتیبانی: {ord.manualTransferDetails.adminReviewNote}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end pt-2 sm:pt-0 border-t sm:border-t-0 border-stone-200">
-                    <span className="font-bold font-mono text-amber-900">
-                      {formatPrice(ord.amountToman)} تومان
-                    </span>
-
-                    {isCompleted && (
-                      <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1">
-                        <CheckCircle className="w-3 h-3 text-emerald-600" />
-                        تایید شده
-                      </span>
-                    )}
-
-                    {isPending && (
-                      <span className="bg-amber-100 text-amber-900 text-[10px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-amber-700" />
-                        در انتظار بررسی
-                      </span>
-                    )}
-
-                    {isRejected && (
-                      <span className="bg-red-100 text-red-800 text-[10px] font-bold px-2.5 py-1 rounded-full">
-                        رد شده / ناموفق
-                      </span>
-                    )}
-
-                    {isCancelled && (
-                      <span className="bg-stone-200 text-stone-700 text-[10px] font-bold px-2.5 py-1 rounded-full">
-                        لغو شده
-                      </span>
-                    )}
-
-                    {isProcessing && (
-                      <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold px-2.5 py-1 rounded-full">
-                        در حال بررسی
-                      </span>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            {orders.map((ord) => (
+              <OrderRow key={ord.id} order={ord} />
+            ))}
           </div>
         )}
       </div>

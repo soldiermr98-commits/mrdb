@@ -30,6 +30,36 @@ interface HomeViewProps {
   onSelectPlan: (plan: MembershipPlan) => void;
 }
 
+// ---------------------------------------------------------------------------
+// Hardening (prelive 18-b — یافتهٔ 2-18): امنیت رندر configData.
+//
+// راستی‌آزمایی فاز پیاده‌سازی (کل src):
+//  - هیچ dangerouslySetInnerHTML / innerHTML در کل کد فرانت وجود ندارد
+//    (جستجو: rg 'dangerouslySetInnerHTML|innerHTML' → صفر نتیجه).
+//  - configData در همهٔ سکشن‌ها فقط به‌صورت «متن» در React JSX رندر می‌شود
+//    (badgeText/headline/subheadline/quoteText/author) — React متن را escape
+//    می‌کند؛ هیچ href/src دینامیکی از configData ساخته نمی‌شود.
+//
+// برای آینده: هر سکشنی که خواست از configData مقدار URL-مانند (href لینک،
+// src تصویر/ویدیو) رندر کند، موظف است از safeExternalUrl زیر عبور دهد —
+// فقط scheme‌های http/https/mailto/tel مجازند و خروجی نامعتبر → null است.
+// ---------------------------------------------------------------------------
+export function safeExternalUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim();
+  if (value === '') return null;
+  try {
+    const parsed = new URL(value);
+    const scheme = parsed.protocol.replace(/:$/, '').toLowerCase();
+    return ['http', 'https', 'mailto', 'tel'].includes(scheme) ? value : null;
+  } catch {
+    // URL مطلق نبود — مقادیر نسبی («/membership») برای anchor/video بی‌خطرند؛
+    // اما مقادیر با «javascript:» و امثال آن در اینجا هرگز رد می‌شوند.
+    if (/^(https?|mailto|tel):/i.test(value)) return value;
+    return /^\/(?!\/)/.test(value) ? value : null;
+  }
+}
+
 export const HomeView: React.FC<HomeViewProps> = ({
   onNavigate,
   onOpenLessonPreview,
