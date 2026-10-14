@@ -34,6 +34,12 @@
  * categories: [] و featured: []. «featured» نیز مرتب بر اساس عنوان است و
  * تیک‌خوردهٔ نامنتشرشده بی‌صدا حذف می‌شود؛ محصولِ «فقط-ویژه» (غیر فیزیکی)
  * فقط در featured می‌آید و دسته‌ها را تغییر نمی‌دهد (قرارداد ۱.۴.۰ عیناً حفظ می‌شود).
+ *
+ * v1.6.0: از v1.5.1 فقط محصولات «ویژه» در اپ نمایش داده می‌شوند (خواستهٔ کارفرما —
+ * گریدِ «همهٔ محصولات» حذف شد) و همان‌ها با «انتخاب دسته‌بندی» (چیپ‌های فیلتر که
+ * کلاینت از همین پاسخ می‌سازد) رندر می‌شوند. برای خرید درون‌اپ (kind='shop' در
+ * initiate)، is_shop_product اجتماعِ دو فهرست را احراز می‌کند — بدون هیچ پرس‌وجوی
+ * سنگین اضافه‌ای.
  */
 
 if (!defined('ABSPATH')) {
@@ -101,6 +107,25 @@ class MrDastbaaf_Shop_Controller {
             }
         }
         return array_values(array_unique($ids));
+    }
+
+    /**
+     * v1.6.0: آیا این محصول در فهرست‌های فروشگاه وب‌اپ (فیزیکی «یا» ویژه) تیک خورده؟
+     * گارد initiate مسیر kind='shop' — اجتماعِ دو فهرست پیشخوان؛ بدون پرس‌وجو
+     * (هر دو آپشن در حافظه خوانده می‌شوند).
+     *
+     * @param int $product_id شناسهٔ محصول ووکامرس
+     * @return bool
+     */
+    public static function is_shop_product($product_id) {
+        $product_id = absint($product_id);
+        if ($product_id <= 0) {
+            return false;
+        }
+        if (in_array($product_id, self::get_physical_product_ids(), true)) {
+            return true;
+        }
+        return in_array($product_id, self::get_featured_product_ids(), true);
     }
 
     /**

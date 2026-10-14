@@ -6,6 +6,13 @@
  * «خرید تک‌دوره‌ای» را می‌سازد (plan_id = course-{id})؛ در تایید، سفارشِ واقعی
  * ووکامرس در وضعیت processing ساخته می‌شود و بقیهٔ هستهٔ تایید/ریکنسیلیشن عیناً
  * مشترک باقی می‌ماند.
+ *
+ * v1.6.0: مسیر سوم «خرید محصول فیزیکی از داخل وب‌اپ» — initiate با
+ * {product_id, kind: 'shop'} + اطلاعات ارسال (full_name/phone/address/postal_code).
+ * در تایید، سفارش ووکامرسِ واقعی (processing) با نشانی صورتحساب/ارسال کامل ساخته
+ * می‌شود → ایمیل استاندارد «سفارش جدید» ووکامرس برای ادمین. سبک: بدون جدول/ستون
+ * جدید — اطلاعات ارسال در user_meta «mrdastbaaf_shop_shipping» (یک ردیف به‌ازای
+ * هر کاربر، دفعهٔ بعد پیش‌پر می‌شود) نگهداری و در یادداشت سفارش هم درج می‌گردد.
  */
 
 if (!defined('ABSPATH')) {
@@ -214,6 +221,75 @@ class MrDastbaaf_Payment_Controller {
     }
 
     /**
+     * v1.6.0: اعتبارسنجی محصول فیزیکی/ویژهٔ پیشخوان برای خرید درون‌اپ — آینهٔ
+     * validate_course_product_for_purchase اما بدون گارد «قبلاً خریداری‌شده»
+     * (محصول فیزیکی تکراراً قابل خرید است) و بدون قید دستهٔ دوره‌ها؛ به‌جای آن
+     * محصول باید در فهرست تیک‌خورده‌های «محصولات فیزیکی» یا «محصولات ویژه»
+     * پیشخوان باشد (همان چیزی که در اپ نمایش داده می‌شود).
+     *
+     * @param int $product_id شناسهٔ محصول ووکامرس
+     * @return array|WP_Error array{title: string, price: int} در موفقیت
+     */
+    private function validate_shop_product_for_purchase($product_id) {
+        $product = function_exists('wc_get_product') ? wc_get_product($product_id) : null;
+        if (!$product || 'publish' !== get_post_status($product_id)) {
+            return new WP_Error('product_not_found', 'محصول انتخاب‌شده یافت نشد یا قابل خرید نیست.', array('status' => 404));
+        }
+
+        if (!MrDastbaaf_Shop_Controller::is_shop_product($product_id)) {
+            return new WP_Error('product_not_available', 'این محصول برای فروش در وب‌اپلیکیشن فعال نیست.', array('status' => 400));
+        }
+
+        $price = (int) $product->get_price();
+        if ($price <= 0) {
+            return new WP_Error('product_price_invalid', 'قیمت این محصول در ووکامرس تنظیم نشده است؛ لطفاً با پشتیبانی تماس بگیرید.', array('status' => 400));
+        }
+
+        return array(
+            'title' => (string) get_the_title($product_id),
+            'price' => $price,
+        );
+    }
+
+    /**
+     * v1.6.0: نرمال‌سازی موبایل ایرانی — ارقام فارسی/عربی → انگلیسی، حذف کاراکترهای
+     * غیرعددی، هدایت 0098/98/+98 و 9x ده‌رقمی به قالب استاندارد 09xxxxxxxxx.
+     * خروجی نامعتبر همان رشتهٔ پاک‌شده است؛ caller با regex نهایی تصمیم می‌گیرد.
+     *
+     * @param mixed $raw ورودی خام (رشته/عدد)
+     * @return string
+     */
+    private function normalize_ir_mobile($raw) {
+        $digits = $this->to_english_digits((string) $raw);
+        $digits = preg_replace('/\D+/', '', $digits);
+        if (strpos($digits, '0098') === 0) {
+            $digits = '0' . substr($digits, 4);
+        } elseif (strpos($digits, '98') === 0 && strlen($digits) >= 12) {
+            $digits = '0' . substr($digits, 2);
+        }
+        if (strpos($digits, '9') === 0 && strlen($digits) === 10) {
+            $digits = '0' . $digits;
+        }
+        return $digits;
+    }
+
+    /**
+     * v1.6.0: تبدیل ارقام فارسی/عربی به انگلیسی — نسخهٔ سبک سمت سرور از همان
+     * منطق utils/format.ts اپ (تا ورودی‌های فارسی‌صفحه کلاید با regex عددی کار کنند).
+     *
+     * @param string $value
+     * @return string
+     */
+    private function to_english_digits($value) {
+        return strtr((string) $value, array(
+            '۰' => '0', '۱' => '1', '۲' => '2', '۳' => '3', '۴' => '4',
+            '۵' => '5', '۶' => '6', '۷' => '7', '۸' => '8', '۹' => '9',
+            '٠' => '0', '١' => '1', '٢' => '2', '٣' => '3', '٤' => '4',
+            '٥' => '5', '٦' => '6', '٧' => '7', '٨' => '8', '٩' => '9',
+        ));
+    }
+
+    /**
      * ایجاد فاکتور و درخواست شناسه پرداخت از زیبال (Server-to-Server Request)
      */
     public function handle_zibal_initiate(WP_REST_Request $request) {
@@ -230,6 +306,9 @@ class MrDastbaaf_Payment_Controller {
         $plan_id = sanitize_text_field($request->get_param('plan_id'));
         // v1.5.0: خرید تک‌دوره‌ای — شناسهٔ اختیاری محصول ووکامرس (وقتی plan_id خالی است)
         $product_id = absint($request->get_param('product_id'));
+        // v1.6.0: kind = 'shop' → خرید محصول فیزیکی؛ خالی/هر چیز دیگر → مسیر دورهٔ 1.5.0 (سازگاری کامل)
+        $kind = sanitize_text_field($request->get_param('kind'));
+        $shop_shipping_meta = null;
 
         /**
          * v1.5.0: دو مسیر سفارش با یک هستهٔ مشترک — اشتراک (plan_id) یا خرید
@@ -237,6 +316,9 @@ class MrDastbaaf_Payment_Controller {
          * برای دوره‌ها plan_id با پیشوند «course-» ذخیره می‌شود (finalize_verified_order
          * شاخه‌اش را جدا می‌کند) و همهٔ گاردهای پایین (درگاه، سقف pending، BUG-15،
          * insert_or_fail) بدون استثنا روی هر دو اعمال می‌شوند.
+         *
+         * v1.6.0: مسیر سوم — product_id + kind='shop' (محصول فیزیکی) با پیشوند
+         * «shop-»؛ اطلاعات ارسال پس از پذیرش درگاه ذخیره و در finalize مصرف می‌شود.
          */
         if ('' !== $plan_id) {
             $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
@@ -255,6 +337,47 @@ class MrDastbaaf_Payment_Controller {
             $item_title = (string) $plan->title;
             $amount_toman = (int) $plan->price_toman;
             $zibal_description = 'خرید اشتراک ' . $plan->title . ' در مستر دستباف';
+        } elseif ($product_id > 0 && 'shop' === $kind) {
+            /**
+             * v1.6.0: خرید محصول فیزیکی از داخل وب‌اپ — همان هستهٔ initiate؛ فقط
+             * اعتبارسنجی محصول از فهرست «محصولات فیزیکی/ویژه» پیشخوان است و
+             * اطلاعات ارسال (نام/موبایل/نشانی/کدپستی) پیش از ثبت سفارش سنجیده
+             * می‌شود. بدون ورود، هیچ مسیری اجرا نمی‌شود (permission_logged_in).
+             */
+            $shop_check = $this->validate_shop_product_for_purchase($product_id);
+            if (is_wp_error($shop_check)) {
+                return $shop_check;
+            }
+
+            $ship_full_name = sanitize_text_field($request->get_param('full_name'));
+            $ship_phone = $this->normalize_ir_mobile($request->get_param('phone'));
+            $ship_address = trim((string) sanitize_textarea_field($request->get_param('address')));
+            $ship_postal = trim((string) preg_replace('/\D+/', '', $this->to_english_digits((string) $request->get_param('postal_code'))));
+
+            if ('' === $ship_full_name) {
+                return new WP_Error('invalid_shipping', 'نام و نام خانوادگی گیرنده الزامی است.', array('status' => 400));
+            }
+            if (!preg_match('/^09\d{9}$/', $ship_phone)) {
+                return new WP_Error('invalid_shipping', 'شماره موبایل گیرنده معتبر نیست (مثال: 09123456789).', array('status' => 400));
+            }
+            if (mb_strlen($ship_address) < 10) {
+                return new WP_Error('invalid_shipping', 'برای ارسال محصول، نشانی کامل پستی (استان، شهر، خیابان، پلاک) الزامی است.', array('status' => 400));
+            }
+            if ('' !== $ship_postal && !preg_match('/^\d{5,10}$/', $ship_postal)) {
+                return new WP_Error('invalid_shipping', 'کد پستی معتبر نیست.', array('status' => 400));
+            }
+
+            $order_plan_id = 'shop-' . $product_id; // در محدودهٔ varchar(64)
+            $item_title = $shop_check['title'];
+            $amount_toman = $shop_check['price'];
+            $zibal_description = 'خرید محصول ' . $shop_check['title'] . ' در مستر دستباف';
+            // پس از موفقیت درگاه در همین initiate ذخیره می‌شود (پیش از return)
+            $shop_shipping_meta = array(
+                'full_name'   => $ship_full_name,
+                'phone'       => $ship_phone,
+                'address'     => $ship_address,
+                'postal_code' => $ship_postal,
+            );
         } elseif ($product_id > 0) {
             $course_check = $this->validate_course_product_for_purchase($product_id, $user_id);
             if (is_wp_error($course_check)) {
@@ -358,6 +481,16 @@ class MrDastbaaf_Payment_Controller {
         $track_updated = $wpdb->update($table_orders, array('zibal_track_id' => $track_id), array('id' => $order_id));
         if (false === $track_updated) {
             error_log('MrDastbaaf: zibal_track_id update failed for order ' . $order_id . ' — ' . $wpdb->last_error);
+        }
+
+        /**
+         * v1.6.0: اطلاعات ارسال محصول فیزیکی — فقط پس از پذیرش درگاه ذخیره می‌شود
+         * تا شکستِ initiate هیچ ردیفی جا نگذارد. یک کلید ثابت به‌ازای هر کاربر
+         * (بازنویسی هر بار) — دفعهٔ بعدِ خرید همین اطلاعات پیش‌پر می‌شود و هیچ
+         * ردیفِ یتیمی انبار نمی‌شود (پاکسازی لازم ندارد؛ سبک ماندن افزونه).
+         */
+        if (is_array($shop_shipping_meta)) {
+            update_user_meta($user_id, 'mrdastbaaf_shop_shipping', $shop_shipping_meta);
         }
 
         return rest_ensure_response(array(
@@ -614,6 +747,11 @@ class MrDastbaaf_Payment_Controller {
             return $this->finalize_course_order($order, $ref_number);
         }
 
+        // v1.6.0: شاخهٔ خرید محصول فیزیکی — plan_id با پیشوند «shop-»
+        if (strpos((string) $order->plan_id, 'shop-') === 0) {
+            return $this->finalize_shop_order($order, $ref_number);
+        }
+
         /**
          * SECURITY FIX (BUG-14 caller): فعال‌سازی اشتراک «قبل از» علامت‌گذاری
          * سفارش به‌عنوان completed انجام می‌شود. اگر grant_or_extend شکست بخورد
@@ -758,6 +896,127 @@ class MrDastbaaf_Payment_Controller {
             'membershipMode' => 'course',
             'membershipExpiresAt' => null,
             'message' => 'پرداخت با موفقیت تایید شد و دوره به حساب شما اضافه شد.',
+        );
+    }
+
+    /**
+     * v1.6.0: تکمیل سفارش تاییدشدهٔ «خرید محصول فیزیکی از وب‌اپ» — ساخت سفارش
+     * ووکامرسِ واقعی در وضعیت processing با نشانی کامل صورتحساب/ارسال (از
+     * user_meta «mrdastbaaf_shop_shipping») → استوک محصول کم می‌شود و ایمیل
+     * استاندارد «سفارش جدید» ووکامرس برای ادمین می‌رود (اعلان ادمین بدون هیچ
+     * کانال اضافه‌ای). یادداشت سفارش، خلاصهٔ نشانی + کد پیگیری زیبال را دارد.
+     *
+     * الگوی BUG-14 عیناً حفظ شده: هر شکستی (محصول حذف‌شده/Exception) سفارش را
+     * به pending برمی‌گرداند تا ریکنسیلیشن/پشتیبانی دستی بررسی کند — پول کاربر
+     * هرگز گم نمی‌شود و خطا بلعیده نمی‌شود. متای ارسال حذف نمی‌شود تا هم برای
+     * تلاش بعدی ریکنسیلیشن موجود باشد و هم به‌عنوان نشانی پیش‌پرِ خرید بعدی کاربر.
+     *
+     * @param object $order      رکورد سفارش افزونه (plan_id = shop-{id})
+     * @param string $ref_number شماره مرجع زیبال
+     * @return array|WP_Error پاسخ قراردادی در موفقیت
+     */
+    private function finalize_shop_order($order, $ref_number) {
+        global $wpdb;
+        $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
+        $now = current_time('mysql');
+
+        $product_id = absint(substr((string) $order->plan_id, 5)); // پسوند «shop-»
+        $product = ($product_id > 0 && function_exists('wc_get_product')) ? wc_get_product($product_id) : false;
+        if (!$product) {
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_orders SET status = 'pending', updated_at = %s WHERE id = %s AND status = 'verifying'",
+                $now, $order->id
+            ));
+            error_log('MrDastbaaf: shop product missing for verified order ' . $order->id . ' (plan_id: ' . $order->plan_id . ')');
+            return new WP_Error('shop_order_failed', 'پرداخت تایید شد اما ایجاد سفارش محصول ممکن نشد؛ سفارش برای بررسی دستی باقی ماند.', array('status' => 409));
+        }
+
+        // اطلاعات ارسال ثبت‌شده در initiate (یک ردیف به‌ازای هر کاربر) — غایب = خرید قدیمی/دستی
+        $shipping = get_user_meta((int) $order->user_id, 'mrdastbaaf_shop_shipping', true);
+        $shipping = is_array($shipping) ? $shipping : array();
+        $full_name = isset($shipping['full_name']) ? sanitize_text_field($shipping['full_name']) : '';
+        $phone = isset($shipping['phone']) ? sanitize_text_field($shipping['phone']) : '';
+        $address = isset($shipping['address']) ? sanitize_textarea_field($shipping['address']) : '';
+        $postal = isset($shipping['postal_code']) ? sanitize_text_field($shipping['postal_code']) : '';
+
+        try {
+            $wc_order = wc_create_order(array('customer_id' => (int) $order->user_id, 'created_via' => 'mrdastbaaf-webapp'));
+            if (is_wp_error($wc_order)) {
+                throw new Exception($wc_order->get_error_message());
+            }
+            $wc_order->add_product($product, 1);
+
+            // کشور پیش‌فرض فروشگاه («IR:THR» → «IR») — ساب‌کی استان حذف می‌شود
+            $base_country = get_option('woocommerce_default_country', 'IR');
+            $base_country = (is_string($base_country) && '' !== $base_country) ? substr($base_country, 0, 2) : 'IR';
+
+            $billing = array(
+                'first_name' => ('' !== $full_name) ? $full_name : (string) $order->user_fullname,
+                'phone'      => ('' !== $phone) ? $phone : (string) $order->user_phone,
+                'country'    => $base_country,
+            );
+            if ('' !== $address) {
+                $billing['address_1'] = $address;
+                $billing['postcode'] = $postal;
+            }
+            $wc_order->set_address($billing, 'billing');
+
+            if ('' !== $address) {
+                $wc_order->set_address(array(
+                    'first_name' => $billing['first_name'],
+                    'address_1'  => $address,
+                    'postcode'   => $postal,
+                    'country'    => $base_country,
+                ), 'shipping');
+            } else {
+                $wc_order->add_order_note('نشانی پستی در وب‌اپ ثبت نشده بود — هماهنگی ارسال با تماس تلفنی.');
+            }
+
+            $wc_order->set_payment_method_title('درگاه زیبال (وب‌اپ مستر دستباف)');
+            $wc_order->update_meta_data('_mrdastbaaf_order_number', (string) $order->order_number);
+            $wc_order->update_meta_data('_mrdastbaaf_zibal_track', (string) $order->zibal_track_id);
+            $wc_order->add_order_note('خرید محصول فیزیکی از وب‌اپ — کد پیگیری زیبال: ' . (string) $order->zibal_track_id);
+            $wc_order->update_status('processing');
+            $wc_order->save();
+        } catch (Exception $e) {
+            error_log('MrDastbaaf: WC shop order creation failed for order ' . $order->id . ' — ' . $e->getMessage());
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_orders SET status = 'pending', updated_at = %s WHERE id = %s AND status = 'verifying'",
+                $now, $order->id
+            ));
+            return new WP_Error('shop_order_failed', 'پرداخت تایید شد اما ایجاد سفارش محصول ممکن نشد؛ سفارش برای بررسی دستی باقی ماند.', array('status' => 409));
+        } catch (Throwable $e) {
+            error_log('MrDastbaaf: WC shop order creation error (Throwable) for order ' . $order->id . ' — ' . $e->getMessage());
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_orders SET status = 'pending', updated_at = %s WHERE id = %s AND status = 'verifying'",
+                $now, $order->id
+            ));
+            return new WP_Error('shop_order_failed', 'پرداخت تایید شد اما ایجاد سفارش محصول ممکن نشد؛ سفارش برای بررسی دستی باقی ماند.', array('status' => 409));
+        }
+
+        // ثبت موفقیت فاکتور — کپی همان انتقال نهایی هستهٔ اشتراک (فقط از verifying)
+        $completed_updated = $wpdb->update($table_orders, array(
+            'status' => 'completed',
+            'zibal_ref_number' => $ref_number,
+            'verified_at' => $now,
+            'updated_at' => $now,
+        ), array('id' => $order->id, 'status' => 'verifying'));
+
+        if (false === $completed_updated) {
+            error_log('MrDastbaaf: final completed update failed for order ' . $order->id . ' — ' . $wpdb->last_error);
+            return new WP_Error('completion_update_failed', 'ثبت نهایی پرداخت ناموفق بود؛ سفارش در وضعیت پردازش باقی ماند و دوباره بررسی می‌شود.', array('status' => 500));
+        }
+
+        // آینهٔ هوک‌های دیگر مسیرها برای اطلاع‌رسانی‌های آینده
+        do_action('mrdastbaaf_shop_purchased', (int) $order->user_id, $product_id, $order->id);
+
+        return array(
+            'success' => true,
+            'orderNumber' => $order->order_number,
+            'refNumber' => $ref_number,
+            'membershipMode' => 'shop',
+            'membershipExpiresAt' => null,
+            'message' => 'پرداخت با موفقیت تایید شد؛ سفارش محصول شما در سایت ثبت شد و برای هماهنگی ارسال با شما تماس گرفته می‌شود.',
         );
     }
 
