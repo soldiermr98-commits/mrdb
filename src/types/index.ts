@@ -334,6 +334,18 @@ export interface ShopFeed {
   categories: ShopCategory[];
 }
 
+/**
+ * v1.5.0 — اطلاعات ارسال برای «خرید درون‌اپ محصول فیزیکی» (POST
+ * /payment/zibal/initiate {product_id, kind:'shop', ...} — افزونهٔ 1.6.0).
+ * کدپستی اختیاری است؛ بقیهٔ فیلدها پیش از ارسال در UI سنجیده می‌شوند.
+ */
+export interface ShopShippingInfo {
+  fullName: string;
+  phone: string;
+  address: string;
+  postalCode: string;
+}
+
 export interface AppUiConfig {
   hero: AppUiHero;
   sections: AppUiSection[];
