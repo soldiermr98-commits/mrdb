@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.3.1
+ * Version: 1.3.2
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.3.1');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.3.2');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -29,6 +29,9 @@ define('MRDASTBAAF_BRIDGE_VERSION', '1.3.1');
  * v1.3.1: گارد ضدکش REST — LiteSpeed Cache هدر Vary: Origin را نادیده می‌گیرد؛
  * پاسخ‌های اندپوینت‌های افزونه با Cache-Control: no-store و X-LiteSpeed-Cache-Control:
  * no-cache از کش مستثنی می‌شوند (هیچ تغییری در منطق/شکل پاسخ‌ها).
+ * v1.3.2: فیکس ۴۰۴ جزئیات دوره با اسلاگ فارسی — الگوی id اندپوینت /courses/{id}
+ * به [^/]+ گسترش یافت + جستجوی تحمل‌پذیر اسلاگ (خام/یک‌بار/دوبار encoded) چون
+ * وردپرس اسلاگ فارسی را به شکل «%d8%af...» ذخیره می‌کند و الگوی قبلی هرگز جور نمی‌شد.
  */
 
 /**
