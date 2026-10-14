@@ -14,6 +14,10 @@ interface ModalProps {
   subtitle?: string;
   children: React.ReactNode;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
+  // v1.2.7 (فیکس «فرم ورود پشت فرم خرید»): همهٔ مودال‌ها z-50 بودند و ترتیب DOM
+  // تعیین می‌کرد کدام بالاست — مودال ورود قبل از فرم خرید در DOM است و زیرش می‌افتاد.
+  // اکنون هر مودال می‌تواند لایهٔ بالاتری بگیرد (ورود = z-[70]).
+  overlayClassName?: string;
 }
 
 /** BUG-56: selector used by the focus trap to cycle Tab within the dialog. */
@@ -27,6 +31,7 @@ export const Modal: React.FC<ModalProps> = ({
   subtitle,
   children,
   maxWidth = 'md',
+  overlayClassName = '',
 }) => {
   const titleId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -101,8 +106,9 @@ export const Modal: React.FC<ModalProps> = ({
 
   return (
     // BUG-56: backdrop click now closes the modal (inner content stops propagation).
+    // v1.2.7: overlayClassName برای کنترل لایهٔ مودال‌های روی‌هم (پیش‌فرض z-50)
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto"
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto ${overlayClassName}`}
       onClick={onClose}
     >
       <div

@@ -5,7 +5,7 @@
 
 import React from 'react';
 import { Home, BookOpen, Crown, User, Menu } from 'lucide-react';
-import { UserRole } from '../../types';
+import { UserRole, AppUiDockItem } from '../../types';
 
 interface BottomNavProps {
   activeView: string;
@@ -15,7 +15,27 @@ interface BottomNavProps {
   onOpenLogin: () => void;
   /** v1.2.6: باز کردن شیت شیشه‌ای منو (صفحات سایت + راهنماها) */
   onOpenMenuSheet: () => void;
+  /**
+   * v1.2.7 — «محتوای وب‌اپ»: برچسب/نمایانی آیتم‌های داک از پیشخوان وردپرس
+   * (GET /app-ui → menu.dock). undefined = دمو/خطا → پیش‌فرض‌های کد.
+   * دکمهٔ «منو» همیشه ثابت می‌ماند (دسترسی به صفحات سایت/راهنماها).
+   */
+  dockConfig?: AppUiDockItem[];
 }
+
+const DEFAULT_DOCK: AppUiDockItem[] = [
+  { key: 'home', label: 'خانه', enabled: true },
+  { key: 'catalogue', label: 'دوره‌ها', enabled: true },
+  { key: 'membership', label: 'عضویت', enabled: true },
+  { key: 'dashboard', label: 'داشبورد', enabled: true },
+];
+
+const DOCK_ICONS: Record<AppUiDockItem['key'], React.ComponentType<{ className?: string }>> = {
+  home: Home,
+  catalogue: BookOpen,
+  membership: Crown,
+  dashboard: User,
+};
 
 /**
  * v1.2.5 — Glassmorphism dock شناور: نوار شیشه‌ای گرد با بلور قوی، هایلایت لبهٔ
@@ -37,73 +57,59 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   isLoggedIn,
   onOpenLogin,
   onOpenMenuSheet,
+  dockConfig,
 }) => {
+  // v1.2.7: آیتم‌های فعال از پیکربندی (پیش‌فرض کد وقتی پیکربندی نیست) — فقط آیتم‌های
+  // مجاز رندر می‌شوند؛ اگر کارفرما همه را خاموش کند، دکمهٔ «منو» حداقل باقی می‌ماند.
+  const dock = (dockConfig && dockConfig.length > 0 ? dockConfig : DEFAULT_DOCK).filter(
+    (item) => item.enabled
+  );
+
   return (
     <nav
       aria-label="ناوبری پایین"
       className="md:hidden fixed left-3 right-3 z-40 bottom-dock"
     >
       <div className="flex items-center justify-around max-w-md mx-auto rounded-[1.65rem] border border-white/60 bg-white/55 backdrop-blur-2xl backdrop-saturate-150 px-2 py-1.5 shadow-[0_16px_40px_-12px_rgba(120,53,15,0.35),inset_0_1px_0_0_rgba(255,255,255,0.7)]">
-        {/* 1. Home */}
-        <button
-          onClick={() => onNavigate('home')}
-          aria-label="خانه"
-          aria-current={activeView === 'home' ? 'page' : undefined}
-          className={itemClass(activeView === 'home')}
-        >
-          <Home className={`w-5 h-5 ${activeView === 'home' ? 'stroke-[2.5]' : 'stroke-2'}`} />
-          <span className="text-[10px] mt-1">خانه</span>
-        </button>
-
-        {/* 2. Courses Catalogue */}
-        <button
-          onClick={() => onNavigate('catalogue')}
-          aria-label="دوره‌ها"
-          aria-current={activeView === 'catalogue' ? 'page' : undefined}
-          className={itemClass(activeView === 'catalogue')}
-        >
-          <BookOpen className={`w-5 h-5 ${activeView === 'catalogue' ? 'stroke-[2.5]' : 'stroke-2'}`} />
-          <span className="text-[10px] mt-1">دوره‌ها</span>
-        </button>
-
-        {/* 3. Membership */}
-        <button
-          onClick={() => onNavigate('membership')}
-          aria-label="عضویت"
-          aria-current={activeView === 'membership' ? 'page' : undefined}
-          className={itemClass(activeView === 'membership')}
-        >
-          <Crown className={`w-5 h-5 ${activeView === 'membership' ? 'stroke-[2.5]' : 'stroke-2'}`} />
-          <span className="text-[10px] mt-1">عضویت</span>
-        </button>
-
-        {/* 4. Menu Sheet — v1.2.6: صفحات سایت (سطح دسترسی از پیشخوان) + راهنماها */}
-        <button
-          onClick={onOpenMenuSheet}
-          aria-label="باز کردن منو"
-          aria-haspopup="dialog"
-          className={itemClass(activeView === 'app_page')}
-        >
-          <Menu className="w-5 h-5 stroke-2" />
-          <span className="text-[10px] mt-1">منو</span>
-        </button>
-
-        {/* 5. User Dashboard */}
-        <button
-          onClick={() => {
-            if (isLoggedIn) {
-              onNavigate('dashboard');
-            } else {
-              onOpenLogin();
-            }
-          }}
-          aria-label={isLoggedIn ? 'داشبورد من' : 'ورود به حساب'}
-          aria-current={activeView === 'dashboard' ? 'page' : undefined}
-          className={itemClass(activeView === 'dashboard')}
-        >
-          <User className={`w-5 h-5 ${activeView === 'dashboard' ? 'stroke-[2.5]' : 'stroke-2'}`} />
-          <span className="text-[10px] mt-1">داشبورد</span>
-        </button>
+        {dock.map((item) => {
+          const Icon = DOCK_ICONS[item.key];
+          if (!Icon) return null;
+          const isDashboard = item.key === 'dashboard';
+          const targetView = item.key;
+          return (
+            <React.Fragment key={item.key}>
+              {/* دکمهٔ منو در همان موقعیت قبلی: بین «عضویت» و «داشبورد» (v1.2.6) */}
+              {isDashboard && (
+                <button
+                  onClick={onOpenMenuSheet}
+                  aria-label="باز کردن منو"
+                  aria-haspopup="dialog"
+                  className={itemClass(activeView === 'app_page')}
+                >
+                  <Menu className="w-5 h-5 stroke-2" />
+                  <span className="text-[10px] mt-1">منو</span>
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  if (isDashboard && !isLoggedIn) {
+                    onOpenLogin();
+                    return;
+                  }
+                  onNavigate(targetView);
+                }}
+                aria-label={item.label}
+                aria-current={activeView === targetView ? 'page' : undefined}
+                className={itemClass(activeView === targetView)}
+              >
+                <Icon
+                  className={`w-5 h-5 ${activeView === targetView ? 'stroke-[2.5]' : 'stroke-2'}`}
+                />
+                <span className="text-[10px] mt-1">{item.label}</span>
+              </button>
+            </React.Fragment>
+          );
+        })}
       </div>
     </nav>
   );

@@ -10,10 +10,11 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
-import { Course, CourseCategory, Lesson, MembershipPlan, PaymentGatewayType, PaymentOrder, UserProfile, AppPage } from './types';
+import { Course, CourseCategory, Lesson, MembershipPlan, PaymentGatewayType, PaymentOrder, UserProfile, AppPage, AppUiConfig } from './types';
 import { authService } from './services/authService';
 import { courseService } from './services/courseService';
 import { appPagesService } from './services/appPagesService';
+import { appContentService } from './services/appContentService';
 import { paymentService } from './services/paymentService';
 import { isRealApiMode } from './services/apiClient';
 import { detectZibalCallback, clearZibalCallbackParams } from './services/zibalCallback';
@@ -163,6 +164,10 @@ export default function App() {
   // v1.2.6 — صفحات سایت (منوی اپ) + شیت منو
   const [appPages, setAppPages] = useState<AppPage[]>([]);
   const [isMenuSheetOpen, setIsMenuSheetOpen] = useState(false);
+
+  // v1.2.7 — «محتوای وب‌اپ»: متن‌ها/سکشن‌ها/منو از پیشخوان (GET /app-ui).
+  // null = دمو یا خطا → همهٔ مصرف‌کننده‌ها پیش‌فرض‌های کد را نشان می‌دهند.
+  const [appUi, setAppUi] = useState<AppUiConfig | null>(null);
 
   // Toast feedback message
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -499,6 +504,25 @@ export default function App() {
     };
   }, [currentUser?.id, currentUser?.role, currentUser?.membership?.tier, currentUser?.membership?.status]);
 
+  // ---------------------------------------------------------------------------
+  // v1.2.7 — بارگذاری «محتوای وب‌اپ» (متن‌ها/سکشن‌ها/برچسب‌های منو). با تغییر هویت
+  // کاربر هم تازه می‌شود تا تغییرات کارفرما بدون تعویض سشن دیده شود. خطا = بی‌صدا
+  // (پیش‌فرض‌های کد باقی می‌مانند).
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!isRealApiMode) {
+      setAppUi(null);
+      return;
+    }
+    let cancelled = false;
+    appContentService.getUi().then((ui) => {
+      if (!cancelled && ui) setAppUi(ui);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.id]);
+
   // DEV-4/3-b: parent-owned completion handler — persists through the
   // whitelisted updater AND refreshes App state (setUser) so the dashboard /
   // CourseDetailView re-render live (player icon state derives from props).
@@ -531,7 +555,8 @@ export default function App() {
           key={toast.id}
           role="status"
           aria-live="polite"
-          className={`fixed top-14 left-4 right-4 md:left-auto md:right-4 z-50 text-xs px-4 py-2.5 rounded-xl shadow-xl border flex items-center justify-between gap-2 animate-in fade-in slide-in-from-top-2 ${TOAST_STYLES[toast.variant]}`}
+          // v1.2.7: toast بالای همهٔ مودال‌ها (از جمله مودال ورود z-[70]) دیده شود
+          className={`fixed top-14 left-4 right-4 md:left-auto md:right-4 z-[80] text-xs px-4 py-2.5 rounded-xl shadow-xl border flex items-center justify-between gap-2 animate-in fade-in slide-in-from-top-2 ${TOAST_STYLES[toast.variant]}`}
         >
           <span className="leading-relaxed">{toast.message}</span>
           <button
@@ -559,6 +584,7 @@ export default function App() {
         onNavigate={handleNavigate}
         activeView={activeView}
         appPages={appPages}
+        dockConfig={appUi?.menu?.dock}
         onOpenMenuSheet={() => setIsMenuSheetOpen(true)}
       />
 
@@ -569,6 +595,7 @@ export default function App() {
             onNavigate={handleNavigate}
             onOpenLessonPreview={handleOpenLessonPreview}
             onSelectPlan={handleSelectPlan}
+            appUi={appUi}
           />
         )}
 
@@ -688,6 +715,7 @@ export default function App() {
         isLoggedIn={!!currentUser}
         onOpenLogin={() => setIsLoginModalOpen(true)}
         onOpenMenuSheet={() => setIsMenuSheetOpen(true)}
+        dockConfig={appUi?.menu?.dock}
       />
 
       {/* v1.2.6: شیت شیشه‌ای منو — صفحات سایت + راهنماها */}
@@ -696,6 +724,7 @@ export default function App() {
         onClose={() => setIsMenuSheetOpen(false)}
         appPages={appPages}
         userRole={currentUser?.role}
+        guides={appUi?.menu?.guides}
         onNavigate={(view, params) => {
           setIsMenuSheetOpen(false);
           handleNavigate(view, params || {});

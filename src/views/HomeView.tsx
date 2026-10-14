@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 // BUG-52: unused icon imports removed (Award, HelpCircle, Layers). BookOpen
 // stays — it is used by the DEV/BUG-53 featured empty-state card.
-import { Course, CourseCategory, HomepageSectionConfig, MembershipPlan } from '../types';
+import { Course, CourseCategory, HomepageSectionConfig, MembershipPlan, AppUiConfig } from '../types';
 import { INITIAL_HOMEPAGE_SECTIONS } from '../data/mockData';
 import { adminService } from '../services/adminService';
 import { courseService } from '../services/courseService';
@@ -28,6 +28,11 @@ interface HomeViewProps {
   onNavigate: (view: string, param?: any) => void;
   onOpenLessonPreview: (course: Course) => void;
   onSelectPlan: (plan: MembershipPlan) => void;
+  /**
+   * v1.2.7 — «محتوای وب‌اپ» از پیشخوان (GET /app-ui): متن‌های بنر اصلی + عنوان/زیرنویس/
+   * نمایانی/ترتیب سکشن‌ها. null/undefined = دمو یا خطا → رفتار قبلی (پیش‌فرض‌های کد).
+   */
+  appUi?: AppUiConfig | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +69,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onNavigate,
   onOpenLessonPreview,
   onSelectPlan,
+  appUi,
 }) => {
   const [sections, setSections] = useState<HomepageSectionConfig[]>(INITIAL_HOMEPAGE_SECTIONS);
   const [featuredCourses, setFeaturedCourses] = useState<Course[]>([]);
@@ -79,15 +85,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
     let stale = false;
     // BUG-43f: all three home loads previously ran bare (unhandled rejection on
     // failure, no loading flags). Each now has .catch + minimal skeletons.
-    adminService
-      .getHomepageSections()
-      .then((s) => {
-        if (!stale) setSections(s);
-      })
-      .catch(() => {
-        // graceful: the INITIAL_HOMEPAGE_SECTIONS fallback stays on screen
-      });
-
+    // v1.2.7: بارگذاری سکشن‌ها به اثر بعدی (appUi) منتقل شد — این اثر فقط داده‌ها.
     courseService
       .getCourses()
       .then((c) => {
@@ -116,6 +114,60 @@ export const HomeView: React.FC<HomeViewProps> = ({
       stale = true;
     };
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // v1.2.7 — «محتوای وب‌اپ»: اگر پیکربندی از پیشخوان رسیده باشد، سکشن‌ها از آن ساخته
+  // می‌شوند (بنر Hero همیشه ردیف ۱ + سکشن‌های مرتب‌شده با پرچم enabled). وگرنه
+  // رفتار قبلی (adminService دمو → INITIAL_HOMEPAGE_SECTIONS).
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (appUi) {
+      const heroSection: HomepageSectionConfig = {
+        id: 'sec-hero',
+        key: 'hero',
+        title: 'بنر اصلی و پیام آغازین',
+        subtitle: '',
+        isEnabled: true,
+        sortOrder: 1,
+        configData: {
+          badgeText: appUi.hero.badgeText,
+          headline: appUi.hero.headline,
+          subheadline: appUi.hero.subheadline,
+          ctaText: appUi.hero.ctaPrimaryText,
+          secondaryCtaText: appUi.hero.ctaSecondaryText,
+          stat1Value: appUi.hero.stat1Value,
+          stat1Label: appUi.hero.stat1Label,
+          stat2Value: appUi.hero.stat2Value,
+          stat2Label: appUi.hero.stat2Label,
+          stat3Value: appUi.hero.stat3Value,
+          stat3Label: appUi.hero.stat3Label,
+        },
+      };
+      const configured: HomepageSectionConfig[] = appUi.sections.map((s) => ({
+        id: `sec-${s.key}`,
+        key: s.key,
+        title: s.title,
+        subtitle: s.subtitle,
+        isEnabled: s.enabled,
+        sortOrder: s.sortOrder,
+      }));
+      setSections([heroSection, ...configured].sort((a, b) => a.sortOrder - b.sortOrder));
+      return;
+    }
+
+    let stale = false;
+    adminService
+      .getHomepageSections()
+      .then((s) => {
+        if (!stale) setSections(s);
+      })
+      .catch(() => {
+        // graceful: the INITIAL_HOMEPAGE_SECTIONS fallback stays on screen
+      });
+    return () => {
+      stale = true;
+    };
+  }, [appUi]);
 
   // BUG-53: live per-category counts derived from courseService data
   const categoryCountByTitle = new Map<string, number>();
@@ -187,7 +239,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
                         onClick={() => onNavigate('catalogue')}
                         className="bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold px-5 py-2.5 rounded-xl text-xs sm:text-sm transition shadow-md flex items-center gap-2"
                       >
-                        <span>مشاهده دوره‌ها و شروع یادگیری</span>
+                        {/* v1.2.7: متن دکمهٔ اصلی از پیشخوان (محتوای وب‌اپ) */}
+                        <span>{heroData.ctaText || 'مشاهده دوره‌ها و شروع یادگیری'}</span>
                         <ArrowLeft className="w-4 h-4" />
                       </button>
 
@@ -196,23 +249,24 @@ export const HomeView: React.FC<HomeViewProps> = ({
                         className="bg-stone-800/80 hover:bg-stone-800 text-amber-200 border border-amber-700/50 font-semibold px-4 py-2.5 rounded-xl text-xs sm:text-sm transition flex items-center gap-1.5"
                       >
                         <Crown className="w-4 h-4 text-amber-400" />
-                        <span>پلن‌های عضویت و اشتراک</span>
+                        {/* v1.2.7: متن دکمهٔ دوم از پیشخوان (محتوای وب‌اپ) */}
+                        <span>{heroData.secondaryCtaText || 'پلن‌های عضویت و اشتراک'}</span>
                       </button>
                     </div>
 
-                    {/* Highlights stats row */}
+                    {/* Highlights stats row — v1.2.7: مقادیر/برچسب‌ها از پیشخوان */}
                     <div className="pt-4 border-t border-amber-800/50 grid grid-cols-3 gap-3 text-center sm:text-right">
                       <div>
-                        <p className="text-lg sm:text-xl font-bold font-mono text-amber-300">+۱,۴۰۰</p>
-                        <p className="text-[11px] text-stone-400">هنرجوی فعال در سراسر ایران</p>
+                        <p className="text-lg sm:text-xl font-bold font-mono text-amber-300">{heroData.stat1Value || '+۱,۴۰۰'}</p>
+                        <p className="text-[11px] text-stone-400">{heroData.stat1Label || 'هنرجوی فعال در سراسر ایران'}</p>
                       </div>
                       <div>
-                        <p className="text-lg sm:text-xl font-bold font-mono text-amber-300">۶ دوره</p>
-                        <p className="text-[11px] text-stone-400">مسترکلاس ویدیویی گام‌به‌گام</p>
+                        <p className="text-lg sm:text-xl font-bold font-mono text-amber-300">{heroData.stat2Value || '۶ دوره'}</p>
+                        <p className="text-[11px] text-stone-400">{heroData.stat2Label || 'مسترکلاس ویدیویی گام‌به‌گام'}</p>
                       </div>
                       <div>
-                        <p className="text-lg sm:text-xl font-bold font-mono text-amber-300">۱۰۰٪ دستی</p>
-                        <p className="text-[11px] text-stone-400">تمدید اشتراک بدون کسر خودکار</p>
+                        <p className="text-lg sm:text-xl font-bold font-mono text-amber-300">{heroData.stat3Value || '۱۰۰٪ دستی'}</p>
+                        <p className="text-[11px] text-stone-400">{heroData.stat3Label || 'تمدید اشتراک بدون کسر خودکار'}</p>
                       </div>
                     </div>
                   </div>

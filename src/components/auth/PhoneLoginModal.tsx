@@ -121,6 +121,9 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
       title={step === 'phone' ? 'ورود به مستر دستباف' : 'تایید شماره موبایل'}
       subtitle="احراز هویت پیامکی از طریق سیستم وردپرس و اوتینو"
       maxWidth="sm"
+      // v1.2.7 (فیکس کارفرما «فرم ورود دیده نمی‌شود»): مودال ورود باید همیشه بالای
+      // مودال‌های خرید (Checkout/Transfer/Zibal — z-50 و دیرتر در DOM) بیفتد.
+      overlayClassName="z-[70]"
     >
       <div className="space-y-4">
         {/* Prototype Mock Warning Banner (demo mode only) */}

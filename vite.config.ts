@@ -40,9 +40,10 @@ export default defineConfig(({ command, mode }) => {
         // silently; PWAUpdatePrompt (virtual:pwa-register/react) surfaces the
         // update and only reloads when the user confirms.
         registerType: 'prompt',
-        // v1.2.3: نام فایل‌های آیکون تغییر کرد (icon cache-bust) — نام‌های قدیمی تا ۱.۱.۰
-        // همان بودند و لایه‌های کش (CDN/مرورگر) نسخهٔ موقتی را برمی‌گرداندند
-        includeAssets: ['favicon.ico', 'mrd-favicon-32.png', 'mrd-apple-touch-icon.png', 'logo-mrdastbaaf.png'],
+        // v1.2.7: نام فایل‌های آیکون دوباره عوض شد (mrd-appicon-*) — آیکون لانچر اندروید
+        // (WebAPK) با آپدیت PWA تازه نمی‌شود؛ تغییر src در مانیفست، کروم را به re-mint
+        // ترغیب می‌کند. آیکن maskable هم با safe-zone استاندارد (لوگو ۷۵٪ روی بک‌گراند توپر) بازسازی شد.
+        includeAssets: ['favicon.ico', 'mrd-favicon-32.png', 'mrd-apple-touch-180.png', 'logo-mrdastbaaf.png'],
         manifest: {
           id: '/',
           name: 'مستر دستباف | آموزش صنایع دستی',
@@ -57,19 +58,19 @@ export default defineConfig(({ command, mode }) => {
           scope: '/',
           icons: [
             {
-              src: '/mrd-icon-192.png',
+              src: '/mrd-appicon-192.png',
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/mrd-icon-512.png',
+              src: '/mrd-appicon-512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/mrd-icon-maskable-512.png',
+              src: '/mrd-appicon-maskable-512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
