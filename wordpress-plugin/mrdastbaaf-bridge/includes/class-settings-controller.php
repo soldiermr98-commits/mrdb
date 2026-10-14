@@ -232,13 +232,20 @@ class MrDastbaaf_Settings_Controller {
         $cron_token = (string) get_option('mrdastbaaf_cron_token', '');
         $cron_example_url = rest_url(MRDASTBAAF_API_NAMESPACE . '/cron/reconcile') . '?token=' . ($cron_token !== '' ? $cron_token : 'TOKEN');
         ?>
-        <div class="wrap">
-            <h1>تنظیمات مستر دستباف</h1>
-            <p>تنظیمات اتصال افزونهٔ پل ارتباطی مستر دستباف به درگاه زیبال، فرانت PWA و سرویس پیامک.</p>
+        <div class="wrap mrd-scope">
+            <div class="mrd-hero">
+                <div class="mrd-hero__icon" aria-hidden="true">⚙️</div>
+                <div>
+                    <h1 class="mrd-hero__title">تنظیمات مستر دستباف</h1>
+                    <p class="mrd-hero__desc">اتصال افزونهٔ پل ارتباطی به درگاه زیبال، فرانت PWA، دستهٔ دوره‌ها و سرویس پیامک — همهٔ ورودی‌ها sanitize و رمزها هرگز در فرم بازتاب داده نمی‌شوند.</p>
+                </div>
+            </div>
 
             <form method="post" action="options.php">
                 <?php settings_fields(self::SETTINGS_GROUP); ?>
-                <table class="form-table" role="presentation">
+                <div class="mrd-card">
+                    <h2 class="mrd-card__title">پرداخت و دوره‌ها</h2>
+                    <table class="form-table" role="presentation">
                     <tr>
                         <th scope="row"><label for="mrd-zibal-merchant">مرچنت زیبال</label></th>
                         <td>
@@ -260,10 +267,12 @@ class MrDastbaaf_Settings_Controller {
                             <p class="description">slug دستهٔ ووکامرس که دوره‌ها در آن قرار می‌گیرند (اندپوینت <code>GET /courses</code> همین دسته را می‌خواند). پیش‌فرض: <code>courses</code></p>
                         </td>
                     </tr>
-                </table>
+                    </table>
+                </div>
 
-                <h2 class="title">سرویس پیامک (کد تایید ورود)</h2>
-                <table class="form-table" role="presentation">
+                <div class="mrd-card">
+                    <h2 class="mrd-card__title">سرویس پیامک (کد تایید ورود)</h2>
+                    <table class="form-table" role="presentation">
                     <tr>
                         <th scope="row"><label for="mrd-sms-provider">سرویس‌دهنده</label></th>
                         <td>
@@ -296,9 +305,11 @@ class MrDastbaaf_Settings_Controller {
                         </td>
                     </tr>
                 </table>
+                </div>
 
-                <h2 class="title">امنیت و زیرساخت (v1.2.0)</h2>
-                <table class="form-table" role="presentation">
+                <div class="mrd-card">
+                    <h2 class="mrd-card__title">امنیت و زیرساخت</h2>
+                    <table class="form-table" role="presentation">
                     <tr>
                         <th scope="row"><label for="mrd-trusted-proxy-header">هدر اعتمادشدهٔ پروکسی</label></th>
                         <td>
@@ -322,13 +333,16 @@ class MrDastbaaf_Settings_Controller {
                         </td>
                     </tr>
                 </table>
+                </div>
 
                 <?php submit_button('ذخیره تنظیمات'); ?>
             </form>
 
             <?php if ('' !== (string) $sms_last_log): ?>
-                <h2 class="title">آخرین وضعیت ارسال پیامک</h2>
-                <p><code><?php echo esc_html((string) $sms_last_log); ?></code></p>
+                <div class="mrd-card">
+                    <h2 class="mrd-card__title">آخرین وضعیت ارسال پیامک</h2>
+                    <p><code><?php echo esc_html((string) $sms_last_log); ?></code></p>
+                </div>
             <?php endif; ?>
         </div>
         <?php
@@ -336,6 +350,10 @@ class MrDastbaaf_Settings_Controller {
 
     /**
      * صفحهٔ «درس‌ها و ویدیوها» — مدیریت درس‌های محصولات ووکامرس
+     *
+     * v1.3.0: فهرست دوره‌ها به‌صورت خودکار از دستهٔ ووکامرسی تنظیم‌شده
+     * (mrdastbaaf_course_category، پیش‌فرض courses) خوانده می‌شود — نام و لینک
+     * دوره فقط از محصول ووکامرس می‌آید و ادمین فقط فیلدهای «جلسه» را پر می‌کند.
      *
      * عملیات از طریق fetch به REST ادمین با X-WP-Nonce انجام می‌شود:
      *   GET    /mrdastbaaf/v1/admin/lessons?product_id=
@@ -350,121 +368,171 @@ class MrDastbaaf_Settings_Controller {
 
         $woo_active = class_exists('WooCommerce');
         $products = array();
+        $category_slug = (string) get_option('mrdastbaaf_course_category', 'courses');
 
         if ($woo_active) {
-            if (function_exists('wc_get_products')) {
-                $wc_products = wc_get_products(array(
-                    'status'  => array('publish', 'draft', 'private'),
-                    'limit'   => 200,
-                    'orderby' => 'title',
-                    'order'   => 'ASC',
-                ));
-                foreach ($wc_products as $wc_product) {
-                    $products[] = array(
-                        'id'   => $wc_product->get_id(),
-                        'name' => $wc_product->get_name(),
-                    );
-                }
-            } else {
-                // fallback در نبود wc_get_products — خواندن مستقیم post type محصول
-                $product_posts = get_posts(array(
-                    'post_type'   => 'product',
-                    'post_status' => array('publish', 'draft', 'private'),
-                    'numberposts' => 200,
-                    'orderby'     => 'title',
-                    'order'       => 'ASC',
-                ));
-                foreach ($product_posts as $product_post) {
-                    $products[] = array(
-                        'id'   => (int) $product_post->ID,
-                        'name' => $product_post->post_title,
-                    );
-                }
+            // v1.3.0: فقط محصولات همین دسته — دقیقاً همان منطق REST عمومی
+            // (GET /courses) که اپ Real لیست می‌کند؛ یعنی چیزی که ادمین اینجا
+            // می‌بیند همان چیزی است که مخاطب در اپ می‌بیند.
+            $query_args = array(
+                'post_type'           => 'product',
+                'post_status'         => array('publish', 'draft', 'private'),
+                'posts_per_page'      => 200,
+                'no_found_rows'       => true,
+                'ignore_sticky_posts' => true,
+                'orderby'             => 'title',
+                'order'               => 'ASC',
+            );
+            if ('' !== $category_slug) {
+                $query_args['tax_query'] = array(
+                    array(
+                        'taxonomy' => 'product_cat',
+                        'field'    => 'slug',
+                        'terms'    => $category_slug,
+                    ),
+                );
+            }
+            $query = new WP_Query($query_args);
+
+            foreach ($query->posts as $product_post) {
+                // وضعیت غیرمنتشرشده برچسب می‌خورد — این محصول در اپ (فقط publish) دیده نمی‌شود
+                $status_suffix = ('publish' === $product_post->post_status)
+                    ? ''
+                    : ' — منتشرنشده';
+                $products[] = array(
+                    'id'     => (int) $product_post->ID,
+                    'name'   => $product_post->post_title . $status_suffix,
+                    'url'    => (string) get_permalink($product_post->ID),
+                    'status' => (string) $product_post->post_status,
+                );
             }
         }
 
         $boot = array(
-            'restRoot' => esc_url_raw(rest_url(MRDASTBAAF_API_NAMESPACE)),
-            'nonce'    => wp_create_nonce('wp_rest'),
-            'products' => $products,
+            'restRoot'  => esc_url_raw(rest_url(MRDASTBAAF_API_NAMESPACE)),
+            'nonce'     => wp_create_nonce('wp_rest'),
+            'products'  => $products,
+            'categorySlug' => $category_slug,
         );
         ?>
-        <div class="wrap">
-            <h1>درس‌ها و ویدیوها</h1>
+        <div class="wrap mrd-scope">
             <?php if (!$woo_active): ?>
-                <div class="notice notice-error"><p>ووکامرس فعال نیست؛ برای مدیریت درس‌ها ابتدا افزونهٔ ووکامرس را فعال کنید.</p></div>
+                <div class="mrd-hero">
+                    <div class="mrd-hero__icon" aria-hidden="true">🎬</div>
+                    <div>
+                        <h1 class="mrd-hero__title">درس‌ها و ویدیوها</h1>
+                        <p class="mrd-hero__desc">ووکامرس فعال نیست؛ برای مدیریت درس‌ها ابتدا افزونهٔ ووکامرس را فعال کنید.</p>
+                    </div>
+                </div>
             <?php else: ?>
-                <p>محصول (دوره) را انتخاب کنید و درس‌های آن را مدیریت کنید. آدرس ویدیو باید با <code>https://</code> شروع شود (هاست دانلود <code>dll.mrdastbaaf.com</code>). درس‌های «پیش‌نمایش رایگان» برای همهٔ بازدیدکنندگان قابل تماشا هستند.</p>
+                <div class="mrd-hero">
+                    <div class="mrd-hero__icon" aria-hidden="true">🎬</div>
+                    <div>
+                        <h1 class="mrd-hero__title">درس‌ها و ویدیوها</h1>
+                        <p class="mrd-hero__desc">دوره‌ها به‌صورت خودکار از دستهٔ ووکامرسی <code dir="ltr"><?php echo esc_html($category_slug); ?></code> خوانده می‌شوند؛ نام، لینک و تصویر هر دوره را در ووکامرس مدیریت کنید و اینجا فقط «جلسه‌ها» را اضافه کنید. درس‌های «پیش‌نمایش رایگان» برای همهٔ بازدیدکنندگان قابل تماشا هستند.</p>
+                    </div>
+                </div>
 
-                <table class="form-table" role="presentation">
-                    <tr>
-                        <th scope="row"><label for="mrd-lesson-product">دوره (محصول ووکامرس)</label></th>
-                        <td>
-                            <select id="mrd-lesson-product">
-                                <option value="">— انتخاب دوره —</option>
-                                <?php foreach ($products as $product): ?>
-                                    <option value="<?php echo esc_attr((string) $product['id']); ?>"><?php echo esc_html($product['name']); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </td>
-                    </tr>
-                </table>
+                <div class="mrd-chips">
+                    <span class="mrd-chip">دوره‌های این دسته: <?php echo esc_html(number_format_i18n(count($products))); ?></span>
+                    <span class="mrd-chip mrd-chip--amber">فقط جلسات را اینجا ثبت کنید — اسم و لینک دوره از ووکامرس می‌آید</span>
+                </div>
 
-                <h2 class="title">فهرست درس‌ها</h2>
-                <table class="widefat striped" id="mrd-lessons-table">
-                    <thead>
+                <?php if (empty($products)): ?>
+                    <div class="mrd-note mrd-note--warn">
+                        هنوز محصولی در دستهٔ <strong><?php echo esc_html($category_slug); ?></strong> نیست — به همین دلیل لیست اینجا و اپلیکیشن خالی است.<br />
+                        <a href="<?php echo esc_url(admin_url('edit.php?post_type=product')); ?>">مدیریت محصولات ووکامرس</a> یا
+                        <a href="<?php echo esc_url(admin_url('edit-tags.php?taxonomy=product_cat&post_type=product')); ?>">بررسی دستهٔ <?php echo esc_html($category_slug); ?></a>
+                        — پس از اینکه محصول را به این دسته اختصاص دادید، همین صفحه را نوسازی کنید.
+                    </div>
+                <?php endif; ?>
+
+                <div class="mrd-card">
+                    <h2 class="mrd-card__title">۱) انتخاب دوره</h2>
+                    <table class="form-table" role="presentation">
                         <tr>
-                            <th>#</th>
-                            <th>عنوان</th>
-                            <th>آدرس ویدیو</th>
-                            <th>پیش‌نمایش رایگان</th>
-                            <th>سطح اشتراک لازم</th>
-                            <th>ترتیب</th>
-                            <th>عملیات</th>
+                            <th scope="row"><label for="mrd-lesson-product">دوره (محصول ووکامرس)</label></th>
+                            <td>
+                                <select id="mrd-lesson-product">
+                                    <option value="">— انتخاب دوره —</option>
+                                    <?php foreach ($products as $product): ?>
+                                        <option value="<?php echo esc_attr((string) $product['id']); ?>" data-url="<?php echo esc_attr($product['url']); ?>"><?php echo esc_html($product['name']); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <div id="mrd-course-meta" class="mrd-course-meta" aria-live="polite"></div>
+                                <p class="mrd-hint">انتخاب دوره = همان صفحه‌ای که مخاطب در اپ می‌بیند؛ نام دوره، توضیح، تصویر و قیمت از همان محصول ووکامرس خوانده می‌شود.</p>
+                            </td>
                         </tr>
-                    </thead>
-                    <tbody>
-                        <tr><td colspan="7">ابتدا یک دوره را انتخاب کنید.</td></tr>
-                    </tbody>
-                </table>
+                    </table>
+                </div>
 
-                <h2 class="title" id="mrd-lesson-form-title">افزودن درس جدید</h2>
-                <table class="form-table" role="presentation">
-                    <tr>
-                        <th scope="row"><label for="mrd-lesson-title">عنوان درس</label></th>
-                        <td><input type="text" id="mrd-lesson-title" class="regular-text" maxlength="191" /></td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="mrd-lesson-video">آدرس ویدیو (https)</label></th>
-                        <td>
-                            <input type="url" id="mrd-lesson-video" class="large-text code" dir="ltr" placeholder="https://dll.mrdastbaaf.com/..." />
-                            <p class="description">فقط نشانی‌های <code>https://</code> پذیرفته می‌شود.</p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="mrd-lesson-free">پیش‌نمایش رایگان</label></th>
-                        <td><input type="checkbox" id="mrd-lesson-free" value="1" /> <label for="mrd-lesson-free">این درس برای همهٔ کاربران رایگان است</label></td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="mrd-lesson-tier">سطح اشتراک لازم</label></th>
-                        <td>
-                            <select id="mrd-lesson-tier">
-                                <option value="bronze">برنزی</option>
-                                <option value="silver">نقره‌ای</option>
-                                <option value="gold">طلایی</option>
-                            </select>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="mrd-lesson-sort">ترتیب نمایش</label></th>
-                        <td><input type="number" id="mrd-lesson-sort" class="small-text" min="0" max="9999" value="0" /></td>
-                    </tr>
-                </table>
-                <p>
-                    <button type="button" class="button button-primary" id="mrd-lesson-save">ذخیره درس</button>
-                    <button type="button" class="button" id="mrd-lesson-cancel-edit" hidden>انصراف از ویرایش</button>
-                    <span id="mrd-lesson-feedback" style="margin-inline-start:12px;"></span>
-                </p>
+                <div class="mrd-card">
+                    <h2 class="mrd-card__title">۲) فهرست جلسات دوره</h2>
+                    <div class="mrd-table-wrap">
+                        <table class="widefat striped" id="mrd-lessons-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>عنوان</th>
+                                    <th>آدرس ویدیو</th>
+                                    <th>پیش‌نمایش رایگان</th>
+                                    <th>سطح اشتراک لازم</th>
+                                    <th>ترتیب</th>
+                                    <th>عملیات</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td colspan="7" class="mrd-empty">ابتدا یک دوره را انتخاب کنید.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="mrd-card">
+                    <h2 class="mrd-card__title" id="mrd-lesson-form-title">۳) افزودن جلسهٔ جدید</h2>
+                    <table class="form-table" role="presentation">
+                        <tr>
+                            <th scope="row"><label for="mrd-lesson-title">عنوان جلسه</label></th>
+                            <td><input type="text" id="mrd-lesson-title" class="regular-text" maxlength="191" placeholder="مثلاً جلسهٔ اول: معرفی ابزار بافندگی" /></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="mrd-lesson-video">آدرس ویدیو (https)</label></th>
+                            <td>
+                                <input type="url" id="mrd-lesson-video" class="large-text code" dir="ltr" placeholder="https://dll.mrdastbaaf.com/..." />
+                                <p class="description">فقط نشانی‌های <code>https://</code> پذیرفته می‌شود.</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">وضعیت دسترسی</th>
+                            <td>
+                                <label class="mrd-toggle" for="mrd-lesson-free">
+                                    <input type="checkbox" id="mrd-lesson-free" value="1" />
+                                    <span>پیش‌نمایش رایگان — این جلسه برای همهٔ کاربران باز است</span>
+                                </label>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="mrd-lesson-tier">سطح اشتراک لازم</label></th>
+                            <td>
+                                <select id="mrd-lesson-tier">
+                                    <option value="bronze">برنزی</option>
+                                    <option value="silver">نقره‌ای</option>
+                                    <option value="gold">طلایی</option>
+                                </select>
+                                <p class="description">سطوح بالاتر شامل سطوح پایین‌تر هم هستند (طلایی = همه).</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="mrd-lesson-sort">ترتیب نمایش</label></th>
+                            <td><input type="number" id="mrd-lesson-sort" class="small-text" min="0" max="9999" value="0" /></td>
+                        </tr>
+                    </table>
+                    <p>
+                        <button type="button" class="button button-primary" id="mrd-lesson-save">ذخیرهٔ جلسه</button>
+                        <button type="button" class="button" id="mrd-lesson-cancel-edit" hidden>انصراف از ویرایش</button>
+                        <span id="mrd-lesson-feedback" style="margin-inline-start:12px;font-weight:600;"></span>
+                    </p>
+                </div>
 
                 <script>
                     var MRD_LESSONS_BOOT = <?php echo wp_json_encode($boot); ?>;
@@ -497,13 +565,30 @@ class MrDastbaaf_Settings_Controller {
                             return 'برنزی';
                         }
 
+                        // v1.3.0: پیش‌نمایش دورهٔ انتخاب‌شده — نام و لینک از محصول ووکامرس
+                        var courseMetaEl = document.getElementById('mrd-course-meta');
+
+                        function updateCourseMeta() {
+                            var selected = productSelect.options[productSelect.selectedIndex];
+                            if (!productSelect.value || !selected) {
+                                courseMetaEl.classList.remove('is-visible');
+                                courseMetaEl.innerHTML = '';
+                                return;
+                            }
+                            var courseUrl = selected.getAttribute('data-url') || '';
+                            var courseName = escapeHtml(selected.textContent.replace(/ — منتشرنشده$/, ''));
+                            courseMetaEl.innerHTML = 'در حال مدیریت جلسات: <strong>' + courseName + '</strong>'
+                                + (courseUrl ? ' — <a href="' + escapeHtml(courseUrl) + '" target="_blank" rel="noopener noreferrer">مشاهدهٔ صفحهٔ دوره ↗</a>' : '');
+                            courseMetaEl.classList.add('is-visible');
+                        }
+
                         function feedback(message, isError) {
                             feedbackEl.textContent = message;
                             feedbackEl.style.color = isError ? '#b32d2e' : '#00a32a';
                         }
 
                         function emptyRow(text) {
-                            tableBody.innerHTML = '<tr><td colspan="7">' + escapeHtml(text) + '</td></tr>';
+                            tableBody.innerHTML = '<tr><td colspan="7" class="mrd-empty">' + escapeHtml(text) + '</td></tr>';
                         }
 
                         function fetchLessons(productId) {
@@ -557,7 +642,7 @@ class MrDastbaaf_Settings_Controller {
                             document.getElementById('mrd-lesson-free').checked = false;
                             document.getElementById('mrd-lesson-tier').value = 'bronze';
                             document.getElementById('mrd-lesson-sort').value = '0';
-                            formTitle.textContent = 'افزودن درس جدید';
+                            formTitle.textContent = '۳) افزودن جلسهٔ جدید';
                             cancelButton.hidden = true;
                             feedback('', false);
                         }
@@ -569,13 +654,14 @@ class MrDastbaaf_Settings_Controller {
                             document.getElementById('mrd-lesson-tier').value = lesson.requiredTier || 'bronze';
                             document.getElementById('mrd-lesson-sort').value = String(lesson.sortOrder === undefined ? 0 : lesson.sortOrder);
                             editingId = lesson.id;
-                            formTitle.textContent = 'ویرایش درس (شناسه: ' + lesson.id + ')';
+                            formTitle.textContent = '۳) ویرایش جلسه (شناسه: ' + lesson.id + ')';
                             cancelButton.hidden = false;
                             feedback('', false);
                         }
 
                         productSelect.addEventListener('change', function () {
                             resetForm();
+                            updateCourseMeta();
                             if (productSelect.value) {
                                 fetchLessons(productSelect.value);
                             } else {
