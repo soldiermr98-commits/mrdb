@@ -30,7 +30,9 @@ export default defineConfig(({ command, mode }) => {
         // silently; PWAUpdatePrompt (virtual:pwa-register/react) surfaces the
         // update and only reloads when the user confirms.
         registerType: 'prompt',
-        includeAssets: ['favicon.ico', 'favicon-32.png', 'apple-touch-icon.png', 'logo-mrdastbaaf.png'],
+        // v1.2.3: نام فایل‌های آیکون تغییر کرد (icon cache-bust) — نام‌های قدیمی تا ۱.۱.۰
+        // همان بودند و لایه‌های کش (CDN/مرورگر) نسخهٔ موقتی را برمی‌گرداندند
+        includeAssets: ['favicon.ico', 'mrd-favicon-32.png', 'mrd-apple-touch-icon.png', 'logo-mrdastbaaf.png'],
         manifest: {
           id: '/',
           name: 'مستر دستباف | آموزش صنایع دستی',
@@ -45,19 +47,19 @@ export default defineConfig(({ command, mode }) => {
           scope: '/',
           icons: [
             {
-              src: '/pwa-192x192.png',
+              src: '/mrd-icon-192.png',
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-512x512.png',
+              src: '/mrd-icon-512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-maskable-512x512.png',
+              src: '/mrd-icon-maskable-512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
