@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { Course, Lesson, LessonNote, UserProfile, VideoStreamingTicket } from '../../types';
 import { videoSecurityService } from '../../services/videoSecurityService';
+import { isRealApiMode } from '../../services/apiClient';
 import { courseService } from '../../services/courseService';
 import { authService } from '../../services/authService';
 import { acquireScrollLock } from '../../utils/scrollLock';
@@ -834,17 +835,29 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
 
               {/* Quality & Next/Prev */}
               <div className="flex items-center gap-2">
-                <select
-                  value={selectedQuality}
-                  onChange={(e) => setSelectedQuality(e.target.value)}
-                  // BUG-58: accessible name for the quality selector.
-                  aria-label="انتخاب کیفیت پخش"
-                  className="bg-stone-800 text-stone-300 text-[11px] rounded px-1.5 py-1 border border-stone-700 focus:outline-none"
-                >
-                  <option value="1080p">1080p FHD</option>
-                  <option value="720p">720p HD</option>
-                  <option value="480p">480p SD</option>
-                </select>
+                {/* Hardening (prelive 18-b — یافتهٔ 1-8): سوییچ کیفیت جعلی فقط در دمو
+                    معنا دارد؛ در پخش واقعی کیفیت وابسته به فایل مرجع MP4 سرور است —
+                    به‌جای انتخاب‌گر، نشان ثابت صادقانه نمایش داده می‌شود. */}
+                {isRealPlayback ? (
+                  <span
+                    className="bg-stone-800 text-stone-300 text-[11px] rounded px-1.5 py-1 border border-stone-700 select-none"
+                    title="کیفیت پخش وابسته به فایل اصلی ویدیو روی سرور است"
+                  >
+                    کیفیت: طبق فایل اصلی
+                  </span>
+                ) : (
+                  <select
+                    value={selectedQuality}
+                    onChange={(e) => setSelectedQuality(e.target.value)}
+                    // BUG-58: accessible name for the quality selector.
+                    aria-label="انتخاب کیفیت پخش"
+                    className="bg-stone-800 text-stone-300 text-[11px] rounded px-1.5 py-1 border border-stone-700 focus:outline-none"
+                  >
+                    <option value="1080p">1080p FHD</option>
+                    <option value="720p">720p HD</option>
+                    <option value="480p">480p SD</option>
+                  </select>
+                )}
 
                 <div className="flex items-center gap-1">
                   <button
@@ -1053,13 +1066,27 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
                     <Shield className="w-4 h-4 text-amber-400" />
                     معماری امنیت ویدیو در مستر دستباف
                   </h4>
+                  {/* Hardening (prelive 18-b — یافتهٔ 1-8): متن پروتوتایپ فقط در دمو
+                      نمایش داده می‌شود؛ در حالت واقعی بیانیهٔ صادقانهٔ بلیط/واترمارک می‌آید. */}
                   <p className="text-[11px] text-stone-400">
-                    این پلیر نسخه پروتوتایپ است و تعمداً از هیچ لینک مستقیم فایل MP4 استفاده نمی‌کند:
+                    {isRealApiMode
+                      ? 'در حالت اتصال واقعی، ویدیو فقط با بلیط کوتاه‌مدت سرور و واترمارک پویا پخش می‌شود:'
+                      : 'این پلیر نسخه پروتوتایپ است و تعمداً از هیچ لینک مستقیم فایل MP4 استفاده نمی‌کند:'}
                   </p>
                   <ul className="list-disc list-inside space-y-1 text-[11px] text-stone-300">
-                    <li>عدم ارائه لینک خام ویدیو در کدهای کلاینت</li>
+                    {isRealApiMode ? (
+                      <li>آدرس ویدیو فقط با بلیط کوتاه‌مدت سرور و برای مدت محدود صادر می‌شود</li>
+                    ) : (
+                      <li>عدم ارائه لینک خام ویدیو در کدهای کلاینت</li>
+                    )}
                     <li>واترمارک پویا با شماره تلفن ماسک‌شده و شناسه کاربر</li>
-                    <li>طراحی شده برای پروتکل استریم چندکیفیته HLS در نسخه نهایی</li>
+                    {/* یافتهٔ 1-8: ادعای «HLS چندکیفیت» فقط در شبیه‌ساز دمو درست است؛
+                        در حالت واقعی متن صادقانهٔ بلیط/واترمارک جایگزین می‌شود. */}
+                    <li>
+                      {isRealApiMode
+                        ? 'پخش امن ویدیو با بلیط اختصاصی و واترمارک پویا'
+                        : 'طراحی شده برای پروتکل استریم چندکیفیته HLS در نسخه نهایی'}
+                    </li>
                     <li>نیاز به توکن کوتاه‌مدت (Tokenized Signature) از سمت سرور وردپرس</li>
                   </ul>
                 </div>

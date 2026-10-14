@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.1.0
+ * Version: 1.2.0
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,10 +16,10 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.1.0');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.2.0');
 
 /**
- * v1.1.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
+ * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
  */
 
 /**
@@ -29,9 +29,16 @@ define('MRDASTBAAF_BRIDGE_VERSION', '1.1.0');
  * v1.1.0 (اسکیما ۱.۲.۰): جدول جدید wp_mrdastbaaf_lessons (درس‌ها و ویدیوهای دوره‌ها).
  * نکته مهم: افزونهٔ ۱.۰.۳ مقدار '1.1.0' را در آپشن mrdastbaaf_db_version ذخیره کرده
  * بود؛ بنابراین برای این‌که مسیر آپگرید خودکار (چک عدم تساوی نسخه) روی سایت‌های
- * موجود نیز فعال شود، اسکیمای جدید باید با '1.2.0' شروع شود نه '1.1.0'.
+ * موجود نیز فعال شود، اسکیمای جدید با '1.2.0' شروع شد نه '1.1.0'.
+ *
+ * v1.2.0 (اسکیما ۱.۳.۰): دو جدول NEW —
+ *   ۱) wp_mrdastbaaf_membership_grants (دفتر ایدمپوتنسی grant ها با UNIQUE(order_id) —
+ *      جلوگیری از تمدید دوبرابر در چرخهٔ verifying→pending→claim مجدد)؛
+ *   ۲) wp_mrdastbaaf_audit_log (ثبت ردپای اقدامات ادمین/سیستم)؛
+ * به‌علاوه ستون NEW: orders.updated_at (پنجرهٔ بازبینی‌پذیری سفارش‌های شکست‌خورده
+ * و بازیابی سفارش‌های verifying گیرکرده توسط ریکنسیلیشن).
  */
-define('MRDASTBAAF_DB_VERSION', '1.2.0');
+define('MRDASTBAAF_DB_VERSION', '1.3.0');
 define('MRDASTBAAF_BRIDGE_PATH', plugin_dir_path(__FILE__));
 define('MRDASTBAAF_BRIDGE_URL', plugin_dir_url(__FILE__));
 define('MRDASTBAAF_API_NAMESPACE', 'mrdastbaaf/v1');
@@ -113,8 +120,19 @@ class MrDastbaaf_Bridge_Plugin {
      * قبلاً «http://localhost:3000» به‌صورت پیش‌فرض در پروداکشن مجاز بود؛
      * اکنون دامنه‌ها از Option وردپرس خوانده می‌شوند (قابل تنظیم در پنل مدیریت)،
      * و توسعه‌دهنده می‌تواند فقط در محیط dev دامنه لوکال را با فیلتر اضافه کند.
+     *
+     * SECURITY FIX (v1.2.0 — یافتهٔ ۲-۱۹): محدودسازی CORS به namespace افزونه —
+     * remove_filter سراسری قبلی، هدرهای CORS هسته را از «تمام» مسیرهای REST سایت
+     * حذف می‌کرد (webhook ها/افزونه‌های ثالث را بی‌دفاع می‌گذاشت). اکنون جایگزینی
+     * هدرها فقط وقتی انجام می‌شود که درخواست متعلق به mrdastbaaf/v1 باشد؛ سایر
+     * مسیرهای REST هدرهای پیش‌فرض وردپرس را نگه می‌دارند.
      */
     public function setup_cors_headers() {
+        // فقط برای درخواست‌های خود افزونه — بقیهٔ REST سایت دست‌نخورده می‌ماند
+        if (!self::is_mrdastbaaf_rest_request()) {
+            return;
+        }
+
         remove_filter('rest_pre_serve_request', 'rest_send_cors_headers');
         add_filter('rest_pre_serve_request', function ($value) {
             $origin = get_http_origin();
@@ -132,8 +150,16 @@ class MrDastbaaf_Bridge_Plugin {
             if ($origin && in_array($origin, $allowed_origins, true)) {
                 header('Access-Control-Allow-Origin: ' . esc_url_raw($origin));
                 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-                header('Access-Control-Allow-Credentials: true');
+                /**
+                 * v1.2.0: «Access-Control-Allow-Credentials: true» حذف شد — جریان
+                 * احراز این API صرفاً Bearer است (هدر Authorization) و کلاینت با
+                 * credentials:'omit' کار می‌کند؛ ارسال کوکی/اعتبار بین‌دامنه‌ای نه
+                 * لازم است نه امن (Allow-Credentials + Allow-Origin صریح = سطح
+                 * حملهٔ CSRF/CORS بزرگ‌تر بدون هیچ کاربردی اینجا).
+                 */
                 header('Access-Control-Allow-Headers: Authorization, X-WP-Nonce, Content-Type, Cache-Control, X-Requested-With');
+                // v1.2.0: کش پاسخ preflight مرورگر (۱۰ دقیقه) — حذف OPTIONSهای تکراری
+                header('Access-Control-Max-Age: 600');
                 header('Vary: Origin');
             }
 
@@ -144,6 +170,24 @@ class MrDastbaaf_Bridge_Plugin {
 
             return $value;
         });
+    }
+
+    /**
+     * v1.2.0: تشخیص درخواست REST متعلق به افزونه — همان الگوی محدودسازی namespace
+     * Bearer در کنترلر احراز هویت (یافتهٔ ۰-۲): یا مسیر پیش‌فرض
+     * «/{rest_prefix}/mrdastbaaf/v1» در REQUEST_URI یا پارامتر rest_route با
+     * پیشوند «/mrdastbaaf/v1» (نصب‌های بدون pretty permalink).
+     *
+     * @return bool
+     */
+    private static function is_mrdastbaaf_rest_request() {
+        if (isset($_SERVER['REQUEST_URI']) && strpos((string) $_SERVER['REQUEST_URI'], '/' . rest_get_url_prefix() . '/mrdastbaaf/v1') !== false) {
+            return true;
+        }
+        if (isset($_GET['rest_route']) && strpos((string) $_GET['rest_route'], '/mrdastbaaf/v1') === 0) {
+            return true;
+        }
+        return false;
     }
 }
 
@@ -160,17 +204,37 @@ function mrdastbaaf_bridge_activate() {
     MrDastbaaf_Database::create_tables();
     update_option('mrdastbaaf_db_version', MRDASTBAAF_DB_VERSION);
 
-    // BUG-35: زمان‌بندی کرون روزانه ریکنسیلیشن سفارش‌های معلق زیبال
+    // v1.2.0: زمان‌بندی کرون ۱۰دقیقه‌ای ریکنسیلیشن سفارش‌های زیبال (جایگزین روزانه)
     mrdastbaaf_bridge_schedule_reconciliation_cron();
 }
 register_activation_hook(__FILE__, 'mrdastbaaf_bridge_activate');
 
 /**
- * BUG-35: ثبت رویداد روزانه WP-Cron در صورت عدم وجود زمان‌بندی قبلی
+ * v1.2.0: بازهٔ زمانی NEW «هر ۱۰ دقیقه» برای WP-Cron — پنجرهٔ بازیابی سفارش‌های
+ * verifying گیرکرده (۱۰ دقیقه) بدون این بازه بی‌معناست؛ کرون روزانه قدیمی حذف شد.
+ */
+add_filter('cron_schedules', 'mrdastbaaf_bridge_add_cron_interval');
+function mrdastbaaf_bridge_add_cron_interval($schedules) {
+    if (!isset($schedules['mrdastbaaf_10min'])) {
+        $schedules['mrdastbaaf_10min'] = array(
+            'interval' => 600,
+            'display'  => 'Every 10 Minutes (MrDastbaaf)',
+        );
+    }
+    return $schedules;
+}
+
+/**
+ * v1.2.0: ثبت رویداد ۱۰دقیقه‌ای WP-Cron — مهاجرت از رویداد روزانهٔ قدیمی
+ * mrdastbaaf_daily_reconciliation به mrdastbaaf_reconciliation_tick:
+ * زمان‌بندی قدیمی صریحاً پاک می‌شود تا روی سایت‌های ارتقایافته دوباره اجرا نشود.
  */
 function mrdastbaaf_bridge_schedule_reconciliation_cron() {
-    if (!wp_next_scheduled('mrdastbaaf_daily_reconciliation')) {
-        wp_schedule_event(time() + HOUR_IN_SECONDS, 'daily', 'mrdastbaaf_daily_reconciliation');
+    if (wp_next_scheduled('mrdastbaaf_daily_reconciliation')) {
+        wp_clear_scheduled_hook('mrdastbaaf_daily_reconciliation');
+    }
+    if (!wp_next_scheduled('mrdastbaaf_reconciliation_tick')) {
+        wp_schedule_event(time() + 10 * MINUTE_IN_SECONDS, 'mrdastbaaf_10min', 'mrdastbaaf_reconciliation_tick');
     }
 }
 
@@ -185,21 +249,31 @@ function mrdastbaaf_bridge_maybe_upgrade_db() {
         update_option('mrdastbaaf_db_version', MRDASTBAAF_DB_VERSION);
     }
 
-    // BUG-35: اطمینان از موجود بودن زمان‌بندی کرون پس از ارتقا یا حذف اتفاقی
+    // v1.2.0: اطمینان از موجود بودن زمان‌بندی کرون جدید پس از ارتقا یا حذف اتفاقی
     mrdastbaaf_bridge_schedule_reconciliation_cron();
+
+    // v1.2.0: توکن اختصاصی اندپوینت GET /cron/reconcile — یک‌بار در نخستین ارتقا
+    // تولید می‌شود؛ هرگز بازتاب داده نمی‌شود و فقط مقدار ثابت hash_equals مقایسه می‌کند.
+    if ('' === (string) get_option('mrdastbaaf_cron_token', '')) {
+        update_option('mrdastbaaf_cron_token', wp_generate_password(32, false, false), false);
+    }
 }
 add_action('plugins_loaded', 'mrdastbaaf_bridge_maybe_upgrade_db', 20);
 
 /**
- * BUG-35: اجرای روزانه — انقضای سفارش‌های معلق زیبال و ریکنسیلیشن پرداخت‌های
- * پرداخت‌شده‌ای که کال‌بک‌شان گم شده است (پیاده‌سازی در کنترلر پرداخت).
+ * v1.2.0: اجرای دوره‌ای هر ۱۰ دقیقه — بازیابی سفارش‌های verifying گیرکرده،
+ * ریکنسیلیشن پرداخت‌های پرداخت‌شده‌ای که کال‌بک‌شان گم شده، و بازبررسی شکست‌های
+ * ۷۲ ساعت اخیر (پیاده‌سازی در کنترلر پرداخت؛ run_daily_reconciliation فقط
+ * نام مستعار منسوخ‌شده برای سازگاری هوک‌های ثالث باقی مانده است).
  */
-add_action('mrdastbaaf_daily_reconciliation', array('MrDastbaaf_Payment_Controller', 'run_daily_reconciliation'));
+add_action('mrdastbaaf_reconciliation_tick', array('MrDastbaaf_Payment_Controller', 'run_reconciliation'));
 
 /**
- * BUG-35: پاک‌سازی زمان‌بندی کرون هنگام غیرفعال‌سازی افزونه
+ * v1.2.0: پاک‌سازی زمان‌بندی کرون هنگام غیرفعال‌سازی افزونه (رویداد جدید +
+ * رویداد روزانهٔ قدیمی، برای پاک‌سازی کامل مهاجرت‌های ناتمام)
  */
 function mrdastbaaf_bridge_deactivate() {
+    wp_clear_scheduled_hook('mrdastbaaf_reconciliation_tick');
     wp_clear_scheduled_hook('mrdastbaaf_daily_reconciliation');
 }
 register_deactivation_hook(__FILE__, 'mrdastbaaf_bridge_deactivate');

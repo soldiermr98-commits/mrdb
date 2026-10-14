@@ -63,22 +63,36 @@ function planDurationFromApi(value: unknown): PlanDuration {
   return '1_month';
 }
 
+/**
+ * Hardening (prelive 18-b — یافتهٔ 2-17): قیمت سرور همیشه عدد است اما اگر شکل
+ * رشته‌ای عددی برسد (مثلاً «۱۹۸۰۰۰» یا "198000")، به عدد تبدیل می‌شود تا UI
+ * قیمت خالی نشان ندهد.
+ */
+function toTomanNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return Math.round(value);
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed !== '' && !isNaN(Number(trimmed))) {
+      const parsed = Number(trimmed);
+      if (Number.isFinite(parsed) && parsed >= 0) return Math.round(parsed);
+    }
+  }
+  return null;
+}
+
 function normalizeApiPlan(raw: ApiPlanShape): MembershipPlan {
   const duration = planDurationFromApi(raw.duration);
-  const originalPrice =
-    typeof raw.originalPriceToman === 'number' && Number.isFinite(raw.originalPriceToman)
-      ? Math.round(raw.originalPriceToman)
-      : undefined;
+  const originalPrice = toTomanNumber(raw.originalPriceToman);
+  const price = toTomanNumber(raw.priceToman);
   return {
     id: planString(raw.id, `plan-${Date.now()}`),
     tier: PLAN_TIERS.includes(raw.tier as MembershipTier) ? (raw.tier as MembershipTier) : 'bronze',
     title: planString(raw.title, 'اشتراک مستر دستباف'),
     description: planString(raw.description),
-    priceToman:
-      typeof raw.priceToman === 'number' && Number.isFinite(raw.priceToman) && raw.priceToman >= 0
-        ? Math.round(raw.priceToman)
-        : 0,
-    originalPriceToman: originalPrice,
+    priceToman: price ?? 0,
+    originalPriceToman: originalPrice ?? undefined,
     duration,
     durationLabel: planString(raw.durationLabel, `${planDurationToDays(duration)} روزه`),
     features: Array.isArray(raw.features)

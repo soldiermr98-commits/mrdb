@@ -10,11 +10,11 @@
  * Only after the server validates that result == 100 (Success) and status == 1 (Paid)
  * is the user's role/membership updated in the database.
  *
- * TODO: Real Zibal Merchant ID, production IPG callback URL, and backend verification routes
- * are currently pending staging credentials. Do not hardcode or generate real merchant keys.
+ * v1.2.0 (prelive 18-b): initiate/verify قرارداد فریز v1.1.0 را دنبال می‌کنند و
+ * تاریخچهٔ سفارش واقعی از GET /me/orders (fetchOrders) خوانده می‌شود.
  */
 
-import { MembershipPlan, PaymentOrder, UserProfile } from '../types';
+import { MembershipPlan, OrderStatus, PaymentGatewayType, PaymentOrder, UserProfile } from '../types';
 import { ApiError, apiFetch, isRealApiMode } from './apiClient';
 import { authService } from './authService';
 import { membershipService, planDurationToDays, planFromSnapshot } from './membershipService';
@@ -33,7 +33,98 @@ function generateZibalTrackId(): string {
   return `TRK-ZIBAL-${Date.now().toString(36)}-${trackSeq.toString(36)}-${Math.random().toString(36).slice(2, 6)}`.toUpperCase();
 }
 
+// ---------------------------------------------------------------------------
+// Hardening (prelive 18-b — یافتهٔ 1-9): تاریخچهٔ سفارش واقعی از سرور.
+// برچسب‌های فارسی وضعیت/درگاه برای نمایش واحد در داشبورد (دمو هم از همین‌ها
+// در رندر استفاده می‌کند تا متن‌ها همیشه یکسان بمانند).
+// ---------------------------------------------------------------------------
+export const ORDER_STATUS_LABELS: Record<string, string> = {
+  pending: 'در انتظار پرداخت',
+  verifying: 'در حال بررسی',
+  completed: 'تکمیل شده',
+  failed: 'ناموفق',
+  cancelled: 'لغو شده',
+  rejected: 'رد شده',
+  // وضعیت‌های محلی دمو (فاز ۳) — بی‌برچسب نمانند:
+  processing: 'در حال بررسی',
+};
+
+export const ORDER_GATEWAY_LABELS: Record<string, string> = {
+  zibal: 'درگاه زیبال',
+  card_to_card: 'کارت به کارت',
+};
+
+/** شکل خام سفارش از «GET /me/orders» — افزونهٔ v1.2.0 (قرارداد فریز). */
+interface ApiOrderShape {
+  id?: unknown;
+  orderNumber?: unknown;
+  itemTitle?: unknown;
+  amountToman?: unknown;
+  gateway?: unknown;
+  status?: unknown;
+  createdAt?: unknown;
+  verifiedAt?: unknown;
+  refNumber?: unknown;
+}
+
+const API_ORDER_GATEWAYS: PaymentGatewayType[] = ['zibal', 'card_to_card'];
+const API_ORDER_STATUSES: OrderStatus[] = [
+  'pending',
+  'verifying',
+  'completed',
+  'failed',
+  'cancelled',
+  'rejected',
+];
+
+function normalizeApiOrder(raw: ApiOrderShape, fallbackUserId: string): PaymentOrder {
+  const createdAt = typeof raw.createdAt === 'string' && raw.createdAt ? raw.createdAt : new Date().toISOString();
+  const verifiedAt = typeof raw.verifiedAt === 'string' && raw.verifiedAt ? raw.verifiedAt : undefined;
+  return {
+    id: typeof raw.id === 'string' && raw.id ? raw.id : `ord-unknown-${createdAt}`,
+    orderNumber: typeof raw.orderNumber === 'string' ? raw.orderNumber : '',
+    // سفارش متعلق به کاربرِ صاحب Bearer است؛ شناسه از سشن فعلی پر می‌شود.
+    userId: fallbackUserId,
+    userPhone: authService.getCurrentUser()?.phoneNumber ?? '',
+    userFullName: authService.getCurrentUser()?.fullName ?? '',
+    itemType: 'membership',
+    itemId: '',
+    itemTitle: typeof raw.itemTitle === 'string' ? raw.itemTitle : 'سفارش',
+    amountToman:
+      typeof raw.amountToman === 'number' && Number.isFinite(raw.amountToman) && raw.amountToman >= 0
+        ? Math.round(raw.amountToman)
+        : 0,
+    gateway: API_ORDER_GATEWAYS.includes(raw.gateway as PaymentGatewayType)
+      ? (raw.gateway as PaymentGatewayType)
+      : 'zibal',
+    status: API_ORDER_STATUSES.includes(raw.status as OrderStatus)
+      ? (raw.status as OrderStatus)
+      : 'pending',
+    createdAt,
+    createdAtJalali: formatJalali(createdAt, true),
+    verifiedAt,
+    zibalRefNumber: typeof raw.refNumber === 'string' && raw.refNumber ? raw.refNumber : undefined,
+  };
+}
+
 export const paymentService = {
+  /**
+   * Hardening (prelive 18-b — یافتهٔ 1-9): تاریخچهٔ سفارش‌های واقعی کاربر از سرور.
+   * GET /me/orders (Bearer) → {orders: [...]} — فقط در حالت Real صدا زده می‌شود؛
+   * در دمو داشبورد همان orderStore محلی را می‌خواند.
+   */
+  async fetchOrders(): Promise<PaymentOrder[]> {
+    if (!isRealApiMode) {
+      // دمو: همان منبع قبلی (orderStore) — فهرست سفارش‌های کاربر فعلی.
+      const uid = authService.getCurrentUser()?.id ?? '';
+      return orderStore.getByUser(uid);
+    }
+    const user = authService.getCurrentUser();
+    const res = await apiFetch<{ orders?: unknown }>('/me/orders', { auth: true });
+    const list = Array.isArray(res.orders) ? (res.orders as ApiOrderShape[]) : [];
+    return list.map((o) => normalizeApiOrder(o, user?.id ?? ''));
+  },
+
   /**
    * Get all orders (for Admin or user history)
    */

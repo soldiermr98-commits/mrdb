@@ -1,10 +1,10 @@
 /**
  * @file services/courseService.ts
- * @description Service for managing courses and lessons, simulating Nias Course WordPress plugin
+ * @description سرویس دوره‌ها Dual-Mode: دمو (mock محلی) و Real-API (پل وردپرس v1.1.0+)
  *
- * TODO: Official Nias Course WordPress database schemas, custom post types, lesson media access
- * tables, and REST endpoints are currently unknown and pending documentation.
- * Do not invent production Nias Course endpoints until documentation is provided.
+ * v1.2.0: قرارداد /courses و /courses/{id} فریز شده و نرمال‌سازها به غیبت
+ * فیلدهای اختیاری (rating/students که از v1.2.0 حذف شده‌اند، duration: null و
+ * lessons خالی) با defaultهای ایمن تحمل می‌دهند.
  */
 
 import { INITIAL_COURSES } from '../data/mockData';

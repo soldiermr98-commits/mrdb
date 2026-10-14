@@ -110,6 +110,72 @@ class MrDastbaaf_Settings_Controller {
             'sanitize_callback' => array($this, 'sanitize_plain_text'),
             'default' => '',
         ));
+
+        // v1.2.0: هدر اعتمادشدهٔ پروکسی برای IP واقعی OTP — فقط الگوی نام هدر HTTP
+        register_setting(self::SETTINGS_GROUP, 'mrdastbaaf_trusted_proxy_header', array(
+            'type' => 'string',
+            'sanitize_callback' => array($this, 'sanitize_proxy_header'),
+            'default' => '',
+        ));
+
+        // v1.2.0: لیست سفید هاست‌های ویدیو — textarea (یکی در هر خط)
+        register_setting(self::SETTINGS_GROUP, 'mrdastbaaf_video_hosts', array(
+            'type' => 'string',
+            'sanitize_callback' => array($this, 'sanitize_video_hosts'),
+            'default' => 'dll.mrdastbaaf.com',
+        ));
+
+        // v1.2.0: توکن اندپوینت کرون — فقط نمایش در فرم؛ هیچ فیلد ورودی‌ای ثبت‌شده
+        // نمی‌شود (تولید خودکار در مسیر ارتقا/فعال‌سازی؛ بازنویسی دستی از فرم ممنوع
+        // تا با غلط تایپی توکن بی‌اعتبار نشود).
+        register_setting(self::SETTINGS_GROUP, 'mrdastbaaf_cron_token', array(
+            'type' => 'string',
+            'sanitize_callback' => array($this, 'sanitize_cron_token_readonly'),
+            'default' => '',
+            'show_in_rest' => false,
+        ));
+    }
+
+    /**
+     * v1.2.0: نام هدر اعتمادشدهٔ پروکسی — فقط حروف لاتین/عدد/خط تیره (^[A-Za-z0-9-]+$)
+     * تا مقدار واردشده نتواند کلید دلخواه $_SERVER تزریق کند؛ خالی = REMOTE_ADDR مستقیم.
+     */
+    public function sanitize_proxy_header($value) {
+        $value = trim((string) $value);
+        if ('' === $value) {
+            return '';
+        }
+        if (!preg_match('/^[A-Za-z0-9-]+$/', $value)) {
+            return (string) get_option('mrdastbaaf_trusted_proxy_header', ''); // ورودی نامعتبر = حفظ مقدار قبلی
+        }
+        return $value;
+    }
+
+    /**
+     * v1.2.0: هاست‌های ویدیو — هر خط با sanitize_text_field پاک و به حروف کوچک
+     * تبدیل و به شکل رشتهٔ چندخطی ذخیره می‌شود (خروجی: رشته، نه آرایه).
+     */
+    public function sanitize_video_hosts($value) {
+        $lines = explode("\n", (string) $value);
+        $clean = array();
+        foreach ($lines as $line) {
+            $host = strtolower(sanitize_text_field($line));
+            if ('' !== $host) {
+                $clean[] = $host;
+            }
+        }
+        if (empty($clean)) {
+            return (string) get_option('mrdastbaaf_video_hosts', 'dll.mrdastbaaf.com'); // خالی = حفظ پیش‌فرض
+        }
+        return implode("\n", $clean);
+    }
+
+    /**
+     * v1.2.0: توکن کرون فقط-نمایش — فرم این فیلد را ارسال نمی‌کند؛ در صورت ارسال
+     * تصادفی، مقدار فعلی حفظ می‌شود (تولید/چرخش فقط از کد).
+     */
+    public function sanitize_cron_token_readonly($value) {
+        return (string) get_option('mrdastbaaf_cron_token', '');
     }
 
     public function sanitize_plain_text($value) {
@@ -159,6 +225,12 @@ class MrDastbaaf_Settings_Controller {
         $sms_password_set = '' !== (string) get_option('mrdastbaaf_sms_password', '');
         $sms_body_id = get_option('mrdastbaaf_sms_body_id', '');
         $sms_last_log = get_option('mrdastbaaf_sms_last_log', '');
+
+        // v1.2.0: تنظیمات جدید — هدر پروکسی، هاست‌های ویدیو و توکن کرون
+        $proxy_header = (string) get_option('mrdastbaaf_trusted_proxy_header', '');
+        $video_hosts = (string) get_option('mrdastbaaf_video_hosts', 'dll.mrdastbaaf.com');
+        $cron_token = (string) get_option('mrdastbaaf_cron_token', '');
+        $cron_example_url = rest_url(MRDASTBAAF_API_NAMESPACE . '/cron/reconcile') . '?token=' . ($cron_token !== '' ? $cron_token : 'TOKEN');
         ?>
         <div class="wrap">
             <h1>تنظیمات مستر دستباف</h1>
@@ -221,6 +293,32 @@ class MrDastbaaf_Settings_Controller {
                         <td>
                             <input type="text" id="mrd-sms-body-id" name="mrdastbaaf_sms_body_id" value="<?php echo esc_attr($sms_body_id); ?>" class="regular-text code" dir="ltr" autocomplete="off" />
                             <p class="description">شناسهٔ الگوی BaseServiceNumber در پنل ملی‌پیامک؛ فقط مقدار کد تایید داخل الگو جای‌گذاری می‌شود.</p>
+                        </td>
+                    </tr>
+                </table>
+
+                <h2 class="title">امنیت و زیرساخت (v1.2.0)</h2>
+                <table class="form-table" role="presentation">
+                    <tr>
+                        <th scope="row"><label for="mrd-trusted-proxy-header">هدر اعتمادشدهٔ پروکسی</label></th>
+                        <td>
+                            <input type="text" id="mrd-trusted-proxy-header" name="mrdastbaaf_trusted_proxy_header" value="<?php echo esc_attr($proxy_header); ?>" class="regular-text code" dir="ltr" placeholder="مثال: X-Forwarded-For (خالی = مستقیم)" autocomplete="off" />
+                            <p class="description">پشت reverse-proxy (مثل کلودفلر/انجین‌اکس)، همهٔ درخواست‌ها یک IP مشترک دارند و سقف anti-spam پیامک بی‌اثر می‌شود. نام هدری که IP واقعی کلاینت را حمل می‌کند وارد کنید (فقط اولین IP فهرست خوانده می‌شود). <strong>خالی = مستقیم (REMOTE_ADDR)</strong>. این هدر قابل جعل است و فقط برای rate-limit استفاده می‌شود.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="mrd-video-hosts">هاست‌های مجاز ویدیو</label></th>
+                        <td>
+                            <textarea id="mrd-video-hosts" name="mrdastbaaf_video_hosts" class="large-text code" rows="3" dir="ltr"><?php echo esc_textarea($video_hosts); ?></textarea>
+                            <p class="description">هر هاست در یک خط؛ آدرس ویدیوی درس‌ها فقط با این هاست‌ها پذیرفته می‌شود (به‌علاوهٔ https). پیش‌فرض: <code>dll.mrdastbaaf.com</code></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="mrd-cron-token">توکن کرون ریکنسیلیشن</label></th>
+                        <td>
+                            <input type="text" id="mrd-cron-token" value="<?php echo esc_attr($cron_token); ?>" class="regular-text code" dir="ltr" readonly onclick="this.select()" />
+                            <p class="description">توکن اختصاصی اندپوینت <code>GET /cron/reconcile?token=…</code> — خودکار تولید شده و فقط-خواندنی است (هیچ‌گاه در پاسخ‌های عمومی نمی‌آید). برای اجرای مطمئن کرون سرور (به‌جای WP-Cron تزویری)، این دستور را در crontab سرور بگذارید:</p>
+                            <code dir="ltr"><?php echo esc_html('*/10 * * * * curl -s "' . $cron_example_url . '"'); ?></code>
                         </td>
                     </tr>
                 </table>

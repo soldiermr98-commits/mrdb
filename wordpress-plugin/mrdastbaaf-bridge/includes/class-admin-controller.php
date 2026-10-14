@@ -12,55 +12,96 @@ if (!defined('ABSPATH')) {
 class MrDastbaaf_Admin_Controller {
 
     public function register_routes() {
+        // v1.2.0: همهٔ روت‌های ادمین با permission مشترک (احراز صریح Bearer + manage_options)
+        // — قبلاً فقط current_user_can بود و اگر فیلتر determine_current_user دیر فایر
+        // می‌شد، درخواست Bearer ادمین به‌اشتباه 401 می‌شد.
         register_rest_route(MRDASTBAAF_API_NAMESPACE, '/admin/analytics', array(
             'methods' => 'GET',
             'callback' => array($this, 'handle_get_analytics'),
-            'permission_callback' => array($this, 'check_admin_permission'),
+            'permission_callback' => array('MrDastbaaf_Auth_Controller', 'permission_admin'),
         ));
 
         register_rest_route(MRDASTBAAF_API_NAMESPACE, '/admin/receipts', array(
             'methods' => 'GET',
             'callback' => array($this, 'handle_get_pending_receipts'),
-            'permission_callback' => array($this, 'check_admin_permission'),
+            'permission_callback' => array('MrDastbaaf_Auth_Controller', 'permission_admin'),
         ));
 
         register_rest_route(MRDASTBAAF_API_NAMESPACE, '/admin/receipts/(?P<id>[a-zA-Z0-9_-]+)/review', array(
             'methods' => 'PUT',
             'callback' => array($this, 'handle_review_receipt'),
-            'permission_callback' => array($this, 'check_admin_permission'),
+            'permission_callback' => array('MrDastbaaf_Auth_Controller', 'permission_admin'),
         ));
 
         register_rest_route(MRDASTBAAF_API_NAMESPACE, '/admin/plans/(?P<id>[a-zA-Z0-9_-]+)', array(
             'methods' => 'PUT',
             'callback' => array($this, 'handle_update_plan'),
-            'permission_callback' => array($this, 'check_admin_permission'),
+            'permission_callback' => array('MrDastbaaf_Auth_Controller', 'permission_admin'),
         ));
 
         register_rest_route(MRDASTBAAF_API_NAMESPACE, '/admin/homepage-sections', array(
             'methods' => array('GET', 'PUT'),
             'callback' => array($this, 'handle_homepage_sections'),
-            'permission_callback' => array($this, 'check_admin_permission'),
+            'permission_callback' => array('MrDastbaaf_Auth_Controller', 'permission_admin'),
         ));
 
         // v1.1.0: CRUD درس‌ها و ویدیوها از صفحهٔ پیشخوان «درس‌ها و ویدیوها»
         register_rest_route(MRDASTBAAF_API_NAMESPACE, '/admin/lessons', array(
             'methods' => array('GET', 'POST'),
             'callback' => array($this, 'handle_admin_lessons'),
-            'permission_callback' => array($this, 'check_admin_permission'),
+            'permission_callback' => array('MrDastbaaf_Auth_Controller', 'permission_admin'),
         ));
 
         register_rest_route(MRDASTBAAF_API_NAMESPACE, '/admin/lessons/(?P<id>[0-9]+)', array(
             'methods' => array('PUT', 'DELETE'),
             'callback' => array($this, 'handle_admin_lesson_mutation'),
-            'permission_callback' => array($this, 'check_admin_permission'),
+            'permission_callback' => array('MrDastbaaf_Auth_Controller', 'permission_admin'),
         ));
     }
 
     /**
-     * اعتبارسنجی سطح دسترسی مدیر کل وردپرس
+     * اعتبارسنجی سطح دسترسی مدیر کل وردپرس — v1.2.0: به permission مشترک احراز Bearer
+     * واگذار شد (متد برای سازگاری فراخوانی‌های داخلی حفظ شده است).
      */
     public function check_admin_permission() {
-        return current_user_can('manage_options');
+        return MrDastbaaf_Auth_Controller::permission_admin();
+    }
+
+    /**
+     * v1.2.0: ردپای ممیزی — درج رکورد در جدول mrdastbaaf_audit_log (اسکیما ۱.۳.۰).
+     * شکست درج هرگز جریان اصلی را قطع نمی‌کند (فقط لاگ سرور) — ممیزی مکمل است،
+     * نه پیش‌نیاز عملیات.
+     *
+     * @param string      $action      کد اقدام (مثلاً receipt_approved)
+     * @param string      $object_type نوع موضوع (order/user/...)
+     * @param string|int  $object_id   شناسهٔ موضوع
+     * @param string|null $details     توضیح اختیاری
+     * @param int|null    $actor_id    عامل اقدام (پیش‌فرض: کاربر جاری)
+     * @return void
+     */
+    public static function write_audit($action, $object_type, $object_id, $details = null, $actor_id = null) {
+        global $wpdb;
+        $table_audit = $wpdb->prefix . 'mrdastbaaf_audit_log';
+
+        if (null === $actor_id) {
+            $actor_id = (int) get_current_user_id();
+        }
+
+        $inserted = $wpdb->insert(
+            $table_audit,
+            array(
+                'actor_id'    => (int) $actor_id,
+                'action'      => substr(sanitize_key((string) $action), 0, 64),
+                'object_type' => substr(sanitize_key((string) $object_type), 0, 32),
+                'object_id'   => substr(sanitize_text_field((string) $object_id), 0, 64),
+                'details'     => (null === $details) ? null : sanitize_textarea_field((string) $details),
+            ),
+            array('%d', '%s', '%s', '%s', '%s')
+        );
+
+        if (false === $inserted) {
+            error_log('MrDastbaaf: audit log insert failed for action ' . (string) $action . ' — ' . $wpdb->last_error);
+        }
     }
 
     /**
@@ -135,6 +176,11 @@ class MrDastbaaf_Admin_Controller {
 
     /**
      * تایید یا رد فیش واریزی توسط مدیر
+     *
+     * v1.2.0 (یافتهٔ ۱-۱۰): ادعای اتمیک به verifying تغییر کرد (نه completed) تا
+     * وضعیت میانی «در حال پردازش» گمراه‌کننده نباشد؛ رد با UPDATE مشروط + بررسی
+     * نتیجه انجام می‌شود؛ رکورد انتقال فقط پس از گذار موفق وضعیت به‌روز می‌شود؛
+     * و همهٔ اقدامات با ردپای ممیزی ثبت می‌شوند.
      */
     public function handle_review_receipt(WP_REST_Request $request) {
         global $wpdb;
@@ -164,21 +210,39 @@ class MrDastbaaf_Admin_Controller {
                 return new WP_Error('missing_reason', 'درج علت رد فیش الزامی است.', array('status' => 400));
             }
 
-            $wpdb->update($table_orders, array('status' => 'rejected'), array('id' => $order_id));
+            // v1.2.0: UPDATE مشروط به pending + بررسی نتیجه — قبلاً بدون شرط بود و
+            // رقابت دو ادمین بی‌صدا دوبار «رد» ثبت می‌کرد.
+            $rejected = $wpdb->query($wpdb->prepare(
+                "UPDATE $table_orders SET status = 'rejected', updated_at = %s WHERE id = %s AND status = 'pending'",
+                $now, $order_id
+            ));
+            if (false === $rejected) {
+                error_log('MrDastbaaf: receipt reject update failed for order ' . $order_id . ' — ' . $wpdb->last_error);
+                return new WP_Error('db_error', 'ثبت رد فیش ناموفق بود؛ لطفاً دوباره تلاش کنید.', array('status' => 500));
+            }
+            if (0 === $rejected) {
+                return new WP_Error('order_already_processed', 'این سفارش هم‌اکنون پردازش شده است', array('status' => 409));
+            }
+
+            // رکورد انتقال فقط پس از گذار موفق وضعیت به‌روز می‌شود
             $wpdb->update($table_transfers, array(
                 'admin_review_note' => $admin_note,
                 'reviewer_admin_id' => $reviewer_id,
                 'reviewed_at' => $now,
             ), array('order_id' => $order_id));
 
+            // v1.2.0: ردپای ممیزی
+            self::write_audit('receipt_rejected', 'order', $order_id, 'رد فیش: ' . $admin_note, $reviewer_id);
+
             return rest_ensure_response(array('success' => true, 'message' => 'فیش واریزی با ثبت علت رد گردید.'));
         }
 
         if ($decision === 'approve') {
-            // BUG-37: ادعای اتمیک سفارش پیش از grant — دو ادمین هم‌زمان (یا درخواست
-            // تکراری) نمی‌توانند اشتراک را دوباره فعال کنند؛ UPDATE مشروط به pending.
+            // BUG-37 / v1.2.0: ادعای اتمیک سفارش پیش از grant — دو ادمین هم‌زمان (یا
+            // درخواست تکراری) نمی‌توانند اشتراک را دوباره فعال کنند. وضعیت میانی
+            // «verifying» است (نه completed) تا سفارشِ در-حال-پردازش قابل تفکیک باشد.
             $claimed = $wpdb->query($wpdb->prepare(
-                "UPDATE $table_orders SET status = 'completed', verified_at = %s WHERE id = %s AND status = 'pending'",
+                "UPDATE $table_orders SET status = 'verifying', updated_at = %s WHERE id = %s AND status = 'pending'",
                 $now, $order_id
             ));
             if (1 !== (int) $claimed) {
@@ -187,38 +251,67 @@ class MrDastbaaf_Admin_Controller {
 
             /**
              * SECURITY FIX (BUG-14 caller): فعال‌سازی اشتراک پیش از نهایی‌سازی انجام
-             * می‌شود. اگر grant_or_extend شکست بخورد (پلن حذف‌شده یا خطای DB)،
-             * سفارش به pending برمی‌گردد و در صف باقی می‌ماند — پول کاربر بدون
-             * اشتراک گم نمی‌شود و مدیر خطا را می‌بیند.
+             * می‌شود. اگر grant شکست بخورد (پلن حذف‌شده یا خطای DB)، سفارش به pending
+             * برمی‌گردد و در صف باقی می‌ماند — پول کاربر بدون اشتراک گم نمی‌شود.
              */
             $table_plans = $wpdb->prefix . 'mrdastbaaf_plans';
             $plan = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_plans WHERE id = %s", $order->plan_id));
 
             $membership_result = MrDastbaaf_Membership_Helper::grant_or_extend($order->user_id, $plan, $order->id);
-            if (false === $membership_result) {
+            if (false === $membership_result || !is_array($membership_result)) {
                 // BUG-37: برگشت وضعیت به pending — فیش دوباره در صف بررسی قرار می‌گیرد
                 $wpdb->query($wpdb->prepare(
-                    "UPDATE $table_orders SET status = 'pending' WHERE id = %s AND status = 'completed'",
-                    $order_id
+                    "UPDATE $table_orders SET status = 'pending', updated_at = %s WHERE id = %s AND status = 'verifying'",
+                    $now, $order_id
                 ));
                 return new WP_Error('membership_grant_failed', 'تایید انجام شد اما فعال‌سازی اشتراک ناموفق بود؛ سفارش در صف بررسی باقی ماند. لطفاً پلن متناظر سفارش را بررسی کنید.', array('status' => 409));
             }
 
-            // BUG-37: وضعیت سفارش در ادعای اتمیک به completed تغییر کرده است؛
-            // در اینجا فقط یادداشت بررسی ثبت می‌شود.
+            if (isset($membership_result['mode']) && 'blocked_lower_tier' === $membership_result['mode']) {
+                // v1.2.0: خرید سطح پایین‌تر از اشتراک فعال — سفارش به pending برمی‌گردد
+                // (نه completed) تا کاربر ابتدا تصمیمش را با پشتیبانی روشن کند.
+                $wpdb->query($wpdb->prepare(
+                    "UPDATE $table_orders SET status = 'pending', updated_at = %s WHERE id = %s AND status = 'verifying'",
+                    $now, $order_id
+                ));
+                return new WP_Error('lower_tier_blocked', $membership_result['message'], array('status' => 409));
+            }
+
+            // گذار نهایی به completed فقط از verifying — false = خطای DB (500)؛
+            // 0 = گذار هم‌زمان رخ داده (409).
+            $completed_updated = $wpdb->query($wpdb->prepare(
+                "UPDATE $table_orders SET status = 'completed', verified_at = %s, updated_at = %s WHERE id = %s AND status = 'verifying'",
+                $now, $now, $order_id
+            ));
+            if (false === $completed_updated) {
+                error_log('MrDastbaaf: receipt final completed update failed for order ' . $order_id . ' — ' . $wpdb->last_error);
+                return new WP_Error('completion_update_failed', 'ثبت نهایی تایید ناموفق بود؛ سفارش در وضعیت پردازش باقی ماند و دوباره بررسی می‌شود.', array('status' => 500));
+            }
+            if (0 === $completed_updated) {
+                return new WP_Error('order_already_processed', 'این سفارش هم‌اکنون پردازش شده است؛ فهرست فیش‌ها را به‌روزرسانی کنید.', array('status' => 409));
+            }
+
+            // رکورد انتقال فقط پس از گذار موفق وضعیت به‌روز می‌شود
             $wpdb->update($table_transfers, array(
                 'admin_review_note' => $admin_note ?: 'فیش با موفقیت تایید شد.',
                 'reviewer_admin_id' => $reviewer_id,
                 'reviewed_at' => $now,
             ), array('order_id' => $order_id));
 
+            // v1.2.0: ردپای ممیزی
+            self::write_audit('receipt_approved', 'order', $order_id, sprintf('تایید فیش — mode=%s expires=%s', $membership_result['mode'], $membership_result['expires_at']), $reviewer_id);
+
             do_action('mrdastbaaf_membership_granted', $order->user_id, $membership_result);
+
+            $mode_message = ($membership_result['mode'] === 'extended'
+                ? 'فیش تایید و اشتراک کاربر با حفظ روزهای باقی‌مانده تمدید شد.'
+                : ($membership_result['mode'] === 'upgraded'
+                    ? 'فیش تایید و اشتراک کاربر با تبدیل ارزش روزهای باقی‌مانده ارتقا یافت.'
+                    : 'فیش تایید و اشتراک کاربر فعال گردید.'));
 
             return rest_ensure_response(array(
                 'success' => true,
-                'message' => ($membership_result['mode'] === 'extended'
-                    ? 'فیش تایید و اشتراک کاربر با حفظ روزهای باقی‌مانده تمدید شد.'
-                    : 'فیش تایید و اشتراک کاربر فعال گردید.'),
+                'message' => $mode_message,
             ));
         }
 
@@ -380,6 +473,29 @@ class MrDastbaaf_Admin_Controller {
                                     }
                                     $clean_config[$config_key] = is_bool($cv) ? $cv : (is_numeric($cv) ? $cv : sanitize_text_field((string) $cv));
                                 }
+
+                                /**
+                                 * SECURITY FIX (v1.2.0 — یافتهٔ ۲-۱۸): مقادیر URL-مانند — مقدار
+                                 * رشته‌ای که شکل «scheme://…» دارد یا با www. شروع می‌شود یا کلیدش
+                                 * url/link/href/src است، با esc_url_raw + لیست سفید scheme
+                                 * (http/https/mailto/tel) اعتبارسنجی می‌شود؛ در غیر این صورت کلید
+                                 * حذف می‌شود (javascript:/data: و هر scheme غیرمجاز رد می‌شود).
+                                 * خروجی فقط از React JSX رندر می‌شود (بدون innerHTML) اما دفاع در
+                                 * لایهٔ ذخیره‌سازی الزامی است.
+                                 */
+                                foreach ($clean_config as $ck => $cv) {
+                                    if (is_string($cv) && $this->is_url_like_config($ck, $cv)) {
+                                        $validated = esc_url_raw($cv, array('http', 'https', 'mailto', 'tel'));
+                                        $scheme = (string) wp_parse_url($validated, PHP_URL_SCHEME);
+                                        if ('' === $validated || !in_array($scheme, array('http', 'https', 'mailto', 'tel'), true)) {
+                                            unset($clean_config[$ck]); // کلید نامعتبر حذف می‌شود
+                                            error_log('MrDastbaaf: configData URL value dropped (invalid scheme/host) — key: ' . $ck);
+                                        } else {
+                                            $clean_config[$ck] = $validated;
+                                        }
+                                    }
+                                }
+
                                 $clean[$key] = (object) $clean_config;
                             }
                             break;
@@ -394,6 +510,27 @@ class MrDastbaaf_Admin_Controller {
             update_option($option_key, $clean_sections, false); // autoload = false برای عملکرد بهتر
             return rest_ensure_response(array('success' => true, 'message' => 'چیدمان صفحه اصلی ذخیره شد.'));
         }
+    }
+
+    /**
+     * v1.2.0: تشخیص مقدار URL-مانند در configData — شرط‌ها:
+     *  ۱) کلید حاوی url/link/href/src باشد (غیرحساس به بزرگی/کوچکی) یا
+     *  ۲) مقدار با «scheme://» شروع شود یا با «www.» آغاز شود.
+     *
+     * @param string $key کلید کانفیگ
+     * @param string $value مقدار رشته‌ای
+     * @return bool
+     */
+    private function is_url_like_config($key, $value) {
+        $key_lower = strtolower((string) $key);
+        if (false !== strpos($key_lower, 'url') || false !== strpos($key_lower, 'link')
+            || false !== strpos($key_lower, 'href') || false !== strpos($key_lower, 'src')) {
+            return true;
+        }
+        if (preg_match('/^[A-Za-z][A-Za-z0-9+\-.]*:\/\//', (string) $value)) {
+            return true; // شکل scheme://…
+        }
+        return (0 === strpos(strtolower((string) $value), 'www.'));
     }
 
     /**
@@ -597,6 +734,16 @@ class MrDastbaaf_Admin_Controller {
             if ('' === $validated_url || 0 !== strpos($validated_url, 'https://')) {
                 return new WP_Error('invalid_video_url', 'آدرس ویدیو باید یک نشانی معتبر با https:// باشد (هاست دانلود dll.mrdastbaaf.com).', array('status' => 400));
             }
+
+            // v1.2.0 (یافتهٔ ۱-۸): لیست سفید هاست ویدیو — ویدیوی MP4 خام روی هر هاستی
+            // قابل لینک‌دادن/سوخت‌سوزی است؛ فقط هاست‌های مجاز پذیرفته می‌شوند. لیست در
+            // تنظیمات (mrdastbaaf_video_hosts — یکی در هر خط) قابل گسترش است.
+            $host = strtolower((string) wp_parse_url($validated_url, PHP_URL_HOST));
+            $allowed_hosts = $this->get_allowed_video_hosts();
+            if ('' === $host || !in_array($host, $allowed_hosts, true)) {
+                return new WP_Error('video_host_not_allowed', 'فقط ویدیوهای هاست مجاز (dll.mrdastbaaf.com) پذیرفته می‌شوند.', array('status' => 400));
+            }
+
             $fields['video_url'] = $validated_url;
         } elseif (!$is_update) {
             return new WP_Error('invalid_video_url', 'آدرس ویدیوی درس الزامی است و باید با https:// شروع شود.', array('status' => 400));
@@ -628,6 +775,19 @@ class MrDastbaaf_Admin_Controller {
         }
 
         return $fields;
+    }
+
+    /**
+     * v1.2.0: لیست سفید هاست‌های ویدیو (حروف کوچک) — از آپشن mrdastbaaf_video_hosts
+     * (یکی در هر خط) خوانده می‌شود؛ پیش‌فرض فقط dll.mrdastbaaf.com.
+     *
+     * @return array
+     */
+    private function get_allowed_video_hosts() {
+        $raw = (string) get_option('mrdastbaaf_video_hosts', 'dll.mrdastbaaf.com');
+        $hosts = array_filter(array_map('trim', explode("\n", $raw)));
+        $hosts = array_map('strtolower', $hosts);
+        return array_values(array_filter($hosts));
     }
 
     /**

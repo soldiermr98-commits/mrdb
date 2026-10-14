@@ -1,20 +1,18 @@
 /**
  * @file services/authService.ts
- * @description Mock authentication service simulating WordPress + Otino Phone Login
+ * @description سرویس احراز هویت Dual-Mode: دمو (mock/رجیستری محلی) و Real-API (پل وردپرس)
  *
- * ARCHITECTURE NOTE:
- * In production, this service will connect to the WordPress REST API endpoint
- * provided by the Otino OTP plugin or a custom WordPress bridge.
- *
- * TODO: Official Otino OTP REST API endpoints, request schemas, and SMS provider hooks
- * are currently unknown and pending official documentation and staging credentials.
- * Do not invent production endpoints until documentation is provided.
+ * v1.2.0 (prelive 18-b): مسیرهای OTP/تایید از v1.1.0 مستند و پیاده شده‌اند
+ * (POST /auth/request-otp و /auth/verify-otp)، خروج با POST /auth/logout و
+ * پیشرفت یادگیری با GET/PUT /me/progress (progressService) همگام می‌شود.
  */
 
 import { INITIAL_USERS } from '../data/mockData';
 import { MembershipTier, UserMembership, UserProfile, UserRole } from '../types';
 import { formatJalali, toEnglishDigits } from '../utils/format';
 import { ApiError, apiFetch, isRealApiMode, setStoredAuthToken, getStoredAuthToken } from './apiClient';
+import { ORDERS_STORAGE_KEY } from './orderStore';
+import { progressService } from './progressService';
 import { hasStringId, readJsonArray } from './storageGuard';
 
 const STORAGE_KEY_USER = 'mrdastbaaf_current_user';
@@ -22,6 +20,16 @@ const STORAGE_KEY_TOKEN = 'mrdastbaaf_auth_token';
 // BUG-25: persistent users registry — identity + membership + progress survive
 // logout / re-login / re-install of the session (see loadUserRegistry below).
 const STORAGE_KEY_USERS = 'mrdastbaaf_users';
+
+// ---------------------------------------------------------------------------
+// Hardening (prelive 18-b): کلیدهای دمویی که در خروج Real باید پاک شوند.
+// ---------------------------------------------------------------------------
+const DEMO_DATA_KEYS_TO_PURGE_ON_REAL_LOGOUT: readonly string[] = [
+  ORDERS_STORAGE_KEY, // 'mrdastbaaf_orders' — دفتر سفارش‌های دمو/آینهٔ محلی
+  STORAGE_KEY_USERS, // 'mrdastbaaf_users' — رجیستری کاربران دمو/آینهٔ هویت
+  'mrdastbaaf_courses', // courseService.STORAGE_KEY_COURSES (وارد نشدن سرویس برای جلوگیری از چرخه)
+  'mrdastbaaf_notes', // courseService.STORAGE_KEY_NOTES (همان)
+];
 
 // In-memory runtime state with session persistence.
 // SECURITY FIX (BUG-07): if no user is persisted, currentUser stays `null`.
@@ -132,6 +140,20 @@ function normalizeApiMembership(
 function normalizeApiUser(raw: ApiUserProfileShape | null | undefined): UserProfile {
   const source: ApiUserProfileShape = raw && typeof raw === 'object' ? raw : {};
   const phoneNumber = asTrimmedString(source.phoneNumber ?? source.phone, '00000000000');
+  // ---------------------------------------------------------------------------
+  // Hardening (prelive 18-b — یافتهٔ 1-7): پیشرفت محلی هرگز با [] سرور محو نمی‌شود.
+  // default خالی فقط برای «فیلد جاافتاده» است؛ اگر سشن محلیِ قبلی آرایه داشته باشد،
+  // هنگام غیبت فیلد در پاسخ سرور همان آرایه حفظ می‌شود:
+  //   (آرایهٔ غیرخالی سرور) ? سرور : (آرایهٔ سشن قبلی) ? قبلی : []
+  // یکپارچه‌سازی اتحاد سرور/محلی هم در progressService.syncProgressOnLogin انجام می‌شود.
+  // ---------------------------------------------------------------------------
+  const previousUser = currentUser;
+  const previousCompleted =
+    Array.isArray(previousUser?.completedLessonIds) ? previousUser.completedLessonIds : [];
+  const previousBookmarked =
+    Array.isArray(previousUser?.bookmarkedLessonIds) ? previousUser.bookmarkedLessonIds : [];
+  const serverCompleted = asStringArray(source.completedLessonIds);
+  const serverBookmarked = asStringArray(source.bookmarkedLessonIds);
   return {
     id: asTrimmedString(source.id) || generateUserId(),
     phoneNumber,
@@ -143,8 +165,8 @@ function normalizeApiUser(raw: ApiUserProfileShape | null | undefined): UserProf
     role: source.role === 'admin' ? 'admin' : 'student',
     avatarUrl: asTrimmedString(source.avatarUrl ?? source.avatar) || undefined,
     membership: normalizeApiMembership(source.membership),
-    completedLessonIds: asStringArray(source.completedLessonIds),
-    bookmarkedLessonIds: asStringArray(source.bookmarkedLessonIds),
+    completedLessonIds: serverCompleted.length > 0 ? serverCompleted : previousCompleted,
+    bookmarkedLessonIds: serverBookmarked.length > 0 ? serverBookmarked : previousBookmarked,
     createdAt: asTrimmedString(source.createdAt) || new Date().toISOString(),
   };
 }
@@ -312,6 +334,10 @@ export const authService = {
       // BUG-25: هویت Real هم در رجیستری محلی mirror می‌شود تا پیشرفت/بوکمارک دمو حفظ بماند
       upsertRegistryUser(user);
 
+      // Hardening (prelive 18-b): یکپارچه‌سازی پیشرفت سرور با سشن — fire-and-forget
+      // (شکست سینک هرگز لاگین را نمی‌شکند؛ progressService داخلی try/catch دارد).
+      void progressService.syncProgressOnLogin();
+
       return { user, token };
     }
 
@@ -349,6 +375,11 @@ export const authService = {
    * Switch between demo student and admin for review
    */
   switchRole(role: UserRole): UserProfile {
+    // Hardening (prelive 18-b): سوییچ نقش فقط ابزار بازبینی دمو است — در حالت
+    // اتصال واقعی به سرور هرگز نباید اجرا شود (هویت ادمین/هنرجو از سرور می‌آید).
+    if (isRealApiMode) {
+      throw new Error('سوییچ نقش در حالت واقعی مجاز نیست.');
+    }
     // BUG-25 + BUG-27: resolve through the registry (keeps demo membership
     // changes) and FAIL LOUDLY on an unknown role instead of silently falling
     // back to INITIAL_USERS[0]. Seeded users are preferred so the demo switch
@@ -397,9 +428,27 @@ export const authService = {
   },
 
   /**
-   * Logout
+   * Logout.
+   *
+   * Hardening (prelive 18-b):
+   *  - حالت Real: ابتدا POST /auth/logout با Bearer (best-effort؛ await با catch —
+   *    خطا بی‌صدا نادیده گرفته می‌شود) و بعد پاک‌سازی توکن/سشن، تا سرور توکن
+   *    opaque را revoke کند. سپس کلیدهای دادهٔ دمو نیز پاک می‌شوند (سرور دفتر
+   *    مالی/سفارش است؛ آینه‌های محلی دیگر معنا ندارند).
+   *  - حالت دمو: همان رفتار قبلی (پاک‌سازی سشن محلی).
+   * متد async است؛ caller نیازی به await ندارد (هیچ‌وقت throw نمی‌کند).
    */
-  logout(): void {
+  async logout(): Promise<void> {
+    if (isRealApiMode) {
+      // ۱) revoke سمت سرور — best-effort: حتی اگر شبکه/سرور در دسترس نبود،
+      // خروج محلی باید کامل شود (توکن انقضاشده هم سرور بی‌خطر می‌کند).
+      try {
+        await apiFetch('/auth/logout', { method: 'POST', auth: true });
+      } catch (e) {
+        // best-effort — هیچ خطایی جریان خروج را نمی‌شکند.
+      }
+    }
+
     currentUser = null;
     try {
       localStorage.removeItem(STORAGE_KEY_USER);
@@ -407,6 +456,19 @@ export const authService = {
       localStorage.removeItem(STORAGE_KEY_TOKEN);
     } catch (e) {
       // ignore
+    }
+
+    if (isRealApiMode) {
+      // ۲) پاک‌سازی داده‌های دمو/آینه‌های محلی — فقط در حالت Real و فقط روی
+      // فهرست کلیدهای صریح (بدون wildcard) تا هیچ کلید ناشناخته‌ای دست نخورد.
+      // دفتر مالی واقعی سرور است؛ این کلیدها فقط منابع UI دمو/آینه بودند.
+      for (const key of DEMO_DATA_KEYS_TO_PURGE_ON_REAL_LOGOUT) {
+        try {
+          localStorage.removeItem(key);
+        } catch (e) {
+          // ignore — حذف تک‌کلید هرگز کل خروج را نمی‌شکند.
+        }
+      }
     }
   },
 
@@ -435,7 +497,14 @@ export const authService = {
         // ignore
       }
       upsertRegistryUser(user);
-      return user;
+
+      // Hardening (prelive 18-b): یکپارچه‌سازی پیشرفت سرور (GET /me/progress → UNION)
+      // — progressService هرگز throw نمی‌کند؛ await تا پروفایل برگشتی شامل
+      // پیشرفت یکپارچه باشد (App پس از سینک، state را با همین مقدار تازه می‌کند).
+      await progressService.syncProgressOnLogin();
+
+      // پس از سینک پیشرفت، سشن ممکن است آرایه‌های یکپارچه داشته باشد — نسخهٔ نهایی برگردانده می‌شود.
+      return currentUser;
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         // توکن توسط apiClient پاک شده — سشن محلی هم باید بسته شود.

@@ -5,6 +5,40 @@
 
 ---
 
+## [1.2.0] — سخت‌سازی پیش‌لایو (Pre-live Hardening)
+
+> برنچ `fix/prelive-hardening` — یافته‌های ۲۱گانه در `docs/PRE_LIVE_HARDENING.md` تک‌تک با خواندن کد راستی‌آزمایی و برای هر مورد حکم (تایید/تایید-جزئی/رد) ثبت شده است. شرح کامل تصمیم‌ها در توضیحات PR.
+
+### افزونه وردپرس — نسخه 1.2.0 (نسخه دیتابیس: 1.3.0)
+
+- **[SECURITY] Bearer:** permission_callback مشترک (`permission_logged_in` / `permission_admin`) که اول Bearer را صریحاً احراز می‌کند (جبران فریز احتمالی `wp_get_current_user` پیش از تعریف REST_REQUEST)؛ Bearer فقط برای namespace `mrdastbaaf/v1` فعال است.
+- **[SECURITY] توکن:** فرمت `{userId}.{secret}` — سرور فقط `sha256(secret)` را نگه می‌دارد؛ lookup با userId (حذف `get_users(meta_value)`)؛ اندپوینت NEW `POST /auth/logout` برای revoke.
+- **[SECURITY] زیبال:** حذف پیش‌فرض سندباکس — مرچنت خالی یا `zibal` = خطای 503 (مگر ثابت `MRDASTBAAF_ALLOW_SANDBOX`)؛ `success` کلاینت دیگر تصمیم‌ساز نیست (verify زیبال مرجع یکتا)؛ `amount` الزامی + تطبیق `orderId` با `order_number`؛ شکست request در initiate → سفارش cancelled؛ TTL توکن کال‌بک ۴۸ ساعت.
+- **[DATA] وضعیت سفارش:** ستون `updated_at` (migration)؛ `verifying` گیرکردهٔ بالای ۱۰ دقیقه → pending؛ `failed` تا ۷۲ ساعت قابل بازبررسی؛ کرون ریکنسیلیشن هر ۱۰ دقیقه (بج ۱۰۰) + اندپوینت NEW `GET /cron/reconcile?token=` برای کرون واقعی سرور + لاگ خلاصه.
+- **[DATA] ledger اشتراک:** جدول NEW `mrdastbaaf_membership_grants` با `UNIQUE(order_id)` — grant دوباره برای همان سفارش نتیجهٔ ثبت‌شده را ایدمپوتنت برمی‌گرداند (تست: دو بار finalize همان سفارش).
+- **[DATA] منطق تیر:** هم‌سطح=تمدید از انقضا؛ سطح بالاتر=اشتراک جدید از «الان» با تبدیل متناسب ارزش روزهای باقی‌مانده (`convert_remaining_days`) و وضعیت `upgraded` برای رکورد قبلی؛ سطح پایین‌تر=رد با پیام 409.
+- **[AUTH] OTP:** ۶ رقمی؛ قفل ساعتی (۵) و روزانه (۱۵) مستقل per-phone؛ IP واقعی از هدر پروکسی قابل‌تنظیم (`mrdastbaaf_trusted_proxy_header`)؛ سقف سراسری log-only؛ `invalid_otp` از 401 به 400؛ ورود نقش‌های مدیریتی با OTP رد می‌شود (403)؛ حذف `wp_set_auth_cookie`/`wp_set_current_user` از verify (Bearer-only)؛ نقش صریح `subscriber` برای کاربر جدید؛ یافتن کاربر با `billing_phone`.
+- **[SECURITY] CORS:** حذف `rest_send_cors_headers` فقط برای namespace افزونه؛ حذف `Allow-Credentials`؛ افزودن `Access-Control-Max-Age: 600`؛ مستندات `.htaccess` گذر هدر Authorization.
+- **[SECURITY] ویدیو:** allowlist هاست (`mrdastbaaf_video_hosts`) در ذخیرهٔ درس‌ها؛ فیلتر `mrdastbaaf_stream_video_url` به‌عنوان نقطهٔ اتصال لینک امضادار CDN؛ rate-limit بلیط مهمان (۳۰/ساعت).
+- **[API] اندپوینت‌های NEW:** `GET/PUT /me/progress` (پیشرفت/نشان‌شده‌ها در usermeta)، `GET /me/orders` (تاریخچه سفارش سرور-محور).
+- **[FIX] بررسی فیش:** ادعا به `verifying` (میانی) و کامل‌سازی پس از grant؛ reject با UPDATE مشروط + بررسی نتیجه؛ audit log (جدول NEW `mrdastbaaf_audit_log`: چه کسی/کی/چه). صفحهٔ پیشخوان برای بررسی فیش‌ها **وجود ندارد** — به‌عنوان محدودیت گزارش شد.
+- **[MISC]** حذف `rating/students` ساختگی از دوره‌ها؛ اتصال `/courses/{slug}` به دستهٔ دوره‌ها؛ sanitize مقادیر URL-مانند `configData` با allowlist scheme؛ گزینه‌های جدید تنظیمات (هدر پروکسی، هاست‌های ویدیو، توکن کرون فقط-نمایش).
+
+### وب‌اپلیکیشن PWA
+
+- **apiClient:** 401 فقط در درخواست‌های `auth:true` جلسه را منقضی می‌کند (پیام «تلاش باقی‌مانده» OTP حالا دیده می‌شود)؛ JSON نامعتبر روی پاسخ موفق → خطای فارسی (هرگز null خاموش)؛ timeout با AbortController (20s).
+- **بیلد گارد:** `vite build` بدون `VITE_API_BASE_URL` معتبر (https) با خطای فارسی fail می‌شود.
+- **پیشرفت/سفارش‌ها در Real:** `progressService` (GET/PUT merge-union + debounce) — ورود دیگر پیشرفت را پاک نمی‌کند؛ داشبورد در Real تاریخچهٔ سفارش را از `/me/orders` می‌خواند (localStorage هرگز ledger پروداکشن نیست)؛ logout در Real توکن را revoke و دیتای دموی محلی را پاک می‌کند؛ `switchRole` در Real throw.
+- **صداقت پلیر:** سوییچ کیفیت جعلی و ادعای HLS در پخش واقعی MP4 حذف/اصلاح شد.
+- **قیمت:** پذیرش رشتهٔ عددی `priceToman` در normalizer.
+
+### تست و صحت‌سنجی
+
+- Vitest: **۲۳ تست** (کال‌بک زیبال با همهٔ واریانت‌های `?`/`&`، معناشناسی 401/JSON/timeout، قراردادهای Real) — همه سبز.
+- `tsc --noEmit` سبز؛ `vite build` با env سبز؛ گارد بیلد بدون env = exit 1 (اثبات شده).
+- PHP: چکر توکن‌ساز روی هر ۱۰ فایل OK؛ هارنس `tests/php/test-tier-math.php` برای اجرای روی سرور (PHP CLI در محیط توسعه در دسترس نبود — **اجرا نشده**، php -l/PHPUnit قابل اجرا نیست؛ این مورد در PR شفاف ثبت است).
+
+---
 ## [1.1.0] — اتصال تجاری: حالت Real-API، پنل ادمین و پخش ویدیوی واقعی (Commercial Integration)
 
 > شرح کامل در بخش «۱۳. گزارش اتصال تجاری» سند `FullDoc.MD`.

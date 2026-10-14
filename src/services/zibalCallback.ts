@@ -28,6 +28,28 @@ export interface ZibalCallbackParams {
 
 const CALLBACK_PATH_SEGMENT = '/payment/callback';
 
+/**
+ * Hardening (prelive 18-b — یافتهٔ 2-16): پارس «سلخت‌گرا»ی query کال‌بک.
+ * زیبال گاهی پارامترهای خودش را به‌جای «&» با «?» به انتهای URL (که از قبل
+ * query دارد) می‌چسباند: "...&cb_token=abc?trackId=123&success=1". پارس
+ * استاندارد در این حالت cb_token را «abc?trackId=123» می‌خواند و trackId را
+ * گم می‌کند. این هلپر رشتهٔ raw را روی «?» قطعه‌قطعه می‌کند، هر قطعه را جدا
+ * پارس می‌کند و اولین مقدار هر کلید را برنده می‌دهد — هر دو شکل «&» و «?»
+ * و مسیر سروری/هش، یکسان پارس می‌شوند.
+ */
+function parseLooseQuery(raw: string): URLSearchParams {
+  const cleaned = raw.startsWith('?') ? raw.slice(1) : raw;
+  const segments = cleaned.split('?').filter((segment) => segment !== '');
+  const merged = new URLSearchParams();
+  for (const segment of segments) {
+    const part = new URLSearchParams(segment);
+    part.forEach((value, key) => {
+      if (!merged.has(key)) merged.set(key, value);
+    });
+  }
+  return merged;
+}
+
 /** اولین مقدار موجود میان چند نام ممکن (زیبال/سرور camelCase و snake_case را هر دو پوشش می‌دهد). */
 function firstParam(search: URLSearchParams, keys: readonly string[]): string {
   for (const key of keys) {
@@ -45,7 +67,7 @@ export function detectZibalCallback(): ZibalCallbackParams | null {
   if (typeof window === 'undefined') return null;
 
   // ۱) مسیر سرور — /payment/callback با query معمولی
-  const searchParams = new URLSearchParams(window.location.search);
+  const searchParams = parseLooseQuery(window.location.search);
   const searchCbToken = firstParam(searchParams, ['cb_token']);
   if (window.location.pathname.includes(CALLBACK_PATH_SEGMENT) && searchCbToken) {
     const trackId = firstParam(searchParams, ['trackId', 'track_id']);
@@ -66,7 +88,7 @@ export function detectZibalCallback(): ZibalCallbackParams | null {
   const hash = window.location.hash || '';
   const queryIndex = hash.indexOf('?');
   if (queryIndex >= 0 && hash.slice(0, queryIndex).includes(CALLBACK_PATH_SEGMENT)) {
-    const hashParams = new URLSearchParams(hash.slice(queryIndex + 1));
+    const hashParams = parseLooseQuery(hash.slice(queryIndex + 1));
     const cbToken = firstParam(hashParams, ['cb_token']);
     const trackId = firstParam(hashParams, ['trackId', 'track_id']);
     if (!cbToken) return null;

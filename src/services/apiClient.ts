@@ -61,6 +61,12 @@ export function clearStoredAuthToken(): void {
   }
 }
 
+/**
+ * Hardening (prelive 18-b): سقف زمان انتظار پاسخ سرور. هر درخواست با AbortController
+ * پس از این مدت لغو می‌شود تا UI هرگز روی درخواست معلق گیر نکند.
+ */
+export const API_TIMEOUT_MS = 20000;
+
 /** خطای تایپ‌دار HTTP با وضعیت — برای تفکیک 401/404 از بقیه خطاها در callers. */
 export class ApiError extends Error {
   readonly status: number;
@@ -78,6 +84,8 @@ export interface ApiFetchOptions {
   body?: unknown;
   /** در صورت true، هدر Bearer از توکن ذخیره‌شده خوانده می‌شود. */
   auth?: boolean;
+  /** سقف زمان انتظار پاسخ بر حسب میلی‌ثانیه — پیش‌فرض API_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 interface WpErrorPayload {
@@ -118,22 +126,38 @@ function extractErrorMessage(payload: unknown, httpResponseStatus: number): stri
   return FALLBACK_STATUS_MESSAGES[httpResponseStatus] ?? 'خطای غیرمنتظره در ارتباط با سرور رخ داد.';
 }
 
-async function parseJsonBody(response: Response): Promise<unknown> {
+/**
+ * Hardening (prelive 18-b): بدنهٔ خالی/JSON نامعتبر دیگر هرگز «null بی‌صدا» برنمی‌گرداند؛
+ * caller همیشه یا دادهٔ معتبر می‌گیرد یا Error فارسی — پاسخ ok اما خراب، خطای صریح است.
+ */
+async function parseJsonBodyOrThrow(response: Response): Promise<unknown> {
   const text = await response.text();
-  if (text.trim() === '') return null;
+  if (text.trim() === '') {
+    throw new Error('پاسخ سرور نامعتبر بود؛ لطفاً دوباره تلاش کنید.');
+  }
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    return null;
+    throw new Error('پاسخ سرور نامعتبر بود؛ لطفاً دوباره تلاش کنید.');
   }
 }
 
 /**
- * درخواست JSON به پل وردپرس. در خطا همیشه Error با پیام فارسی پرتاب می‌شود؛
- * پاسخ 401 توکن ذخیره‌شده را پاک می‌کند و خطای «جلسه منقضی شد» می‌دهد.
+ * درخواست JSON به پل وردپرس. در خطا همیشه Error با پیام فارسی پرتاب می‌شود.
+ *
+ * Hardening (prelive 18-b) — معناشناسی 401:
+ *  - فقط وقتی options.auth === true باشد، 401 یعنی «جلسه منقضی» → توکن پاک و
+ *    پیام «جلسه شما منقضی شده است» داده می‌شود.
+ *  - درخواست‌های غیر-auth که 401 می‌گیرند (مثلاً لبهٔ verify-otp یا کال‌بک)
+ *    پیام فارسی سرور را با status 401 پاس می‌دهند و توکن را دست نمی‌زنند —
+ *    کد invalid_otp از v1.2.0 با 400 می‌آید، پس این مسیر فقط 401 واقعی است.
  */
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
   const { method = 'GET', body, auth = false } = options;
+  const timeoutMs =
+    typeof options.timeoutMs === 'number' && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+      ? options.timeoutMs
+      : API_TIMEOUT_MS;
 
   const url = `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
   const headers: Record<string, string> = { Accept: 'application/json' };
@@ -146,6 +170,10 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
     headers.Authorization = `Bearer ${token}`;
   }
 
+  // Hardening: AbortController با سقف زمانی — خطای timeout از خطای شبکه تفکیک می‌شود.
+  const controller = new AbortController();
+  const abortTimer = setTimeout(() => controller.abort(), timeoutMs);
+
   let response: Response;
   try {
     response = await fetch(url, {
@@ -154,19 +182,31 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
       body: body === undefined ? undefined : JSON.stringify(body),
       // توکن opaque در هدر است؛ کوکی/سشن مرورگر لازم نیست.
       credentials: 'omit',
+      signal: controller.signal,
     });
-  } catch {
+  } catch (e) {
+    clearTimeout(abortTimer);
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error('زمان انتظار پاسخ سرور به پایان رسید؛ اتصال خود را بررسی کنید.');
+    }
     throw new Error('ارتباط با سرور برقرار نشد؛ اتصال اینترنت خود را بررسی کنید.');
   }
+  clearTimeout(abortTimer);
 
-  const payload = await parseJsonBody(response);
+  const payload = await parseJsonBodyOrThrow(response);
 
   if (!response.ok) {
     const status = extractStatus((payload ?? {}) as WpErrorPayload, response.status);
     if (response.status === 401 || status === 401) {
-      // جلسه منقضی/نامعتبر — توکن محلی باید پاک شود تا کاربر دوباره وارد شود.
-      clearStoredAuthToken();
-      throw new ApiError('جلسه شما منقضی شده است؛ لطفاً دوباره وارد شوید.', 401);
+      if (auth) {
+        // جلسه منقضی/نامعتبر در درخواست auth-دار — توکن محلی باید پاک شود تا
+        // کاربر دوباره وارد شود (apiClient خودش پیام استاندارد می‌دهد).
+        clearStoredAuthToken();
+        throw new ApiError('جلسه شما منقضی شده است؛ لطفاً دوباره وارد شوید.', 401);
+      }
+      // 401 روی درخواست غیر-auth — پیام سرور (در صورت وجود) مستقیم پاس می‌شود و
+      // توکن محلی دست‌نخورده می‌ماند (مثلاً خطای احراز verify-otp/کال‌بک).
+      throw new ApiError(extractErrorMessage(payload, response.status), 401);
     }
     throw new ApiError(extractErrorMessage(payload, response.status), status);
   }

@@ -239,7 +239,9 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    authService.logout();
+    // Hardening (prelive 18-b): در حالت Real ابتدا POST /auth/logout (best-effort)
+    // و بعد پاک‌سازی — async داخلی است و هرگز throw نمی‌کند؛ UI بلافاصله خارج می‌شود.
+    void authService.logout();
     setCurrentUser(null);
     showToast('با موفقیت از حساب کاربری خارج شدید.', 'info');
     handleNavigate('home');

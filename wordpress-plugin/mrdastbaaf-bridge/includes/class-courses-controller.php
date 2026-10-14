@@ -125,6 +125,13 @@ class MrDastbaaf_Courses_Controller {
             return new WP_Error('not_found', 'دوره مورد نظر یافت نشد.', array('status' => 404));
         }
 
+        // v1.2.0 (یافتهٔ ۳): محصول باید واقعاً در دستهٔ دوره‌ها باشد — قبلاً هر محصول
+        // ووکامرسی (مثلاً ابزار بافندگی) با داشتن slug در این اندپوینت «دوره» جا می‌شد.
+        $category_slug = (string) get_option('mrdastbaaf_course_category', 'courses');
+        if ('' !== $category_slug && !has_term($category_slug, 'product_cat', $posts[0]->ID)) {
+            return new WP_Error('not_found', 'دوره یافت نشد.', array('status' => 404));
+        }
+
         $course = $this->map_product_to_course($posts[0]);
 
         /**
@@ -151,6 +158,17 @@ class MrDastbaaf_Courses_Controller {
         $lesson_id = sanitize_text_field($request->get_param('id'));
         $user_id = get_current_user_id();
 
+        // ABUSE FIX (v1.2.0 — یافتهٔ ۲-۲۰): rate-limit مهمان — اندپوینت عمومی است و
+        // مهمان می‌توانست بلیط‌های پیش‌نمایش را بی‌حساب انبوه بگیرد (سوخت‌سوزی منابع
+        // و دور زدن اثر واترمارک با بلیط‌های متعدد). سقف: ۳۰ بلیط در ساعت برای هر
+        // ترکیب IP | کاربر | درس (مهمان هم پوشش داده می‌شود).
+        $ip = MrDastbaaf_Auth_Controller::get_client_ip();
+        $tkt_rl_key = 'mrdastbaaf_tkt_rl_' . md5($ip . '|' . (int) $user_id . '|' . (string) $lesson_id);
+        $tkt_count = (int) get_transient($tkt_rl_key);
+        if ($tkt_count >= 30) {
+            return new WP_Error('rate_limited', 'تعداد درخواست‌های تماشا بیش از حد مجاز است؛ کمی بعد دوباره تلاش کنید.', array('status' => 429));
+        }
+
         $lesson_row = $this->get_lesson_row($lesson_id);
 
         if ($lesson_row) {
@@ -174,6 +192,9 @@ class MrDastbaaf_Courses_Controller {
         $watermark = $this->build_watermark($user_id);
 
         $ticket_id = 'tkt_' . wp_generate_password(16, false);
+
+        // v1.2.0: شمارندهٔ rate-limit فقط پس از عبور از گاردهای دسترسی افزایش می‌یابد
+        set_transient($tkt_rl_key, $tkt_count + 1, HOUR_IN_SECONDS);
 
         // v1.1.0: ذخیرهٔ بلیط برای تطبیق در اندپوینت پخش — مقید به کاربر و درس
         set_transient('mrdastbaaf_tkt_' . $ticket_id, array(
@@ -230,8 +251,16 @@ class MrDastbaaf_Courses_Controller {
 
         $issued_at = isset($ticket['issued_at']) ? (int) $ticket['issued_at'] : time();
 
+        /**
+         * v1.2.0 (یافتهٔ ۱-۸): فیلتر ارائه‌دهندهٔ استریم — لایهٔ provider برای URLهای
+         * امضاشدهٔ CDN (نقطهٔ اتصال ArvanCloud؛ نیاز به کلیدها در کار آینده). امروز
+         * فیلتر URL را دست‌نخورده عبور می‌دهد؛ فردا افزونهٔ ثالث می‌تواند MP4 را به
+         * HLS امضاشده تبدیل کند. شکل پاسخ (videoUrl/watermarkText/expiresAt) ثابت است.
+         */
+        $video_url = apply_filters('mrdastbaaf_stream_video_url', (string) $lesson_row->video_url, $lesson_row, $user_id);
+
         return rest_ensure_response(array(
-            'videoUrl' => (string) $lesson_row->video_url,
+            'videoUrl' => $video_url,
             'watermarkText' => $this->build_watermark($user_id)['text'],
             'expiresAt' => gmdate('c', $issued_at + self::TICKET_TTL),
         ));
@@ -239,6 +268,10 @@ class MrDastbaaf_Courses_Controller {
 
     /**
      * نگاشت محصول ووکامرس به شکل Course فرانت (فیلدهای همگام با تایپ‌های PWA)
+     *
+     * v1.2.0 (یافتهٔ ۳): فیلدهای ساختگی rating/students حذف شدند — مقدارهای جعلی «۰»
+     * در UI رندر می‌شدند. قرارداد تغییر کرده: نرمال‌ساز کلاینت برای این دو فیلد
+     * مقدار پیش‌فرض دارد و نبودشان در پاسخ مشکلی ایجاد نمی‌کند.
      */
     private function map_product_to_course(WP_Post $post) {
         $product = function_exists('wc_get_product') ? wc_get_product($post->ID) : null;
@@ -278,8 +311,7 @@ class MrDastbaaf_Courses_Controller {
             'lessonsCount' => 0, // در handle_get_courses با شمارش واقعی جایگزین می‌شود
             'duration' => '—',
             'price' => $price,
-            'rating' => 0,
-            'students' => 0,
+            // v1.2.0: rating/students ساختگی حذف شدند (نرمال‌ساز کلاینت default دارد)
         );
     }
 

@@ -60,6 +60,11 @@ class MrDastbaaf_Database {
         // ۳. جدول سفارش‌ها و فاکتورها — BUG-26: ایندکس‌های zibal_track_id (جست‌وجوی
         // سریع کال‌بک زیبال) و user_id (گزارش‌های per-user). فرمت dbDelta: KEY داخل
         // CREATE TABLE و دو فاصله بعد از KEY.
+        // v1.2.0 (اسکیما ۱.۳.۰): ستون NEW updated_at — کرون ۱۰دقیقه‌ای برای بازیابی
+        // سفارش‌های verifying گیرکرده و بازبررسی شکست‌های ۷۲ ساعت اخیر به یک مهرِ
+        // زمانی «آخرین تغییر وضعیت» نیاز دارد؛ created_at تنها لحظهٔ ثبت سفارش را
+        // نشان می‌دهد و پنجرهٔ بازبینی‌پذیری شکست‌ها (failed re-check) را نمی‌سازد.
+        // dbDelta روی نصب‌های موجود این ستون را خودکار اضافه می‌کند.
         $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
         $sql_orders = "CREATE TABLE $table_orders (
             id varchar(64) NOT NULL,
@@ -75,6 +80,7 @@ class MrDastbaaf_Database {
             zibal_track_id varchar(64) NULL,
             zibal_ref_number varchar(64) NULL,
             verified_at datetime NULL,
+            updated_at datetime NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
             PRIMARY KEY  (id),
             UNIQUE KEY order_number_idx (order_number),
@@ -120,6 +126,42 @@ class MrDastbaaf_Database {
             KEY product_sort_idx (product_id, sort_order)
         ) $charset_collate;";
         dbDelta($sql_lessons);
+
+        // ۶. دفتر فعال‌سازی‌ها (v1.2.0 — اسکیما ۱.۳.۰): ایدمپوتنسی grant اشتراک بر اساس
+        // سفارش. زنجیرهٔ verifying→pending→ادعای مجدد (کال‌بک + کرون هم‌زمان) قبلاً
+        // می‌توانست تمدید دوبرابر بسازد؛ UNIQUE(order_id) تضمین می‌کند هر سفارش
+        // حداکثر یک‌بار در دفتر ثبت و هرگز دوباره grant نشود.
+        $table_grants = $wpdb->prefix . 'mrdastbaaf_membership_grants';
+        $sql_grants = "CREATE TABLE $table_grants (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            order_id varchar(64) NOT NULL,
+            user_id bigint(20) unsigned NOT NULL,
+            plan_id varchar(64) NOT NULL,
+            tier varchar(20) NOT NULL,
+            mode varchar(20) NOT NULL,
+            expires_at datetime NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY order_id (order_id),
+            KEY  user_id (user_id)
+        ) $charset_collate;";
+        dbDelta($sql_grants);
+
+        // ۷. گزارش اقدامات (v1.2.0 — اسکیما ۱.۳.۰): ردپای اقدامات ادمین (تایید/رد فیش)
+        // و سیستم؛ بدون ردپای ممیزی، خطای انسانی/تخاصم قابل رهگیری نبود.
+        $table_audit = $wpdb->prefix . 'mrdastbaaf_audit_log';
+        $sql_audit = "CREATE TABLE $table_audit (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            actor_id bigint(20) unsigned DEFAULT 0 NOT NULL,
+            action varchar(64) NOT NULL,
+            object_type varchar(32) NOT NULL,
+            object_id varchar(64) NOT NULL,
+            details text NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            PRIMARY KEY  (id),
+            KEY object_idx (object_type, object_id)
+        ) $charset_collate;";
+        dbDelta($sql_audit);
 
         // درج پلن‌های پیش‌فرض در صورت خالی بودن جدول
         self::seed_initial_plans();

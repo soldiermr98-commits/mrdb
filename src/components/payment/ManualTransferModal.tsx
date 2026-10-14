@@ -148,6 +148,12 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
       setErrorMsg('تاریخ واریز وارد شده معتبر نیست (مثال: ۱۴۰۵/۰۷/۲۰).');
       return;
     }
+    // Hardening (prelive 18-b): سقف ۵۰۰ کاراکتر توضیحات — هم‌تراز اعتبارسنجی سرور
+    // (قبلاً متن بلندتر بدون کنترل ارسال می‌شد و رد سرور دیرتر به کاربر می‌رسید).
+    if (notes.trim().length > 500) {
+      setErrorMsg('توضیحات حداکثر ۵۰۰ کاراکتر است.');
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -336,6 +342,7 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
                 rows={2}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
+                maxLength={500}
                 placeholder="توضیحاتی مانند نام بانک مبدا یا نام درج‌شده در فیش..."
                 className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-700/30"
               />
