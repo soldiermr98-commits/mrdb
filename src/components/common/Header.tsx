@@ -32,19 +32,15 @@ export const Header: React.FC<HeaderProps> = ({
           onClick={() => onNavigate('home')}
           className="flex items-center gap-2.5 text-right group focus-visible:ring-2 focus-visible:ring-amber-600 focus-visible:outline-none rounded-xl"
         >
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-700 to-amber-900 flex items-center justify-center shadow-sm text-amber-100 group-hover:scale-105 transition transform">
-            <svg
-              className="w-6 h-6 text-amber-200"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-            >
-              <rect x="3" y="3" width="18" height="18" rx="4" stroke="currentColor" />
-              <path d="M7 3v18M12 3v18M17 3v18M3 8h18M3 13h18M3 18h18" strokeWidth="1" strokeDasharray="1 2" />
-              <circle cx="12" cy="12" r="3" fill="#f59e0b" stroke="none" />
-            </svg>
-          </div>
+          {/* BRANDING v1.2.1: لوگوی رسمی مستردستباف جایگزین آیکون موقت دارکوب */}
+          <img
+            src="/logo-mrdastbaaf.png"
+            alt="لوگوی مستر دستباف"
+            width={40}
+            height={40}
+            decoding="async"
+            className="w-10 h-10 rounded-full shadow-sm group-hover:scale-105 transition transform"
+          />
           <div>
             <div className="flex items-center gap-1.5">
               <span className="font-black text-lg text-amber-950 tracking-tight">مستر دستباف</span>
