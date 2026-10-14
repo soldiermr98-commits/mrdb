@@ -93,6 +93,10 @@ export interface Course {
   sections: CourseSection[];
   learningOutcomes: string[];
   prerequisites: string[];
+  /** v1.2.6 Real-API: شناسهٔ عددی محصول ووکامرس — مسیر مطمئن جزئیات (/courses/by-id) */
+  productId?: number | null;
+  /** v1.2.6 Real-API: تعداد درس‌های پیش‌نمایش رایگان (نشان کارت در کاتالوگ) */
+  freePreviewCount?: number;
 }
 
 export type PlanDuration = '1_month' | '3_months' | '6_months' | '12_months';
@@ -186,4 +190,27 @@ export interface VideoStreamingTicket {
    * تنها منبع مجاز <video> در حالت اتصال واقعی. در دمو undefined می‌ماند.
    */
   videoUrl?: string;
+}
+
+// ---------------------------------------------------------------------------
+// v1.2.6 — صفحات سایت در منوی اپ (سطح دسترسی از پیشخوان وردپرس)
+// ---------------------------------------------------------------------------
+
+export type AppPageAccess = 'all' | 'members' | 'admins';
+
+export interface AppPage {
+  /** شناسهٔ یکتای رکورد (uid افزونه) — کلید مسیر #/app-page/{id} */
+  id: string;
+  title: string;
+  access: AppPageAccess;
+  sortOrder: number;
+}
+
+export interface AppPageContent {
+  id: string;
+  title: string;
+  /** HTML رندرشدهٔ برگهٔ وردپرس (فیلتر the_content سمت سرور) */
+  html: string;
+  access: AppPageAccess;
+  updatedAtJalali: string;
 }

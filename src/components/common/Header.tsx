@@ -4,8 +4,8 @@
  */
 
 import React from 'react';
-import { User, ShieldCheck, LogIn, Sparkles, BookOpen } from 'lucide-react';
-import { UserProfile } from '../../types';
+import { User, ShieldCheck, LogIn, Sparkles, BookOpen, Menu } from 'lucide-react';
+import { UserProfile, AppPage } from '../../types';
 import { isRealApiMode } from '../../services/apiClient';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -13,8 +13,12 @@ interface HeaderProps {
   currentUser: UserProfile | null;
   onOpenLogin: () => void;
   onSwitchRole: (role: 'student' | 'admin') => void;
-  onNavigate: (view: string) => void;
+  onNavigate: (view: string, params?: { pageId?: string }) => void;
   activeView: string;
+  /** v1.2.6: صفحات سایت از پیشخوان (سطح دسترسی سمت سرور فیلتر شده) */
+  appPages?: AppPage[];
+  /** v1.2.6: باز کردن شیت منو */
+  onOpenMenuSheet?: () => void;
 }
 
 /**
@@ -33,6 +37,8 @@ export const Header: React.FC<HeaderProps> = ({
   onSwitchRole,
   onNavigate,
   activeView,
+  appPages = [],
+  onOpenMenuSheet,
 }) => {
   return (
     <header
@@ -78,6 +84,27 @@ export const Header: React.FC<HeaderProps> = ({
           {currentUser && (
             <button onClick={() => onNavigate('dashboard')} className={navLinkClass(activeView === 'dashboard')}>
               داشبورد من
+            </button>
+          )}
+          {/* v1.2.6: دو صفحهٔ اول سایت مستقیم در ناوبری دسکتاپ + دکمهٔ منو برای همهٔ صفحات */}
+          {appPages.slice(0, 2).map((page) => (
+            <button
+              key={page.id}
+              onClick={() => onNavigate('app_page', { pageId: page.id })}
+              className={navLinkClass(false)}
+              title={page.title}
+            >
+              {page.title}
+            </button>
+          ))}
+          {appPages.length > 0 && onOpenMenuSheet && (
+            <button
+              onClick={onOpenMenuSheet}
+              className={`${NAV_BASE} text-stone-700 hover:text-amber-800 hover:bg-white/50 flex items-center gap-1`}
+              aria-label="باز کردن منو"
+            >
+              <Menu className="w-4 h-4" />
+              منو
             </button>
           )}
           {/* v1.1.0: demo-only — in Real-API mode management happens in the

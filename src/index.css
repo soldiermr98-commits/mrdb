@@ -3,6 +3,20 @@
    zoom-in-95 / slide-in-from-* عملاً no-op بودند — معادل رسمی Tailwind 4 افزوده شد. */
 @import "tw-animate-css";
 
+/* ---------------------------------------------------------------------------
+   v1.2.6 — فونت وزیرمتن لوکال (باندل‌شده در build؛ بدون هیچ درخواست خارجی)
+   قبلاً fonts.googleapis.com لود می‌شد که در ایران کند/مسدود است و باعث
+   لرزش متن (FOUT) و کندی اولین رندر بود. نسخهٔ Variable (۱۱۱KB، وزن ۱۰۰–۹۰۰)
+   یک فایل برای همهٔ وزن‌هاست و با font-display: swap هرگز رندر را بلاک نمی‌کند.
+   --------------------------------------------------------------------------- */
+@font-face {
+  font-family: 'Vazirmatn';
+  src: url('./assets/fonts/Vazirmatn-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 @layer base {
   :root {
     --font-sans: 'Vazirmatn', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;

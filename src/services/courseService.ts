@@ -79,6 +79,10 @@ interface ApiLessonShape {
 interface ApiCourseShape {
   id?: unknown;
   slug?: unknown;
+  /** v1.2.6: شناسهٔ عددی محصول ووکامرس (اندپوینت by-id) */
+  productId?: unknown;
+  /** v1.2.6: تعداد درس‌های پیش‌نمایش رایگان */
+  freePreviewCount?: unknown;
   title?: unknown;
   shortDescription?: unknown;
   fullDescription?: unknown;
@@ -103,6 +107,47 @@ interface ApiCourseShape {
 }
 
 const API_TIERS: MembershipTier[] = ['free', 'bronze', 'silver', 'gold'];
+
+// ---------------------------------------------------------------------------
+// v1.2.6 — نقشهٔ id (اسلاگ) → productId عددی از پاسخ سرور؛ جزئیات دوره اول
+// با /courses/by-id/{productId} پرسیده می‌شود (قطعی — بدون وابستگی به شکل
+// اسلاگ فارسی) و ۴۰۴ آن به مسیر اسلاگ فال‌بک می‌کند.
+// ---------------------------------------------------------------------------
+const PID_MAP_KEY = 'mrdastbaaf_course_pid_map';
+const courseIdToProductId = new Map<string, number>();
+
+try {
+  const rawMap = window.localStorage.getItem(PID_MAP_KEY);
+  if (rawMap) {
+    const parsed = JSON.parse(rawMap) as unknown;
+    if (parsed && typeof parsed === 'object') {
+      Object.entries(parsed as Record<string, unknown>).forEach(([key, value]) => {
+        if (typeof key === 'string' && key !== '' && typeof value === 'number' && Number.isFinite(value) && value > 0) {
+          courseIdToProductId.set(key, Math.round(value));
+        }
+      });
+    }
+  }
+} catch {
+  // storage خراب → نقشه خالی؛ با اولین پاسخ سرور دوباره پر می‌شود
+}
+
+function rememberProductId(courseId: string, rawProductId: unknown): void {
+  const pid = typeof rawProductId === 'number' && Number.isFinite(rawProductId) && rawProductId > 0
+    ? Math.round(rawProductId)
+    : null;
+  if (!pid || courseId === '') return;
+  courseIdToProductId.set(courseId, pid);
+  try {
+    const snapshot: Record<string, number> = {};
+    courseIdToProductId.forEach((value, key) => {
+      snapshot[key] = value;
+    });
+    window.localStorage.setItem(PID_MAP_KEY, JSON.stringify(snapshot));
+  } catch {
+    // quota/privacy mode — نقشهٔ درون حافظه کافی است
+  }
+}
 
 function apiTier(value: unknown, fallback: MembershipTier = 'bronze'): MembershipTier {
   return API_TIERS.includes(value as MembershipTier) ? (value as MembershipTier) : fallback;
@@ -157,6 +202,8 @@ function normalizeApiSection(rawSection: unknown, courseId: string, index: numbe
 
 function normalizeApiCourse(raw: ApiCourseShape): Course {
   const id = apiString(raw.id) || apiString(raw.slug) || `course-${Date.now()}`;
+  // v1.2.6: ذخیرهٔ productId برای مسیر by-id در fetchهای بعدی
+  rememberProductId(id, raw.productId);
   const thumbnail = apiString(raw.thumbnailUrl) || apiString(raw.coverImageUrl) || apiString(raw.image);
   const sections = Array.isArray(raw.sections)
     ? (raw.sections as unknown[]).map((s, i) => normalizeApiSection(s, id, i))
@@ -196,6 +243,11 @@ function normalizeApiCourse(raw: ApiCourseShape): Course {
     sections,
     learningOutcomes: apiStringArray(raw.learningOutcomes),
     prerequisites: apiStringArray(raw.prerequisites),
+    productId:
+      typeof raw.productId === 'number' && Number.isFinite(raw.productId) && raw.productId > 0
+        ? Math.round(raw.productId)
+        : null,
+    freePreviewCount: apiCount(raw.freePreviewCount),
   };
 }
 
@@ -255,9 +307,22 @@ export const courseService = {
    * Get single course by ID or slug
    */
   async getCourseById(courseId: string): Promise<Course | null> {
-    // v1.1.0 Real-API: GET /courses/{id} → Course + lessons (تخت) → با سکشن مصنوعی نرمال می‌شود
+    // v1.2.6 Real-API: اول مسیر عددی /courses/by-id/{productId} (اگر productId شناخته است)
+    // سپس فال‌بک اسلاگ — ۴۰۴ نهایی یعنی دوره واقعاً نیست (UI کارت «دوره یافت نشد» دارد).
     if (isRealApiMode) {
       try {
+        const pid = courseIdToProductId.get(courseId);
+        if (pid) {
+          try {
+            const byId = await apiFetch<ApiCourseShape>(`/courses/by-id/${pid}`);
+            return normalizeApiCourse(byId);
+          } catch (byIdError) {
+            // فقط ۴۰۴ به مسیر اسلاگ فال‌بک می‌کند؛ سایر خطاها (شبکه/۵xx) بالا می‌روند
+            if (!(byIdError instanceof ApiError) || byIdError.status !== 404) {
+              throw byIdError;
+            }
+          }
+        }
         const data = await apiFetch<ApiCourseShape>(`/courses/${encodeURIComponent(courseId)}`);
         return normalizeApiCourse(data);
       } catch (e) {

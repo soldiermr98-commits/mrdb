@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { Home, BookOpen, Crown, User, ShieldCheck } from 'lucide-react';
+import { Home, BookOpen, Crown, User, Menu } from 'lucide-react';
 import { UserRole } from '../../types';
 
 interface BottomNavProps {
@@ -13,6 +13,8 @@ interface BottomNavProps {
   userRole?: UserRole;
   isLoggedIn: boolean;
   onOpenLogin: () => void;
+  /** v1.2.6: باز کردن شیت شیشه‌ای منو (صفحات سایت + راهنماها) */
+  onOpenMenuSheet: () => void;
 }
 
 /**
@@ -32,9 +34,9 @@ const itemClass = (active: boolean, danger = false) =>
 export const BottomNav: React.FC<BottomNavProps> = ({
   activeView,
   onNavigate,
-  userRole,
   isLoggedIn,
   onOpenLogin,
+  onOpenMenuSheet,
 }) => {
   return (
     <nav
@@ -75,7 +77,18 @@ export const BottomNav: React.FC<BottomNavProps> = ({
           <span className="text-[10px] mt-1">عضویت</span>
         </button>
 
-        {/* 4. User Dashboard */}
+        {/* 4. Menu Sheet — v1.2.6: صفحات سایت (سطح دسترسی از پیشخوان) + راهنماها */}
+        <button
+          onClick={onOpenMenuSheet}
+          aria-label="باز کردن منو"
+          aria-haspopup="dialog"
+          className={itemClass(activeView === 'app_page')}
+        >
+          <Menu className="w-5 h-5 stroke-2" />
+          <span className="text-[10px] mt-1">منو</span>
+        </button>
+
+        {/* 5. User Dashboard */}
         <button
           onClick={() => {
             if (isLoggedIn) {
@@ -91,19 +104,6 @@ export const BottomNav: React.FC<BottomNavProps> = ({
           <User className={`w-5 h-5 ${activeView === 'dashboard' ? 'stroke-[2.5]' : 'stroke-2'}`} />
           <span className="text-[10px] mt-1">داشبورد</span>
         </button>
-
-        {/* 5. Admin Panel (if admin) */}
-        {userRole === 'admin' && (
-          <button
-            onClick={() => onNavigate('admin')}
-            aria-label="پنل مدیریت"
-            aria-current={activeView === 'admin' ? 'page' : undefined}
-            className={itemClass(activeView === 'admin', true)}
-          >
-            <ShieldCheck className={`w-5 h-5 ${activeView === 'admin' ? 'stroke-[2.5]' : 'stroke-2'}`} />
-            <span className="text-[10px] mt-1">مدیریت</span>
-          </button>
-        )}
       </div>
     </nav>
   );
