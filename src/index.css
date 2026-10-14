@@ -75,6 +75,11 @@
   padding-top: env(safe-area-inset-top, 1rem);
 }
 
+/* v1.2.5 — Glass dock: نشاندن ناوبری شناور بالای ناحیهٔ امن (ناچ/سوایپ‌بار iOS) */
+.bottom-dock {
+  bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+}
+
 /* BUG-50: نوارهای اسکرول افقی نوار فیلترها (کاتالوگ و ادمین) پنهان می‌شوند. */
 .no-scrollbar {
   -ms-overflow-style: none;
