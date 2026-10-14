@@ -5,7 +5,7 @@
 
 import React from 'react';
 import { User, ShieldCheck, LogIn, Sparkles, BookOpen, Menu } from 'lucide-react';
-import { UserProfile, AppPage } from '../../types';
+import { UserProfile, AppPage, AppUiDockItem } from '../../types';
 import { isRealApiMode } from '../../services/apiClient';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -17,6 +17,11 @@ interface HeaderProps {
   activeView: string;
   /** v1.2.6: صفحات سایت از پیشخوان (سطح دسترسی سمت سرور فیلتر شده) */
   appPages?: AppPage[];
+  /**
+   * v1.2.7 — برچسب/نمایانی ناوبری دسکتاپ از «محتوای وب‌اپ» (GET /app-ui → menu.dock).
+   * undefined = دمو/خطا → برچسب‌های پیش‌فرض کد.
+   */
+  dockConfig?: AppUiDockItem[];
   /** v1.2.6: باز کردن شیت منو */
   onOpenMenuSheet?: () => void;
 }
@@ -38,8 +43,24 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigate,
   activeView,
   appPages = [],
+  dockConfig,
   onOpenMenuSheet,
 }) => {
+  // v1.2.7: برچسب/نمایانی ناوبری دسکتاپ از پیکربندی پیشخوان (پیش‌فرض کد وقتی پیکربندی نیست)
+  const dockItem = (key: AppUiDockItem['key']): { label: string; enabled: boolean } => {
+    const item = dockConfig?.find((d) => d.key === key);
+    const defaults: Record<AppUiDockItem['key'], string> = {
+      home: 'صفحه اصلی',
+      catalogue: 'دوره‌ها',
+      membership: 'پلن‌های اشتراک',
+      dashboard: 'داشبورد من',
+    };
+    return { label: item?.label || defaults[key], enabled: item ? item.enabled : true };
+  };
+  const home = dockItem('home');
+  const catalogue = dockItem('catalogue');
+  const membership = dockItem('membership');
+  const dashboard = dockItem('dashboard');
   return (
     <header
       className="sticky top-0 z-40 border-b border-white/60 bg-gradient-to-b from-[#fdfbf7]/80 via-[#fdfbf7]/60 to-[#fdfbf7]/50 backdrop-blur-2xl backdrop-saturate-150 shadow-[0_8px_32px_-16px_rgba(120,53,15,0.35),inset_0_1px_0_0_rgba(255,255,255,0.65)]"
@@ -72,18 +93,24 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Desktop Navigation Links */}
         <nav className="hidden md:flex items-center gap-1.5 text-sm font-medium" aria-label="ناوبری اصلی">
-          <button onClick={() => onNavigate('home')} className={navLinkClass(activeView === 'home')}>
-            صفحه اصلی
-          </button>
-          <button onClick={() => onNavigate('catalogue')} className={navLinkClass(activeView === 'catalogue')}>
-            دوره‌ها
-          </button>
-          <button onClick={() => onNavigate('membership')} className={navLinkClass(activeView === 'membership')}>
-            پلن‌های اشتراک
-          </button>
-          {currentUser && (
+          {home.enabled && (
+            <button onClick={() => onNavigate('home')} className={navLinkClass(activeView === 'home')}>
+              {home.label}
+            </button>
+          )}
+          {catalogue.enabled && (
+            <button onClick={() => onNavigate('catalogue')} className={navLinkClass(activeView === 'catalogue')}>
+              {catalogue.label}
+            </button>
+          )}
+          {membership.enabled && (
+            <button onClick={() => onNavigate('membership')} className={navLinkClass(activeView === 'membership')}>
+              {membership.label}
+            </button>
+          )}
+          {currentUser && dashboard.enabled && (
             <button onClick={() => onNavigate('dashboard')} className={navLinkClass(activeView === 'dashboard')}>
-              داشبورد من
+              {dashboard.label}
             </button>
           )}
           {/* v1.2.6: دو صفحهٔ اول سایت مستقیم در ناوبری دسکتاپ + دکمهٔ منو برای همهٔ صفحات */}

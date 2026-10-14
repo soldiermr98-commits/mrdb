@@ -214,3 +214,63 @@ export interface AppPageContent {
   access: AppPageAccess;
   updatedAtJalali: string;
 }
+
+// ---------------------------------------------------------------------------
+// v1.2.7 — «محتوای وب‌اپ» از پیشخوان (افزونهٔ 1.3.4 → GET /app-ui)
+// متن‌های بنر اصلی، سکشن‌های صفحهٔ اصلی و برچسب/نمایانی منو — همهٔ فیلدها
+// اختیاری‌اند تا پاسخ ناقصِ سرور هرگز اپ را نشکند (پیش‌فرض‌ها سمت اپ هم هستند).
+// ---------------------------------------------------------------------------
+
+export interface AppUiHero {
+  badgeText: string;
+  headline: string;
+  subheadline: string;
+  ctaPrimaryText: string;
+  ctaSecondaryText: string;
+  stat1Value: string;
+  stat1Label: string;
+  stat2Value: string;
+  stat2Label: string;
+  stat3Value: string;
+  stat3Label: string;
+}
+
+/** کلیدهای مجاز — دقیقاً همان‌هایی که HomeView رندر می‌کند (hero جدا سرو می‌شود) */
+export type AppUiSectionKey =
+  | 'categories'
+  | 'featured_courses'
+  | 'artisan_story'
+  | 'membership_plans'
+  | 'faq';
+
+export interface AppUiSection {
+  key: AppUiSectionKey;
+  title: string;
+  subtitle: string;
+  enabled: boolean;
+  sortOrder: number;
+}
+
+export interface AppUiDockItem {
+  key: 'home' | 'catalogue' | 'membership' | 'dashboard';
+  label: string;
+  enabled: boolean;
+}
+
+export type AppUiGuideKey = 'about-us' | 'guide-membership' | 'faq' | 'membership';
+
+export interface AppUiGuideItem {
+  key: AppUiGuideKey;
+  label: string;
+  enabled: boolean;
+  sortOrder: number;
+}
+
+export interface AppUiConfig {
+  hero: AppUiHero;
+  sections: AppUiSection[];
+  menu: {
+    dock: AppUiDockItem[];
+    guides: AppUiGuideItem[];
+  };
+}

@@ -8,7 +8,7 @@
 
 import React from 'react';
 import { X, FileText, Info, BookMarked, HelpCircle, Crown, ShieldCheck } from 'lucide-react';
-import { AppPage, UserRole } from '../../types';
+import { AppPage, UserRole, AppUiGuideItem, AppUiGuideKey } from '../../types';
 import { isRealApiMode } from '../../services/apiClient';
 
 interface MenuSheetProps {
@@ -16,8 +16,27 @@ interface MenuSheetProps {
   onClose: () => void;
   appPages: AppPage[];
   userRole?: UserRole;
+  /**
+   * v1.2.7 — میان‌برهای راهنما از «محتوای وب‌اپ» (GET /app-ui → menu.guides):
+   * برچسب/نمایانی/ترتیب از پیشخوان؛ undefined = دمو/خطا → پیش‌فرض‌های کد.
+   */
+  guides?: AppUiGuideItem[];
   onNavigate: (view: string, params?: { pageId?: string; slug?: string }) => void;
 }
+
+const DEFAULT_GUIDES: AppUiGuideItem[] = [
+  { key: 'about-us', label: 'درباره ما', enabled: true, sortOrder: 1 },
+  { key: 'guide-membership', label: 'راهنمای عضویت و تمدید دستی', enabled: true, sortOrder: 2 },
+  { key: 'faq', label: 'سوالات متداول', enabled: true, sortOrder: 3 },
+  { key: 'membership', label: 'پلن‌های اشتراک', enabled: true, sortOrder: 4 },
+];
+
+const GUIDE_ICONS: Record<AppUiGuideKey, React.ComponentType<{ className?: string }>> = {
+  'about-us': Info,
+  'guide-membership': BookMarked,
+  faq: HelpCircle,
+  membership: Crown,
+};
 
 const rowClass =
   'w-full flex items-center gap-3 px-4 py-3.5 min-h-[48px] rounded-2xl text-right transition text-stone-800 hover:bg-white/70 hover:text-amber-900 focus-visible:ring-2 focus-visible:ring-amber-600 focus-visible:outline-none';
@@ -29,9 +48,15 @@ export const MenuSheet: React.FC<MenuSheetProps> = ({
   onClose,
   appPages,
   userRole,
+  guides,
   onNavigate,
 }) => {
   if (!isOpen) return null;
+
+  // v1.2.7: راهنماهای فعال به ترتیب پیکربندی پیشخوان
+  const activeGuides = (guides && guides.length > 0 ? guides : DEFAULT_GUIDES).filter(
+    (g) => g.enabled
+  );
 
   const go = (view: string, params?: { pageId?: string; slug?: string }) => {
     onNavigate(view, params);
@@ -84,28 +109,30 @@ export const MenuSheet: React.FC<MenuSheetProps> = ({
             </section>
           )}
 
-          {/* راهنماها (سرمقاله‌های ثابت) */}
-          <section aria-label="راهنما و درباره ما">
-            <p className="px-3 pb-1.5 text-[11px] font-bold text-stone-500">راهنما و درباره ما</p>
-            <div className="space-y-1">
-              <button onClick={() => go('editorial', { slug: 'about-us' })} className={rowClass}>
-                <Info className={rowIcon} />
-                <span className="text-xs font-semibold">درباره ما</span>
-              </button>
-              <button onClick={() => go('editorial', { slug: 'guide-membership' })} className={rowClass}>
-                <BookMarked className={rowIcon} />
-                <span className="text-xs font-semibold">راهنمای عضویت و تمدید دستی</span>
-              </button>
-              <button onClick={() => go('editorial', { slug: 'faq' })} className={rowClass}>
-                <HelpCircle className={rowIcon} />
-                <span className="text-xs font-semibold">سوالات متداول</span>
-              </button>
-              <button onClick={() => go('membership')} className={rowClass}>
-                <Crown className={rowIcon} />
-                <span className="text-xs font-semibold">پلن‌های اشتراک</span>
-              </button>
-            </div>
-          </section>
+          {/* راهنماها — v1.2.7: برچسب/نمایانی/ترتیب از پیشخوان (محتوای وب‌اپ) */}
+          {activeGuides.length > 0 && (
+            <section aria-label="راهنما و درباره ما">
+              <p className="px-3 pb-1.5 text-[11px] font-bold text-stone-500">راهنما و درباره ما</p>
+              <div className="space-y-1">
+                {activeGuides.map((guide) => {
+                  const Icon = GUIDE_ICONS[guide.key];
+                  if (!Icon) return null;
+                  const targetView = guide.key === 'membership' ? 'membership' : 'editorial';
+                  const params = guide.key === 'membership' ? undefined : { slug: guide.key };
+                  return (
+                    <button
+                      key={guide.key}
+                      onClick={() => go(targetView, params)}
+                      className={rowClass}
+                    >
+                      <Icon className={rowIcon} />
+                      <span className="text-xs font-semibold">{guide.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
 
           {/* پنل مدیریت — فقط در حالت دمو (در حالت Real مدیریت از پیشخوان وردپرس است) */}
           {userRole === 'admin' && !isRealApiMode && (
