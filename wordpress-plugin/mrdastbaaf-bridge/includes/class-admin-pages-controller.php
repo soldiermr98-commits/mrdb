@@ -64,6 +64,8 @@ class MrDastbaaf_Admin_Pages_Controller {
         add_action('admin_post_mrdastbaaf_app_ui_save_sections', array($this, 'handle_app_ui_save_sections'));
         add_action('admin_post_mrdastbaaf_app_ui_save_menu', array($this, 'handle_app_ui_save_menu'));
         add_action('admin_post_mrdastbaaf_app_ui_move', array($this, 'handle_app_ui_move'));
+        // v1.3.5: دوره‌های برگزیده صفحهٔ نخست اپ
+        add_action('admin_post_mrdastbaaf_app_ui_save_featured', array($this, 'handle_app_ui_save_featured'));
         // v1.3.4: اتصال خرید سایت (نگاشت پلن → محصول ووکامرس)
         add_action('admin_post_mrdastbaaf_woo_map_save', array($this, 'handle_woo_map_save'));
     }
@@ -1432,6 +1434,61 @@ class MrDastbaaf_Admin_Pages_Controller {
             <?php endforeach; endforeach; ?>
             </div>
 
+            <?php
+            // ─── v1.3.5: کارت «دوره‌های برگزیده» ───
+            // محصولات دورهٔ ووکامرس (منتشرشده در دستهٔ تنظیم‌شده) با چک‌باکس انتخاب؛
+            // همین‌ها در GET /app-ui با کلید featuredCourseIds سرو می‌شوند.
+            $featured_ids = isset($ui['featuredCourseIds']) && is_array($ui['featuredCourseIds']) ? array_map('intval', $ui['featuredCourseIds']) : array();
+            $course_category_slug = (string) get_option('mrdastbaaf_course_category', 'courses');
+            $course_products = get_posts(array(
+                'post_type'        => 'product',
+                'post_status'      => 'publish',
+                'posts_per_page'   => 200,
+                'orderby'          => 'title',
+                'order'            => 'ASC',
+                'no_found_rows'    => true,
+                'suppress_filters' => false,
+                'tax_query'        => ('' !== $course_category_slug) ? array(array(
+                    'taxonomy' => 'product_cat',
+                    'field'    => 'slug',
+                    'terms'    => $course_category_slug,
+                )) : array(),
+            ));
+            ?>
+            <div class="mrd-card">
+            <h2 class="mrd-card__title">دوره‌های برگزیده (سکشن «دوره‌های برگزیده و پیشنهادی اساتید»)</h2>
+            <p class="mrd-hint">دوره‌هایی که می‌خواهید در سکشن «برگزیده» صفحهٔ نخست اپ نمایش داده شوند را تیک بزنید و ذخیره کنید. اگر هیچ دوره‌ای انتخاب نشود، آن سکشن در اپ خالی می‌ماند (کارت «هنوز دوره ویژه‌ای منتشر نشده است»).</p>
+            <?php if (empty($course_products)): ?>
+                <p class="mrd-muted">هنوز محصولی در دستهٔ دوره‌ها (<?php echo esc_html($course_category_slug); ?>) منتشر نشده است. ابتدا محصولات دوره را در ووکامرس منتشر کنید.</p>
+            <?php else: ?>
+            <form method="post" action="<?php echo esc_url($admin_post); ?>">
+                <input type="hidden" name="action" value="mrdastbaaf_app_ui_save_featured" />
+                <?php wp_nonce_field('mrdastbaaf_app_ui_save_featured', 'mrd_nonce'); ?>
+                <div class="mrd-table-wrap">
+                <table class="widefat striped">
+                    <thead>
+                        <tr>
+                            <th style="width:48px;">انتخاب</th>
+                            <th>دوره</th>
+                            <th>شناسهٔ محصول</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($course_products as $course_post): $pid = (int) $course_post->ID; ?>
+                            <tr>
+                                <td><input type="checkbox" name="featured[]" value="<?php echo esc_attr($pid); ?>" <?php checked(in_array($pid, $featured_ids, true)); ?> /></td>
+                                <td><?php echo esc_html($course_post->post_title); ?></td>
+                                <td><code dir="ltr"><?php echo esc_html((string) $pid); ?></code></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <?php submit_button('ذخیرهٔ دوره‌های برگزیده'); ?>
+            </form>
+            <?php endif; ?>
+            </div>
+
             <div class="mrd-card">
             <h2 class="mrd-card__title">منوی وب‌اپ</h2>
             <p class="mrd-hint">نوار پایین/بالای اپ (داک): چهار آیتم ثابت با برچسب و کلید نمایش قابل تنظیم — ترتیب داک در اپ ثابت است. میان‌برهای شیت منو (راهنماها): برچسب + کلید نمایش + ترتیبِ قابل جابه‌جایی با ↑/↓.</p>
@@ -1589,6 +1646,35 @@ class MrDastbaaf_Admin_Pages_Controller {
         MrDastbaaf_App_UI_Controller::save($stored);
 
         $this->flash('success', 'سکشن‌های صفحهٔ نخست ذخیره شد.');
+        $this->redirect_to_page(self::APP_UI_SLUG);
+    }
+
+    /**
+     * v1.3.5: ذخیرهٔ «دوره‌های برگزیده» صفحهٔ نخست اپ — چک‌باکس‌های انتخاب محصول.
+     * فقط بخش featuredCourseIds بازنویسی می‌شود (الگوی ذخیرهٔ جزئی؛ خواندن آرایهٔ
+     * خام آپشن، سوارکردن بخش خودش، ذخیرهٔ کامل) تا متن‌ها/سکشن‌ها/منو دست نخورند.
+     */
+    public function handle_app_ui_save_featured() {
+        check_admin_referer('mrdastbaaf_app_ui_save_featured', 'mrd_nonce');
+        if (!current_user_can('manage_options')) {
+            wp_die('شما مجوز انجام این عملیات را ندارید.');
+        }
+
+        $posted = (isset($_POST['featured']) && is_array($_POST['featured'])) ? wp_unslash($_POST['featured']) : array();
+        $ids = array();
+        foreach ($posted as $pid) {
+            $pid = absint($pid);
+            if ($pid > 0) {
+                $ids[] = $pid;
+            }
+        }
+        $ids = array_values(array_unique($ids));
+
+        $stored = MrDastbaaf_App_UI_Controller::get_stored();
+        $stored['featuredCourseIds'] = $ids;
+        MrDastbaaf_App_UI_Controller::save($stored);
+
+        $this->flash('success', 'دوره‌های برگزیده ذخیره شد؛ سکشن «برگزیده» در اپ از همین لحظه تازه می‌شود.');
         $this->redirect_to_page(self::APP_UI_SLUG);
     }
 

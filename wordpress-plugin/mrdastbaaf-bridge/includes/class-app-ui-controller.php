@@ -1,11 +1,18 @@
 <?php
 /**
- * کنترلر «محتوای وب‌اپ» (v1.3.4 — فایل NEW)
+ * کنترلر «محتوای وب‌اپ» (v1.3.4 — فایل NEW؛ v1.3.5: featuredCourseIds + بازنشستگی categories)
  *
  * متن‌های بنر اصلی (Hero)، سکشن‌های صفحهٔ اصلی و آیتم‌های منوی وب‌اپلیکیشن از
  * پیشخوان وردپرس مدیریت می‌شوند (صفحهٔ NEW «محتوای وب‌اپ» در کنترلر صفحات ادمین)
  * و از همین‌جا با REST سرو می‌شوند. نوشتن فقط از admin-post.php انجام می‌شود
  * (همان الگوی پلن‌ها/صفحات وب‌اپ)؛ این کنترلر فقط‌خواندنی است.
+ *
+ * v1.3.5:
+ *  - سکشن «categories» (دسته‌بندی‌های آموزشی) بازنشسته شد — به درخواست کارفرما
+ *    («دوره‌های آموزشی دسته‌بندی لازم ندارن»). ردیف ذخیره‌شدهٔ قدیمی در آپشن،
+ *    از خروجی REST و جدول پیشخوان حذف می‌شود (RETIRED_SECTION_KEYS).
+ *  - «دوره‌های برگزیده» اضافه شد: کارفرما در پیشخوان محصولات دوره را انتخاب
+ *    می‌کند و همین‌جا به‌صورت featuredCourseIds[] سرو می‌شود.
  *
  * ذخیره‌سازی: یک آپشن «mrdastbaaf_app_ui» (آرایهٔ PHP) + آپشن زمان‌سنج
  * «mrdastbaaf_app_ui_updated_at» فقط برای نمایش «آخرین به‌روزرسانی» در پیشخوان.
@@ -17,7 +24,8 @@
  *
  * قرارداد پاسخ (PWA دقیقاً با همین شکل کدنویسی می‌شود — کلیدهای camelCase):
  *   { hero: {...}, sections: [ {key,title,subtitle,enabled,sortOrder}, … ],
- *     menu: { dock: [ {key,label,enabled}, … ], guides: [ {key,label,enabled,sortOrder}, … ] } }
+ *     menu: { dock: [ {key,label,enabled}, … ], guides: [ {key,label,enabled,sortOrder}, … ] },
+ *     featuredCourseIds: [123, 456] }
  *
  * ادغام (Merge): مقدار ذخیره‌شده روی پیش‌فرض‌ها سوار می‌شود — کلیدِ جاافتاده از
  * پیش‌فرض می‌آید (سازگار رو به جلو: افزودن فیلد/سکشن/آیتم منو در نسخه‌های بعدی
@@ -32,6 +40,12 @@ class MrDastbaaf_App_UI_Controller {
 
     const OPTION_KEY = 'mrdastbaaf_app_ui';
     const UPDATED_AT_OPTION = 'mrdastbaaf_app_ui_updated_at';
+
+    /**
+     * v1.3.5: سکشن‌های بازنشسته — هرگز از پیش‌فرض/آپشن/خروجی نمی‌آیند.
+     * «categories» به درخواست کارفرما حذف شد (دوره‌ها دسته‌بندی لازم ندارند).
+     */
+    const RETIRED_SECTION_KEYS = array('categories');
 
     /**
      * آرایهٔ خام ذخیره‌شده در آپشن — برای «ذخیرهٔ جزئی» از پیشخوان (مثلاً فقط
@@ -84,14 +98,10 @@ class MrDastbaaf_App_UI_Controller {
                 'stat3Value'       => '۱۰۰٪ دستی',
                 'stat3Label'       => 'تمدید اشتراک بدون کسر خودکار',
             ),
+            // v1.3.5: سکشن «categories» حذف شد؛ ترتیب پیش‌فرض بقیه یک ردیف جلو رفت.
+            // داده‌های ذخیره‌شدهٔ قدیمی (sortOrder ۳..۶) بدون مهاجرت کار می‌کنند —
+            // ترتیب نسبی همان است و خروجی فقط از ردیفِ حذف‌شده خالی‌تر می‌شود.
             'sections' => array(
-                array(
-                    'key'       => 'categories',
-                    'title'     => 'دسته‌بندی‌های آموزشی',
-                    'subtitle'  => 'رشته‌های متنوع صنایع دستی از دار قالی تا مکرمه مدرن',
-                    'enabled'   => true,
-                    'sortOrder' => 2,
-                ),
                 array(
                     'key'       => 'featured_courses',
                     'title'     => 'دوره‌های برگزیده و پیشنهادی اساتید',
@@ -194,9 +204,13 @@ class MrDastbaaf_App_UI_Controller {
             }
         }
         // سازگاری رو به جلو: سکشن‌های ذخیره‌شده‌ای که در پیش‌فرض‌ها نیستند حفظ می‌شوند
+        // — به‌جز کلیدهای بازنشستهٔ v1.3.5 (categories هرگز برنمی‌گردد).
         foreach ($stored_sections as $key => $s) {
+            if (in_array((string) $key, self::RETIRED_SECTION_KEYS, true)) {
+                continue;
+            }
             $sections[] = array(
-                'key'       => $key,
+                'key'       => (string) $key,
                 'title'     => isset($s['title']) ? (string) $s['title'] : $key,
                 'subtitle'  => isset($s['subtitle']) ? (string) $s['subtitle'] : '',
                 'enabled'   => !empty($s['enabled']),
@@ -204,6 +218,18 @@ class MrDastbaaf_App_UI_Controller {
             );
         }
         usort($sections, array(__CLASS__, 'sort_by_sort_order'));
+
+        // ─── featuredCourseIds (v1.3.5: دوره‌های برگزیده از پیشخوان) ───
+        $featured_ids = array();
+        if (isset($stored['featuredCourseIds']) && is_array($stored['featuredCourseIds'])) {
+            foreach ($stored['featuredCourseIds'] as $pid) {
+                $pid = (int) $pid;
+                if ($pid > 0) {
+                    $featured_ids[] = $pid;
+                }
+            }
+            $featured_ids = array_values(array_unique($featured_ids));
+        }
 
         // ─── menu.dock ───
         $stored_dock = array();
@@ -281,6 +307,8 @@ class MrDastbaaf_App_UI_Controller {
                 'dock'   => $dock,
                 'guides' => $guides,
             ),
+            // v1.3.5: فهرست دوره‌های برگزیده (شناسهٔ عددی محصول ووکامرس)
+            'featuredCourseIds' => $featured_ids,
         );
     }
 
@@ -307,7 +335,20 @@ class MrDastbaaf_App_UI_Controller {
                 'dock'   => array(),
                 'guides' => array(),
             ),
+            'featuredCourseIds' => array(),
         );
+
+        // v1.3.5: پاکسازی فهرست دوره‌های برگزیده — فقط شناسهٔ عددی مثبت، بدون تکرار
+        if (isset($ui['featuredCourseIds']) && is_array($ui['featuredCourseIds'])) {
+            $ids = array();
+            foreach ($ui['featuredCourseIds'] as $pid) {
+                $pid = absint($pid);
+                if ($pid > 0) {
+                    $ids[] = $pid;
+                }
+            }
+            $clean['featuredCourseIds'] = array_values(array_unique($ids));
+        }
 
         if (isset($ui['sections']) && is_array($ui['sections'])) {
             foreach ($ui['sections'] as $entry) {
