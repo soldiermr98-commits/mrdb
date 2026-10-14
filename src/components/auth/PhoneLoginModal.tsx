@@ -11,6 +11,10 @@ import { isRealApiMode } from '../../services/apiClient';
 import { toEnglishDigits } from '../../utils/format';
 import { UserProfile } from '../../types';
 
+// v1.2.2: سرور از افزونهٔ 1.2.0 کد ۶رقمی می‌فرستد (wp_rand(100000,999999))؛
+// دمو روی کد آزمایشی ۵رقمی 12345 می‌ماند — طول ورودی بر اساس حالت انتخاب می‌شود.
+const OTP_LENGTH = isRealApiMode ? 6 : 5;
+
 interface PhoneLoginModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -157,7 +161,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
                 <Smartphone className="w-4 h-4 text-stone-400 absolute left-3 top-3" />
               </div>
               <p className="text-[11px] text-stone-500 mt-1">
-                کد تایید ورود ۵ رقمی به این شماره ارسال خواهد شد.
+                کد تایید ورود {OTP_LENGTH} رقمی به این شماره ارسال خواهد شد.
               </p>
             </div>
 
@@ -218,7 +222,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
 
             <div>
               <label className="block text-xs font-semibold text-stone-700 mb-1.5">
-                کد تایید پیامکی (آزمایشی: ۱۲۳۴۵)
+                کد تایید پیامکی {isRealApiMode ? '(۶ رقمی پیامک‌شده)' : '(آزمایشی: ۱۲۳۴۵)'}
               </label>
               <div className="relative">
                 <input
@@ -227,16 +231,21 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
                   value={otp}
                   // BUG-63: numeric keypad on mobile + Persian/Arabic digits are
                   // normalized to English on every change (OTP store is ASCII).
+                  // v1.2.2: طول مجاز بر اساس حالت (Real=۶ / دمو=۵) — کد سرور ۶رقمی است.
                   inputMode="numeric"
-                  onChange={(e) => setOtp(toEnglishDigits(e.target.value).slice(0, 5))}
-                  placeholder="12345"
-                  maxLength={5}
+                  autoComplete="one-time-code"
+                  onChange={(e) => setOtp(toEnglishDigits(e.target.value).slice(0, OTP_LENGTH))}
+                  placeholder={isRealApiMode ? '──────' : '12345'}
+                  maxLength={OTP_LENGTH}
                   className="w-full text-center tracking-widest text-lg font-mono py-2 bg-stone-50 border border-stone-200 rounded-xl text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-700/30 focus:border-amber-700 transition"
                   autoFocus
                   required
                 />
                 <KeyRound className="w-4 h-4 text-stone-400 absolute left-3 top-3.5" />
               </div>
+              <p className="text-[11px] text-stone-500 mt-1">
+                {otp.length}/{OTP_LENGTH} رقم وارد شده
+              </p>
             </div>
 
             <div className="flex items-center justify-between text-xs text-stone-500">
@@ -256,8 +265,8 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
 
             <button
               type="submit"
-              disabled={isLoading}
-              className="w-full bg-amber-800 hover:bg-amber-900 text-white font-semibold py-2.5 rounded-xl text-xs transition shadow-xs flex items-center justify-center gap-2"
+              disabled={isLoading || otp.length < OTP_LENGTH}
+              className="w-full bg-amber-800 hover:bg-amber-900 text-white font-semibold py-2.5 rounded-xl text-xs transition shadow-xs flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isLoading ? (
                 <>

@@ -30,6 +30,12 @@ export const Modal: React.FC<ModalProps> = ({
 }) => {
   const titleId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
+  // v1.2.2 (hotfix پرش فوکس): onClose در ref نگه داشته می‌شود تا effect فقط به isOpen
+  // وابسته بماند. قبلاً onClose در deps بود و چون فراخوان‌ها تابع بی‌نام inline می‌دهند،
+  // هر کلید تایپ در فرم داخل مودال → re-render → onClose جدید → effect دوباره →
+  // containerRef.focus() فوکس را از input می‌دزدید (گزارش کارفرما: ورود OTP).
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!isOpen) return;
@@ -45,7 +51,7 @@ export const Modal: React.FC<ModalProps> = ({
     // document while the modal is open).
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== 'Tab') return;
@@ -81,7 +87,7 @@ export const Modal: React.FC<ModalProps> = ({
       releaseScrollLock();
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 

@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.2.0
+ * Version: 1.2.1
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,10 +16,12 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.2.0');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.2.1');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
+ * v1.2.1: دو زیرصفحهٔ NEW پیشخوان («پلن‌های عضویت» / «بررسی فیش‌ها») + هستهٔ مشترک
+ * تایید/رد فیش (REST و پیشخوان) — بدون هیچ تغییری در اسکیمای دیتابیس (۱.۳.۰ ثابت می‌ماند).
  */
 
 /**
@@ -53,6 +55,9 @@ require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-memberships-controller.php
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-payment-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-admin-controller.php';
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-settings-controller.php';
+// v1.2.1: زیرصفحه‌های پیشخوان «پلن‌های عضویت» و «بررسی فیش‌ها» (بعد از کنترلر تنظیمات
+// تا اسلاگ والد منو و هستهٔ مشترک فیش‌ها در دسترس باشند)
+require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-admin-pages-controller.php';
 
 /**
  * کلاس اصلی راه‌اندازی افزونه
@@ -91,6 +96,11 @@ class MrDastbaaf_Bridge_Plugin {
         // v1.1.0: منوی پیشخوان «مستر دستباف» — تنظیمات + مدیریت درس‌ها و ویدیوها
         $settings_controller = new MrDastbaaf_Settings_Controller();
         $settings_controller->register();
+
+        // v1.2.1: زیرصفحه‌های NEW «پلن‌های عضویت» و «بررسی فیش‌ها» (CRUD پلن‌ها +
+        // تایید/رد فیش با هستهٔ مشترک REST)
+        $admin_pages_controller = new MrDastbaaf_Admin_Pages_Controller();
+        $admin_pages_controller->register();
     }
 
     /**
