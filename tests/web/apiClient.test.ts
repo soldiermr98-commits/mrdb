@@ -151,7 +151,9 @@ describe('apiClient hardening', () => {
       const expectation = expect(pending).rejects.toThrow(
         'زمان انتظار پاسخ سرور به پایان رسید؛ اتصال خود را بررسی کنید.'
       );
-      await vi.advanceTimersByTimeAsync(client.API_TIMEOUT_MS + 50);
+      // v1.3.0: GET سه تلاش می‌زند (۲۰s + ۶۰۰ms + ۲۰s + ۱۲۰۰ms + ۲۰s) — با یک
+      // پرش بزرگ همهٔ تایمرها (abort + backoff) اجرا و خطای نهایی صادر می‌شود.
+      await vi.advanceTimersByTimeAsync(3 * (client.API_TIMEOUT_MS + 1500));
       await expectation;
     } finally {
       vi.useRealTimers();
@@ -159,11 +161,67 @@ describe('apiClient hardening', () => {
   });
 
   it('network failure (fetch rejects with TypeError) throws the Persian connection message', async () => {
-    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    // v1.3.0: GET سه تلاش می‌زند — همهٔ تلاش‌ها باید شکست بخورند تا پیام نهایی بیاید
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
     const client = await loadRealClient();
     await expect(client.apiFetch('/courses')).rejects.toThrow(
       'ارتباط با سرور برقرار نشد؛ اتصال اینترنت خود را بررسی کنید.'
     );
+    // هر ۳ تلاش (۱ + ۲ retry) واقعاً انجام شده‌اند
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('GET retries a transient 503 and succeeds on the next attempt (v1.3.0)', async () => {
+    fetchMock
+      .mockResolvedValueOnce(rawResponse(503, 'Service Unavailable'))
+      .mockResolvedValueOnce(rawResponse(200, JSON.stringify([{ id: 'c1', title: 'دوره آزمایشی' }])));
+    const client = await loadRealClient();
+
+    const data = await client.apiFetch<Array<{ id: string }>>('/courses');
+
+    expect(data).toHaveLength(1);
+    expect(data[0].id).toBe('c1');
+    // تلاش اول ۵۰۳ + تلاش دوم موفق (بدون تلاش سوم)
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('GET gives up after the second retry on persistent 502 with the Persian fallback message', async () => {
+    fetchMock.mockResolvedValue(rawResponse(502, 'Bad Gateway'));
+    const client = await loadRealClient();
+
+    const err = (await client.apiFetch('/courses').catch((e: unknown) => e)) as InstanceType<
+      ApiClientModule['ApiError']
+    >;
+
+    expect(err).toBeInstanceOf(client.ApiError);
+    expect(err.status).toBe(502);
+    expect(fetchMock).toHaveBeenCalledTimes(3); // 1 + 2 retry
+  });
+
+  it('POST is never retried on a transient 503 (v1.3.0 rule)', async () => {
+    fetchMock.mockResolvedValue(
+      rawResponse(503, JSON.stringify({ code: 'unavailable', message: 'سرور در دسترس نیست', data: { status: 503 } }))
+    );
+    const client = await loadRealClient();
+
+    const err = (await client
+      .apiFetch('/auth/verify-otp', { method: 'POST', body: { phone: '09123456789', otp_code: '1' } })
+      .catch((e: unknown) => e)) as InstanceType<ApiClientModule['ApiError']>;
+
+    expect(err).toBeInstanceOf(client.ApiError);
+    expect(err.status).toBe(503);
+    // فقط یک تلاش — POST retry نمی‌گیرد
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('4xx responses are never retried (v1.3.0 rule)', async () => {
+    fetchMock.mockResolvedValue(
+      rawResponse(404, JSON.stringify({ code: 'not_found', message: 'یافت نشد', data: { status: 404 } }))
+    );
+    const client = await loadRealClient();
+
+    await expect(client.apiFetch('/courses/x')).rejects.toThrow('یافت نشد');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('timeoutMs option overrides the default API_TIMEOUT_MS', async () => {
@@ -182,7 +240,8 @@ describe('apiClient hardening', () => {
       const expectation = expect(pending).rejects.toThrow(
         'زمان انتظار پاسخ سرور به پایان رسید؛ اتصال خود را بررسی کنید.'
       );
-      await vi.advanceTimersByTimeAsync(1050);
+      // v1.3.0: سه تلاش GET (۱s + ۶۰۰ms + ۱s + ۱۲۰۰ms + ۱s) — یک پرش بزرگ کافی است
+      await vi.advanceTimersByTimeAsync(3 * 2500);
       await expectation;
     } finally {
       vi.useRealTimers();

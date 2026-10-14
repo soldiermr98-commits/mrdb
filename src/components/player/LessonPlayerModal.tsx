@@ -31,6 +31,16 @@ import { courseService } from '../../services/courseService';
 import { authService } from '../../services/authService';
 import { acquireScrollLock } from '../../utils/scrollLock';
 
+// v1.3.0: برچسب فارسی نسخه‌های کیفیت سرور — ارقام فارسی + پسوند لاتین p
+// (۱۰۸۰ با نشان Full HD). برچسب ناشناختهٔ سرور دست‌نخورده پاس می‌شود.
+const QUALITY_LABELS_FA: Record<string, string> = {
+  '480p': '۴۸۰p',
+  '720p': '۷۲۰p',
+  '1080p': '۱۰۸۰p (Full HD)',
+};
+
+const qualityLabelFa = (label: string): string => QUALITY_LABELS_FA[label] ?? label;
+
 interface LessonPlayerModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -67,7 +77,6 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
     currentLesson.durationMinutes * 60 ||
     (Number.isFinite(realVideoDuration) && realVideoDuration > 0 ? Math.ceil(realVideoDuration) : 0);
   const [playbackSpeed, setPlaybackSpeed] = useState<'0.75' | '1' | '1.25' | '1.5'>('1');
-  const [selectedQuality, setSelectedQuality] = useState('720p');
   const [isMuted, setIsMuted] = useState(false);
   const [ticket, setTicket] = useState<VideoStreamingTicket | null>(null);
   // v1.1.0 Real-API: وقتی بلیط videoUrl واقعی دارد، پخش بومی <video> جایگزین شبیه‌ساز می‌شود.
@@ -75,14 +84,27 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
   // v1.2.8: نسخهٔ کیفیت فعال — وقتی سرور فهرست qualities دارد، سوییچ نسخه جای پخش را حفظ می‌کند
   // (resumeTimeRef در timeupdate به‌روز می‌شود و onLoadedMetadata همان‌جا ادامه می‌دهد).
   const [activeQualityUrl, setActiveQualityUrl] = useState<string | null>(null);
+  // v1.2.8: منبع فعال پخش — نسخهٔ کیفیت انتخاب‌شده اگر در بلیط جاری معتبر باشد؛
+  // در غیر این صورت خودبه‌خود به videoUrl پیش‌فرض بلیط برمی‌گردد (خودترمیم پس از تمدید بلیط).
+  // (عمداً بالای effects تعریف شده تا اثر همگام‌سازی به آن وابسته باشد.)
+  const activeVideoSrc =
+    activeQualityUrl && ticket?.qualities?.some((q) => q.url === activeQualityUrl)
+      ? activeQualityUrl
+      : ticket?.videoUrl ?? '';
+  const hasQualitySelector = !!ticket?.qualities && ticket.qualities.length > 0;
   // v1.2.8: رزولوشن واقعی ویدیوی بارگذاری‌شده — نمایش صادقانهٔ «کیفیت خودکار (۷۲۰p)»
   const [videoHeight, setVideoHeight] = useState(0);
+  // v1.3.0: خطای پخش واقعی <video> (شبکه/منبع) — اورلی حداقلی با تلاش مجدد (فقط Real)
+  const [isPlaybackError, setIsPlaybackError] = useState(false);
+  // v1.2.8: سوییچ کیفیت — جای پخش + وضعیت pause حفظ می‌شود
+  // (resumeTimeRef در timeupdate به‌روز می‌شود؛ resumePausedRef وضعیت pause لحظهٔ سوییچ است)
+  const resumePausedRef = useRef(false);
+
   // v1.2.8: حالت افقی — تمام‌صفحه + قفل orientation landscape (در پشتیبانی‌نشده‌ها راهنمای چرخش دستی)
   const [isLandscape, setIsLandscape] = useState(false);
   const [activeTab, setActiveTab] = useState<'syllabus' | 'notes'>('syllabus');
   const [newNoteText, setNewNoteText] = useState('');
   const [notes, setNotes] = useState<LessonNote[]>([]);
-  const [simulatedNetworkState, setSimulatedNetworkState] = useState<'good' | 'buffering' | 'error'>('good');
   // BUG-61: frozen note timestamp — captured when the textarea gains focus so
   // the label cannot drift while the playhead keeps moving during typing.
   const [noteTs, setNoteTs] = useState<number | null>(null);
@@ -248,6 +270,13 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
     }
   };
 
+  // v1.3.0: خطای منبع ویدیو (Real) — تلاش مجدد یعنی درخواست تازهٔ بلیط + playback
+  // (URL تازه معمولاً از سرور می‌آید و <video key={src}> دوباره mount می‌شود).
+  const handlePlaybackRetry = async () => {
+    setIsPlaybackError(false);
+    await handleRenewTicket();
+  };
+
   // BUG-58: shared clamped ±5s seek helper for the keyboard shortcuts + slider.
   // v1.1.0 Real-API: در پخش واقعی، همان seek روی خود <video> هم اعمال می‌شود.
   const seekBy = (delta: number) =>
@@ -393,6 +422,9 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
     // v1.2.8: کیفیت فعال و رزولوشن خوانده‌شدهٔ درس قبلی هم ریست شود.
     setActiveQualityUrl(null);
     setVideoHeight(0);
+    // v1.3.0: خطای پخش و وضعیت pause درس قبلی هم نباید نشت کند.
+    setIsPlaybackError(false);
+    resumePausedRef.current = false;
     // BUG-60/61: also reset the ended panel, note freeze/error and the
     // once-per-lesson auto-complete guard.
     setIsEnded(false);
@@ -405,7 +437,8 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
   useEffect(() => {
     let timer: any;
     // v1.1.0 Real-API: در پخش واقعی، تایم‌لاین از خود <video> (timeupdate) می‌آید — تایمر شبیه‌ساز خاموش است.
-    if (isPlaying && !isRealPlayback && simulatedNetworkState === 'good') {
+    // v1.3.0: شبیه‌ساز «وضعیت شبکه» (بافرینگ/خطا) حذف شد — شرط ساده شد.
+    if (isPlaying && !isRealPlayback) {
       // PLAYER FIX (BUG-11b): the speed selector was dead UI. The interval now
       // advances the playhead according to the selected playback speed.
       const speed = parseFloat(playbackSpeed) || 1;
@@ -417,10 +450,12 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
       }, stepMs);
     }
     return () => clearInterval(timer);
-  }, [isPlaying, totalDuration, simulatedNetworkState, playbackSpeed, isRealPlayback]);
+  }, [isPlaying, totalDuration, playbackSpeed, isRealPlayback]);
 
   // v1.1.0 Real-API: همگام‌سازی وضعیت پلیر با <video> واقعی — فقط وقتی videoUrl از سرور آمده
   // (در دمو videoRef همیشه null است و این اثر no-op می‌ماند؛ رفتار دمو صددرصد مثل قبل).
+  // v1.3.0: activeVideoSrc هم وابستگی است — پس از سوییچ کیفیت (remount ویدیو)
+  // muted/سرعت/وضعیت پخش روی المان تازه دوباره اعمال می‌شوند.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -433,7 +468,7 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
     } else {
       video.pause();
     }
-  }, [isPlaying, isMuted, playbackSpeed, isRealPlayback]);
+  }, [isPlaying, isMuted, playbackSpeed, isRealPlayback, activeVideoSrc]);
 
   // BUG-60: reaching the end of the lesson shows the «جلسه تمام شد» panel and
   // pauses playback instead of looping.
@@ -548,13 +583,15 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
 
   const watermarkString = ticket?.watermarkText || (currentUser ? currentUser.maskedPhone : '۰۹۱۲***۶۷۸۹');
 
-  // v1.2.8: منبع فعال پخش — نسخهٔ کیفیت انتخاب‌شده اگر در بلیط جاری معتبر باشد؛
-  // در غیر این صورت خودبه‌خود به videoUrl پیش‌فرض بلیط برمی‌گردد (خودترمیم پس از تمدید بلیط).
-  const activeVideoSrc =
-    activeQualityUrl && ticket?.qualities?.some((q) => q.url === activeQualityUrl)
-      ? activeQualityUrl
-      : ticket?.videoUrl ?? '';
-  const hasQualitySelector = !!ticket?.qualities && ticket.qualities.length > 0;
+  // v1.3.0: سوییچ نسخهٔ کیفیت — جای پخش (currentTime) و وضعیت pause حفظ می‌شود؛
+  // muted/سرعت روی المان تازه با اثر همگام‌سازی (activeVideoSrc در deps) برمی‌گردد.
+  const handleQualitySelect = (url: string) => {
+    const video = videoRef.current;
+    resumeTimeRef.current =
+      video && Number.isFinite(video.currentTime) ? video.currentTime : currentTime;
+    resumePausedRef.current = video ? video.paused : !isPlaying;
+    setActiveQualityUrl(url);
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/95 text-white flex flex-col animate-in fade-in duration-200">
@@ -677,6 +714,11 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
                       // ignore
                     }
                   }
+                  // v1.3.0: اگر در لحظهٔ سوییچ کیفیت پخش متوقف بود، ویدیوی تازه هم متوقف بماند
+                  if (resumePausedRef.current) {
+                    video.pause();
+                    resumePausedRef.current = false;
+                  }
                 }}
                 onTimeUpdate={(e) => {
                   const t = e.currentTarget.currentTime;
@@ -690,13 +732,19 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
                   setIsPlaying(false);
                 }}
                 onError={() => {
-                  // خطای منبع ویدیو در حالت Real — اورلی تمدید دسترسی (BUG-62) مسیر تازه‌سازی را می‌دهد.
-                  if (ticket?.videoUrl) setIsTicketFailed(true);
+                  // v1.3.0: خطای منبع/شبکه ویدیو در حالت Real — اورلی حداقلی با
+                  // تلاش مجدد (درخواست تازهٔ بلیط/playback). انقضای بلیط مسیر خودش
+                  // را دارد (BUG-62) و در دمو ویدیوی واقعی وجود ندارد.
+                  if (ticket?.videoUrl) setIsPlaybackError(true);
                 }}
               />
             )}
 
             {/* Simulated Live Frame Graphic (فقط دمو) */}
+            {/* v1.3.0: ابزار شبیه‌ساز وضعیت شبکهٔ دمو (سه دکمهٔ عادی/بافرینگ/خطای اتصال)
+                و اورلی‌های ساختگی‌اش به‌طور کامل حذف شدند — ابزار داخلی توسعه بود و
+                نباید برای کاربر نهایی دیده می‌شد. خطای پخش واقعی با اورلی پایین‌تر
+                (فقط Real) پوشش داده می‌شود. */}
             {!ticket?.videoUrl && (
             <div className="text-center p-6 z-10 max-w-md">
               <div className="w-16 h-16 rounded-full bg-amber-900/60 border border-amber-500/30 flex items-center justify-center mx-auto mb-3 shadow-lg">
@@ -708,35 +756,6 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
               <p className="text-[11px] text-stone-400 mt-1">
                 استریم محافظت‌شده بر بستر CDN با مجوز موقت ۹۰۰ ثانیه‌ای
               </p>
-
-              {/* Network State Simulator Toggles for Testing */}
-              <div className="mt-4 flex items-center justify-center gap-1 text-[10px]">
-                <span className="text-stone-500">تست وضعیت شبکه:</span>
-                <button
-                  onClick={() => setSimulatedNetworkState('good')}
-                  className={`px-2 py-0.5 rounded ${
-                    simulatedNetworkState === 'good' ? 'bg-emerald-800 text-white' : 'bg-stone-800 text-stone-400'
-                  }`}
-                >
-                  عادی
-                </button>
-                <button
-                  onClick={() => setSimulatedNetworkState('buffering')}
-                  className={`px-2 py-0.5 rounded ${
-                    simulatedNetworkState === 'buffering' ? 'bg-amber-800 text-white' : 'bg-stone-800 text-stone-400'
-                  }`}
-                >
-                  بافرینگ
-                </button>
-                <button
-                  onClick={() => setSimulatedNetworkState('error')}
-                  className={`px-2 py-0.5 rounded ${
-                    simulatedNetworkState === 'error' ? 'bg-red-800 text-white' : 'bg-stone-800 text-stone-400'
-                  }`}
-                >
-                  خطای اتصال
-                </button>
-              </div>
             </div>
             )}
 
@@ -752,30 +771,23 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
               </div>
             </div>
 
-            {/* BUFFERING OVERLAY */}
-            {simulatedNetworkState === 'buffering' && (
-              <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-30">
-                <div className="text-center">
-                  <div className="w-10 h-10 border-3 border-amber-600 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                  <p className="text-xs text-amber-200">در حال دریافت داده‌های ویدیو...</p>
-                </div>
-              </div>
-            )}
+            {/* v1.3.0: اورلی‌های ساختگی «بافرینگ»/«خطای اتصال» (شبیه‌ساز شبکه دمو)
+                حذف شدند — جایگزین: اورلی حداقلی خطای واقعی <video> فقط در حالت Real */}
 
-            {/* ERROR OVERLAY */}
-            {simulatedNetworkState === 'error' && (
+            {/* v1.3.0: خطای پخش واقعی — «پخش ویدیو با خطا مواجه شد؛ دوباره تلاش کنید.» */}
+            {isPlaybackError && isRealPlayback && (
               <div className="absolute inset-0 bg-black/85 flex items-center justify-center z-30 p-4">
                 <div className="text-center max-w-xs">
                   <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-2" />
-                  <p className="text-sm font-bold text-stone-100">خطا در بارگذاری قطعات استریم</p>
-                  <p className="text-xs text-stone-400 mt-1">
-                    اتصال اینترنت را بررسی کنید یا کیفیت را به 480p کاهش دهید.
+                  <p className="text-xs text-stone-300 leading-relaxed">
+                    پخش ویدیو با خطا مواجه شد؛ دوباره تلاش کنید.
                   </p>
                   <button
-                    onClick={() => setSimulatedNetworkState('good')}
-                    className="mt-3 bg-amber-800 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg text-xs"
+                    onClick={() => void handlePlaybackRetry()}
+                    disabled={isRenewing}
+                    className="mt-3 min-h-[44px] bg-amber-800 hover:bg-amber-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-xs transition"
                   >
-                    تلاش مجدد
+                    {isRenewing ? 'در حال تلاش...' : 'تلاش مجدد'}
                   </button>
                 </div>
               </div>
@@ -930,43 +942,35 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
 
               {/* Quality & Next/Prev */}
               <div className="flex items-center gap-2">
-                {/* v1.2.8 — کیفیت:
-                    ۱) سرور نسخه‌های چندکیفیته بفرستد (فیلتر mrdastbaaf_stream_video_qualities)
-                       → انتخاب‌گر واقعی با حفظ جای پخش.
-                    ۲) در غیر این صورت نمایش صادقانهٔ «خودکار» با رزولوشن واقعی فایل فعال. */}
+                {/* v1.3.0 — کیفیت:
+                    ۱) سرور نسخه‌های چندکیفیته بفرستد (POST /lessons/{id}/playback → qualities[])
+                       → انتخاب‌گر واقعی با حفظ جای پخش/وضعیت pause و برچسب فارسی + ✓ گزینهٔ فعال.
+                    ۲) در غیر این صورت (نسخه‌های خالی/غایب یا دمو) نمایش صادقانهٔ «خودکار» —
+                       انتخاب‌گر ساختگی حذف شد؛ رزولوشن فقط وقتی از فایل واقعی خوانده شده نشان داده می‌شود. */}
                 {hasQualitySelector ? (
                   <select
                     value={activeVideoSrc}
-                    onChange={(e) => setActiveQualityUrl(e.target.value)}
+                    onChange={(e) => handleQualitySelect(e.target.value)}
                     aria-label="انتخاب کیفیت پخش"
                     className="bg-stone-800 text-stone-300 text-[11px] rounded px-1.5 py-1 border border-stone-700 focus:outline-none"
                   >
-                    <option value={ticket?.videoUrl ?? ''}>خودکار</option>
+                    <option value={ticket?.videoUrl ?? ''}>
+                      {ticket?.videoUrl === activeVideoSrc ? 'خودکار ✓' : 'خودکار'}
+                    </option>
                     {ticket?.qualities?.map((q) => (
                       <option key={q.url} value={q.url}>
-                        {q.label}
+                        {qualityLabelFa(q.label)}
+                        {q.url === activeVideoSrc ? ' ✓' : ''}
                       </option>
                     ))}
                   </select>
-                ) : isRealPlayback ? (
+                ) : (
                   <span
                     className="bg-stone-800 text-stone-300 text-[11px] rounded px-1.5 py-1 border border-stone-700 select-none whitespace-nowrap"
                     title="کیفیت پخش به‌صورت خودکار مطابق فایل اصلی ویدیو روی سرور است"
                   >
                     کیفیت: خودکار{videoHeight > 0 ? ` · ${videoHeight}p` : ''}
                   </span>
-                ) : (
-                  <select
-                    value={selectedQuality}
-                    onChange={(e) => setSelectedQuality(e.target.value)}
-                    // BUG-58: accessible name for the quality selector.
-                    aria-label="انتخاب کیفیت پخش"
-                    className="bg-stone-800 text-stone-300 text-[11px] rounded px-1.5 py-1 border border-stone-700 focus:outline-none"
-                  >
-                    <option value="1080p">1080p FHD</option>
-                    <option value="720p">720p HD</option>
-                    <option value="480p">480p SD</option>
-                  </select>
                 )}
 
                 <div className="flex items-center gap-1">
@@ -1087,8 +1091,13 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
                               <span className="truncate">{lsn.title}</span>
                             </div>
                             <div className="flex items-center gap-1 text-[10px] text-stone-400 shrink-0">
-                              <Clock className="w-3 h-3" />
-                              <span>{lsn.durationMinutes} دقیقه</span>
+                              {/* v1.3.0: چیپ دقیقه فقط برای درس‌های با مدت مشخص (> 0) — هرگز «۰ دقیقه» */}
+                              {lsn.durationMinutes > 0 && (
+                                <>
+                                  <Clock className="w-3 h-3" />
+                                  <span>{lsn.durationMinutes.toLocaleString('fa-IR')} دقیقه</span>
+                                </>
+                              )}
                             </div>
                           </button>
                         );

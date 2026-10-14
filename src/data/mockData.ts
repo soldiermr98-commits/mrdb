@@ -57,7 +57,7 @@ export const INITIAL_USERS: UserProfile[] = [
     id: 'user-adm-1',
     phoneNumber: '09998887766',
     maskedPhone: '۰۹۹۹***۷۷۶۶',
-    fullName: 'علیرضا بافنده (مدیر ارشد)',
+    fullName: 'محمدرضا خاموشیان (مدیر ارشد)',
     avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80',
     role: 'admin',
     completedLessonIds: [],
@@ -153,7 +153,7 @@ export const INITIAL_COURSES: Course[] = [
     title: 'دوره جامع قالی‌بافی سنتی و چله‌کشی تبریز',
     slug: 'carpet-weaving-tabriz',
     shortDescription: 'آموزش گام‌به‌گام دار قالی، چله‌کشی، گره ترکی، پودکشی ضخیم و نازک، و خواندن نقشه‌های اصیل.',
-    fullDescription: 'قالی‌بافی یکی از کهن‌ترین و گرانبهاترین هنرهای ایرانی است. در این دوره آموزشی با تدریس استاد بافنده، از صفر مطلق با انواع دار قالی (عمودی و افقی)، ابزار کار شامل دفتین، قلاب، قیچی و شانه‌کش آشنا شده و گره ترکی را با ظرافت استادکاران تبریزی می‌آموزید. این دوره شما را از یک علاقه‌مند معمولی به بافنده‌ای مسلط بر دار قالی تبدیل می‌کند.',
+    fullDescription: 'قالی‌بافی یکی از کهن‌ترین و گرانبهاترین هنرهای ایرانی است. در این دوره آموزشی با تدریس اساتید مجرب، از صفر مطلق با انواع دار قالی (عمودی و افقی)، ابزار کار شامل دفتین، قلاب، قیچی و شانه‌کش آشنا شده و گره ترکی را با ظرافت استادکاران تبریزی می‌آموزید. این دوره شما را از یک علاقه‌مند معمولی به بافنده‌ای مسلط بر دار قالی تبدیل می‌کند.',
     category: 'قالی‌بافی و گلیم',
     level: 'مقدماتی',
     instructorName: 'استاد احمد رستگار',
@@ -700,7 +700,7 @@ export const INITIAL_HOMEPAGE_SECTIONS: HomepageSectionConfig[] = [
     sortOrder: 4,
     configData: {
       quoteText: '«هر گره‌ای که بر تار قالی می‌نشیند، تپش قلبی است که فرهنگ و صبوری ایرانی را به آیندگان می‌سپارد.»',
-      author: 'علیرضا بافنده - بنیان‌گذار مستر دستباف',
+      author: 'محمدرضا خاموشیان - بنیان‌گذار مستر دستباف',
     },
   },
   {
@@ -718,6 +718,15 @@ export const INITIAL_HOMEPAGE_SECTIONS: HomepageSectionConfig[] = [
     subtitle: 'پاسخ به سوالات پرتکرار پیرامون شیوه آموزش، خرید اشتراک و ابزار کار',
     isEnabled: true,
     sortOrder: 6,
+  },
+  // v1.3.0: سکشن «محصولات دست‌ساز» — داده از GET /shop/products (دمو: نمونهٔ ثابت shopService)
+  {
+    id: 'sec-physical-products',
+    key: 'physical_products',
+    title: 'محصولات دست‌ساز',
+    subtitle: 'آثار هنری آمادهٔ ارسال مستقیم',
+    isEnabled: true,
+    sortOrder: 7,
   },
 ];
 
@@ -771,7 +780,7 @@ export const MOCK_COMPANY_BANK_INFO = {
   cardNumber: '۶۱۰۴-۳۳۷۸-۹۸۲۰-۴۴۵۵',
   accountNumber: '۵۴۹۰۸۸۱۲۳۴',
   shabaNumber: 'IR12 0120 0000 0000 5490 8812 34',
-  accountHolderName: 'علیرضا بافنده (مستر دستباف)',
+  accountHolderName: 'محمدرضا خاموشیان (مستر دستباف)',
   supportPhone: '۰۲۱-۸۸۹۹۷۷۶۶',
   supportTelegram: '@mrdastbaaf_support',
 };

@@ -9,6 +9,7 @@ import { Course, CourseCategory, UserProfile } from '../types';
 import { courseService } from '../services/courseService';
 import { membershipService } from '../services/membershipService';
 import { isRealApiMode } from '../services/apiClient';
+import { useOnlineRefetch } from '../hooks/useOnlineRefetch';
 
 interface CatalogueViewProps {
   initialCategory?: CourseCategory | 'all';
@@ -85,6 +86,10 @@ export const CatalogueView: React.FC<CatalogueViewProps> = ({
 
     return () => window.clearTimeout(timer);
   }, [selectedCategory, searchTerm, selectedLevel, reloadTick]);
+
+  // v1.3.0 — بازگشت اتصال → یک refetch بی‌صدا وقتی آخرین بار خطا خورده بود
+  // (reloadTick اثر بارگذاری بالا را دوباره می‌چرخاند)
+  useOnlineRefetch(loadError, () => setReloadTick((t) => t + 1));
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6 pb-20">

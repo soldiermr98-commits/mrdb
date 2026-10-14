@@ -10,6 +10,7 @@ import { adminService } from '../services/adminService';
 import { appPagesService } from '../services/appPagesService';
 import { ApiError } from '../services/apiClient';
 import { AsyncState } from '../components/common/AsyncState';
+import { useOnlineRefetch } from '../hooks/useOnlineRefetch';
 
 interface EditorialPageViewProps {
   slug: string;
@@ -96,6 +97,9 @@ export const EditorialPageView: React.FC<EditorialPageViewProps> = ({ slug, page
   useEffect(() => {
     loadPage();
   }, [loadPage]);
+
+  // v1.3.0 — بازگشت اتصال → یک refetch بی‌صدا وقتی آخرین بار خطا خورده بود
+  useOnlineRefetch(loadError, loadPage);
 
   if (isLoading) {
     return <AsyncState status="loading" loadingLabel="در حال بارگذاری صفحه..." />;

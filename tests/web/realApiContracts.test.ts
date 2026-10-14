@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 type AuthServiceModule = typeof import('../../src/services/authService');
 type PaymentServiceModule = typeof import('../../src/services/paymentService');
 type ProgressServiceModule = typeof import('../../src/services/progressService');
+type CourseServiceModule = typeof import('../../src/services/courseService');
 type ApiClientModule = typeof import('../../src/services/apiClient');
 
 const TOKEN_KEY = 'mrdastbaaf_auth_token';
@@ -102,6 +103,29 @@ beforeEach(() => {
         ],
       });
     }
+    if (String(url).endsWith('/auth/request-otp')) {
+      // v1.3.0: پرچم اختیاری isRegistered (افزونهٔ ۱.۴.۰)
+      return jsonResponse({ success: true, message: 'کد ارسال شد', expires_in_seconds: 120, isRegistered: false });
+    }
+    if (String(url).endsWith('/my/courses')) {
+      // v1.3.0: قرارداد GET /my/courses — { success, courses[](owned:true), count }
+      return jsonResponse({
+        success: true,
+        count: 1,
+        courses: [
+          {
+            id: 'carpet-weaving',
+            title: 'دورهٔ خریداری‌شده',
+            owned: true,
+            duration: 95, // دقیقهٔ صحیح (v1.3.0)
+            lessons: [
+              { id: 'lsn-1', title: 'جلسه اول', isFreePreview: false, requiredTier: 'gold', duration: 30 },
+              { id: 'lsn-2', title: 'جلسه دوم', isFreePreview: false, requiredTier: 'gold', duration: null },
+            ],
+          },
+        ],
+      });
+    }
     return jsonResponse({ success: true }, 200);
   });
 });
@@ -114,14 +138,16 @@ async function loadRealServices(): Promise<{
   auth: AuthServiceModule;
   payment: PaymentServiceModule;
   progress: ProgressServiceModule;
+  course: CourseServiceModule;
   api: ApiClientModule;
 }> {
   vi.stubEnv('VITE_API_BASE_URL', 'https://x.example/wp-json/mrdastbaaf/v1');
   const auth = (await import('../../src/services/authService')) as AuthServiceModule;
   const payment = (await import('../../src/services/paymentService')) as PaymentServiceModule;
   const progress = (await import('../../src/services/progressService')) as ProgressServiceModule;
+  const course = (await import('../../src/services/courseService')) as CourseServiceModule;
   const api = (await import('../../src/services/apiClient')) as ApiClientModule;
-  return { auth, payment, progress, api };
+  return { auth, payment, progress, course, api };
 }
 
 describe('Real-API v1.2.0 contracts', () => {
@@ -233,5 +259,55 @@ describe('Real-API v1.2.0 contracts', () => {
   it('switchRole is forbidden in real mode with the exact Persian error', async () => {
     const { auth } = await loadRealServices();
     expect(() => auth.authService.switchRole('admin')).toThrow('سوییچ نقش در حالت واقعی مجاز نیست.');
+  });
+
+  // ---------------------------------------------------------------------------
+  // v1.3.0 — ثبت‌نام با نام + «دوره‌های من»
+  // ---------------------------------------------------------------------------
+
+  it('requestOtp surfaces the optional isRegistered flag (v1.3.0)', async () => {
+    const { auth } = await loadRealServices();
+
+    const res = await auth.authService.requestOtp('09123456789');
+
+    expect(res.success).toBe(true);
+    // سرور ۱.۴.۰ پرچم را می‌فرستد — مستقیم پاس می‌شود (سرور قدیمی: undefined)
+    expect(res.isRegistered).toBe(false);
+  });
+
+  it('verifyOtp forwards first_name/last_name only when names were collected (v1.3.0)', async () => {
+    const { auth } = await loadRealServices();
+
+    await auth.authService.verifyOtp('09123456789', '12345', {
+      firstName: 'سارا',
+      lastName: 'احمدی',
+    });
+
+    const call = calls.find((c) => c.url.endsWith('/auth/verify-otp'));
+    expect(call).toBeDefined();
+    expect(JSON.parse(call?.body ?? '{}')).toEqual({
+      phone: '09123456789',
+      otp_code: '12345',
+      first_name: 'سارا',
+      last_name: 'احمدی',
+    });
+  });
+
+  it('fetchMyCourses GETs /my/courses with Bearer and normalizes owned courses with durations (v1.3.0)', async () => {
+    const { auth, course } = await loadRealServices();
+    await auth.authService.verifyOtp('09123456789', '12345');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const courses = await course.courseService.fetchMyCourses();
+
+    const call = calls.find((c) => c.url.endsWith('/my/courses'));
+    expect(call).toBeDefined();
+    expect(call?.headers.Authorization).toBe('Bearer 42.secret');
+
+    expect(courses).toHaveLength(1);
+    expect(courses[0]).toMatchObject({ id: 'carpet-weaving', owned: true, durationMinutes: 95 });
+    // درس‌ها: عدد → دقیقه؛ null → ۰ (چیپ دقیقه در UI حذف می‌شود)
+    expect(courses[0].sections[0].lessons[0]).toMatchObject({ id: 'lsn-1', durationMinutes: 30 });
+    expect(courses[0].sections[0].lessons[1]).toMatchObject({ id: 'lsn-2', durationMinutes: 0 });
   });
 });

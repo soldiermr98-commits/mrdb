@@ -83,7 +83,7 @@ interface ApiCourseShape {
   productId?: unknown;
   /** v1.2.6: تعداد درس‌های پیش‌نمایش رایگان */
   freePreviewCount?: unknown;
-  /** v1.2.8: خرید تک‌دوره‌ای — محصول در سفارش پرداخت‌شدهٔ همین کاربر است */
+  /** v1.2.8/1.3.0: خرید تک‌دوره‌ای — پرچم owned (لیست، جزئیات و /my/courses) */
   owned?: unknown;
   title?: unknown;
   shortDescription?: unknown;
@@ -96,6 +96,8 @@ interface ApiCourseShape {
   thumbnailUrl?: unknown;
   coverImageUrl?: unknown;
   image?: unknown;
+  /** v1.3.0: مدت کل دوره به‌صورت دقیقهٔ صحیح (0/غایب = نامشخص — قرارداد 1.4.0) */
+  duration?: unknown;
   totalDurationHours?: unknown;
   lessonsCount?: unknown;
   totalLessonsCount?: unknown;
@@ -167,13 +169,16 @@ function apiStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
-function normalizeApiLesson(raw: ApiLessonShape, courseId: string, index: number): Lesson {
+/** v1.3.0: برای تست‌های قرارداد export شده — نگاشت duration سرور (عدد|null) به دقیقهٔ کلاینت (0 = نامشخص). */
+export function normalizeApiLesson(raw: ApiLessonShape, courseId: string, index: number): Lesson {
   return {
     id: apiString(raw.id, `lesson-${courseId}-${index + 1}`),
     courseId,
     sectionId: `${courseId}-curriculum`,
     title: apiString(raw.title, `جلسه ${index + 1}`),
-    // قرارداد v1.1.0: duration از سرور null است → ۰ (پلیر در حالت Real از مدت واقعی ویدیو استفاده می‌کند).
+    // قرارداد v1.3.0: duration سرور عدد|null است — null/غایب/غیرمثبت → 0؛
+    // رندر سمت UI چیپ «دقیقه» را فقط برای مقادیر > 0 نشان می‌دهد (هرگز «۰ دقیقه»).
+    // پلیر در حالت Real مدت واقعی ویدیو را از متادیتای <video> می‌گیرد.
     durationMinutes: typeof raw.duration === 'number' && Number.isFinite(raw.duration) && raw.duration > 0
       ? Math.round(raw.duration)
       : 0,
@@ -237,6 +242,8 @@ function normalizeApiCourse(raw: ApiCourseShape): Course {
     instructorAvatar: apiString(raw.instructorAvatar),
     thumbnailUrl: thumbnail,
     coverImageUrl: apiString(raw.coverImageUrl) || thumbnail,
+    // v1.3.0: مدت کل دوره از سرور (دقیقهٔ صحیح؛ 0/غایب = نامشخص) — نمایش در CourseDetailView
+    durationMinutes: apiCount(raw.duration),
     totalDurationHours: apiCount(raw.totalDurationHours),
     totalLessonsCount: apiCount(raw.totalLessonsCount ?? raw.lessonsCount) || lessonsCount,
     requiredTier: apiTier(raw.requiredTier, 'bronze'),
@@ -306,6 +313,28 @@ export const courseService = {
     }
 
     return result;
+  },
+
+  /**
+   * v1.3.0 — «دوره‌های من»: دوره‌هایی که کاربر مستقیماً خریداری کرده است
+   * (GET /my/courses با Bearer — افزونهٔ ۱.۴.۰؛ هر آیتم owned:true). 401 = بدون
+   * سشن (سرور گیت دارد). در دمو: هیچ دورهٔ خریداری‌شدهٔ محلی وجود ندارد (خرید
+   * تک‌دوره‌ای فقط در حالت Real فعال است) → فهرست خالی → سکشن در داشبورد مخفی می‌شود.
+   */
+  async fetchMyCourses(): Promise<Course[]> {
+    if (isRealApiMode) {
+      // قرارداد: { success:true, courses: CourseListItem[](owned:true), count:number }
+      const data = await apiFetch<{ courses?: unknown } | ApiCourseShape[]>('/my/courses', { auth: true });
+      const list = Array.isArray(data)
+        ? data
+        : Array.isArray((data as { courses?: unknown })?.courses)
+          ? ((data as { courses: unknown[] }).courses as ApiCourseShape[])
+          : [];
+      return list.map((c) => normalizeApiCourse(c));
+    }
+
+    await new Promise((res) => setTimeout(res, 200));
+    return inMemoryCourses.filter((c) => c.owned === true);
   },
 
   /**
