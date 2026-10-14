@@ -35,6 +35,14 @@ class MrDastbaaf_Courses_Controller {
             'permission_callback' => '__return_true',
         ));
 
+        // v1.4.0: دوره‌های من — فقط محصولاتِ دستهٔ دوره‌ها که کاربر جاری در سفارش
+        // پرداخت‌شدهٔ ووکامرس دارد (همان استراتژی‌های خرید تک‌دوره‌ای ۱.۳.۵)
+        register_rest_route(MRDASTBAAF_API_NAMESPACE, '/my/courses', array(
+            'methods' => 'GET',
+            'callback' => array($this, 'handle_get_my_courses'),
+            'permission_callback' => array('MrDastbaaf_Auth_Controller', 'permission_logged_in'),
+        ));
+
         // v1.3.2: الگوی id از [a-zA-Z0-9_-] به [^/]+ گسترش یافت — وردپرس اسلاگ‌های
         // فارسی را با utf8_uri_encode به شکل «%d8%af...» ذخیره می‌کند و کاراکتر «%»
         // (و خود حروف فارسی) در الگوی قبلی جور نمی‌شد → همهٔ درخواست‌های جزئیات دوره
@@ -106,17 +114,109 @@ class MrDastbaaf_Courses_Controller {
         }
         $lesson_counts = $this->get_lesson_counts($product_ids);
 
+        // v1.4.0: جمع دقیقه‌های هر دوره — یک پرس‌وجوی batched (SUM ... GROUP BY)
+        $lesson_durations = $this->sum_lesson_durations($product_ids);
+
+        // v1.4.0: پرچم owned در لیست — مجموعهٔ محصولاتِ خریداری‌شدهٔ کاربر یک‌بار
+        // محاسبه می‌شود (بدون کش؛ خریدِ همین لحظه بلافاصله دیده می‌شود) و برای
+        // کل لیست فقط مقایسهٔ in_array است — O(1) کوئری سفارش برای همهٔ دوره‌ها.
+        MrDastbaaf_Auth_Controller::maybe_authenticate_bearer();
+        $viewer_id = get_current_user_id();
+        $owned_product_ids = $viewer_id ? $this->get_paid_product_ids_for_user($viewer_id) : array();
+
         $courses = array();
         foreach ($query->posts as $product_post) {
-            $course = $this->map_product_to_course($product_post);
-            $counts = isset($lesson_counts[(int) $product_post->ID]) ? $lesson_counts[(int) $product_post->ID] : array('total' => 0, 'free' => 0);
+            $course_product_id = (int) $product_post->ID;
+            $course = $this->map_product_to_course(
+                $product_post,
+                isset($lesson_durations[$course_product_id]) ? (int) $lesson_durations[$course_product_id] : 0
+            );
+            $counts = isset($lesson_counts[$course_product_id]) ? $lesson_counts[$course_product_id] : array('total' => 0, 'free' => 0);
             $course['lessonsCount'] = (int) $counts['total'];
             // v1.3.3: تعداد درس‌های پیش‌نمایش رایگان — کارت دوره در اپ نشان «پیش‌نمایش رایگان» می‌گیرد
             $course['freePreviewCount'] = (int) $counts['free'];
+            // v1.4.0: این دوره را کاربر جاری خریده است؟
+            $course['owned'] = in_array($course_product_id, $owned_product_ids, true);
             $courses[] = $course;
         }
 
         return rest_ensure_response($courses);
+    }
+
+    /**
+     * v1.4.0: دوره‌های من — همان شکل آیتم‌های لیست دوره‌ها (با owned:true) فقط برای
+     * محصولاتی از دستهٔ دوره‌ها که کاربر جاری در سفارش پرداخت‌شدهٔ ووکامرس دارد.
+     * مرتب‌سازی بر اساس عنوان صعودی؛ سقف ۵۰ دوره.
+     */
+    public function handle_get_my_courses() {
+        if (!class_exists('WooCommerce')) {
+            return new WP_Error('woocommerce_missing', 'ووکامرس فعال نیست؛ امکان نمایش دوره‌ها وجود ندارد.', array('status' => 503));
+        }
+
+        $user_id = get_current_user_id();
+        $owned_product_ids = $this->get_paid_product_ids_for_user($user_id);
+        if (empty($owned_product_ids)) {
+            return rest_ensure_response(array(
+                'success' => true,
+                'courses' => array(),
+                'count'   => 0,
+            ));
+        }
+
+        // فقط محصولات دستهٔ دوره‌ها — همان آپشن GET /courses؛ مرتب بر اساس عنوان
+        $category_slug = (string) get_option('mrdastbaaf_course_category', 'courses');
+        $query_args = array(
+            'post_type'           => 'product',
+            'post_status'         => 'publish',
+            'posts_per_page'      => 200,
+            'no_found_rows'       => true,
+            'ignore_sticky_posts' => true,
+            'orderby'             => 'title',
+            'order'               => 'ASC',
+        );
+        if ('' !== $category_slug) {
+            $query_args['tax_query'] = array(
+                array(
+                    'taxonomy' => 'product_cat',
+                    'field'    => 'slug',
+                    'terms'    => $category_slug,
+                ),
+            );
+        }
+        $query = new WP_Query($query_args);
+
+        $product_ids = array();
+        foreach ($query->posts as $product_post) {
+            $product_ids[] = (int) $product_post->ID;
+        }
+        $lesson_counts = $this->get_lesson_counts($product_ids);
+        $lesson_durations = $this->sum_lesson_durations($product_ids);
+
+        $courses = array();
+        foreach ($query->posts as $product_post) {
+            $course_product_id = (int) $product_post->ID;
+            if (!in_array($course_product_id, $owned_product_ids, true)) {
+                continue;
+            }
+            $course = $this->map_product_to_course(
+                $product_post,
+                isset($lesson_durations[$course_product_id]) ? (int) $lesson_durations[$course_product_id] : 0
+            );
+            $counts = isset($lesson_counts[$course_product_id]) ? $lesson_counts[$course_product_id] : array('total' => 0, 'free' => 0);
+            $course['lessonsCount'] = (int) $counts['total'];
+            $course['freePreviewCount'] = (int) $counts['free'];
+            $course['owned'] = true;
+            $courses[] = $course;
+            if (count($courses) >= 50) {
+                break; // سقف قراردادی ۵۰ دوره
+            }
+        }
+
+        return rest_ensure_response(array(
+            'success' => true,
+            'courses' => $courses,
+            'count'   => count($courses),
+        ));
     }
 
     /**
@@ -174,7 +274,10 @@ class MrDastbaaf_Courses_Controller {
             return new WP_Error('not_found', 'دوره یافت نشد.', array('status' => 404));
         }
 
-        $course = $this->map_product_to_course($post_found);
+        // v1.4.0: مدت عددی دوره (یک پرس‌وجوی SUM تک‌محصولی — جزئیات، بدون N+1)
+        $course_durations = $this->sum_lesson_durations(array((int) $post_found->ID));
+        $course_duration_minutes = isset($course_durations[(int) $post_found->ID]) ? (int) $course_durations[(int) $post_found->ID] : 0;
+        $course = $this->map_product_to_course($post_found, $course_duration_minutes);
 
         /**
          * SECURITY: درس‌ها بدون video_url برگردانده می‌شوند — تنها فیلدهای نمایشی.
@@ -381,11 +484,65 @@ class MrDastbaaf_Courses_Controller {
          */
         $video_url = apply_filters('mrdastbaaf_stream_video_url', (string) $lesson_row->video_url, $lesson_row, $user_id);
 
+        // ─── v1.4.0: کیفیت‌های استریم ───
+        // مقدار ذخیره‌شدهٔ درس (qualities_json) دوباره از فیلتر https + لیست سفید
+        // هاست عبور داده می‌شود و سپس از فیلتر مستندِ ۱.۳.۵ واقعاً عبور می‌کند؛
+        // خروجی خالی = کلاینت فقط گزینهٔ «خودکار» نشان می‌دهد. بقیهٔ پاسخ (بلیط/
+        // واترمارک/TTL/no-store) دست‌نخورده است.
+        $stored_qualities = $this->sanitize_stored_qualities(isset($lesson_row->qualities_json) ? (string) $lesson_row->qualities_json : '');
+        $stored_qualities = apply_filters('mrdastbaaf_stream_video_qualities', $stored_qualities, $lesson_row, $user_id);
+        if (!is_array($stored_qualities)) {
+            $stored_qualities = array();
+        }
+        $stored_qualities = array_values($stored_qualities);
+
         return rest_ensure_response(array(
             'videoUrl' => $video_url,
             'watermarkText' => $this->build_watermark($user_id)['text'],
             'expiresAt' => gmdate('c', $issued_at + self::TICKET_TTL),
+            // v1.4.0: [{label,url}, …] — ممکن است خالی باشد (فقط «خودکار»)
+            'qualities' => $stored_qualities,
         ));
+    }
+
+    /**
+     * v1.4.0: رمزگشایی + بازاعتبارسنجی کیفیت‌های ذخیره‌شدهٔ درس — هر نشانی باید
+     * دوباره از همان گیت ویدیوی درس عبور کند (https + لیست سفید هاست از آپشن
+     * mrdastbaaf_video_hosts)؛ ردیف نامعتبر حذف می‌شود (fail-closed).
+     *
+     * @param string $raw_json محتوای ستون qualities_json
+     * @return array آرایهٔ [{label,url}, …] (ممکن است خالی)
+     */
+    private function sanitize_stored_qualities($raw_json) {
+        $decoded = json_decode((string) $raw_json, true);
+        if (!is_array($decoded)) {
+            return array();
+        }
+
+        $allowed_hosts = MrDastbaaf_Admin_Controller::get_allowed_video_hosts();
+        $clean = array();
+        foreach ($decoded as $entry) {
+            if (!is_array($entry) || !isset($entry['url'])) {
+                continue;
+            }
+            $url = esc_url_raw(trim((string) $entry['url']));
+            if ('' === $url || 0 !== strpos($url, 'https://')) {
+                continue;
+            }
+            $host = strtolower((string) wp_parse_url($url, PHP_URL_HOST));
+            if ('' === $host || !in_array($host, $allowed_hosts, true)) {
+                continue;
+            }
+            $label = isset($entry['label']) ? sanitize_text_field((string) $entry['label']) : '';
+            if ('' === $label) {
+                continue;
+            }
+            $clean[] = array(
+                'label' => $label,
+                'url'   => $url,
+            );
+        }
+        return $clean;
     }
 
     /**
@@ -394,8 +551,16 @@ class MrDastbaaf_Courses_Controller {
      * v1.2.0 (یافتهٔ ۳): فیلدهای ساختگی rating/students حذف شدند — مقدارهای جعلی «۰»
      * در UI رندر می‌شدند. قرارداد تغییر کرده: نرمال‌ساز کلاینت برای این دو فیلد
      * مقدار پیش‌فرض دارد و نبودشان در پاسخ مشکلی ایجاد نمی‌کند.
+     *
+     * v1.4.0: فیلد duration دیگر «—» نیست — مدت کل دوره به دقیقه (جمع درس‌ها؛
+     * صفر یعنی درس بدون مدت ثبت نشده). لیست از پرس‌وجوی batched و جزئیات از همان
+     * مسیر می‌آید (پارامتر اختیاری) تا هیچ N+1 رخ ندهد.
+     *
+     * @param WP_Post $post             محصول ووکامرس
+     * @param int     $duration_minutes جمع دقیقه‌های درس‌ها (۰ پیش‌فرض)
+     * @return array
      */
-    private function map_product_to_course(WP_Post $post) {
+    private function map_product_to_course(WP_Post $post, $duration_minutes = 0) {
         $product = function_exists('wc_get_product') ? wc_get_product($post->ID) : null;
 
         // نام ترم اول دستهٔ ووکامرس
@@ -433,7 +598,8 @@ class MrDastbaaf_Courses_Controller {
             'category' => $category_name,
             'level' => $level,
             'lessonsCount' => 0, // در handle_get_courses با شمارش واقعی جایگزین می‌شود
-            'duration' => '—',
+            // v1.4.0: مدت کل دوره به دقیقه (جمع درس‌ها؛ عدد — نه «—»)
+            'duration' => max(0, (int) $duration_minutes),
             'price' => $price,
             // v1.2.0: rating/students ساختگی حذف شدند (نرمال‌ساز کلاینت default دارد)
         );
@@ -441,13 +607,16 @@ class MrDastbaaf_Courses_Controller {
 
     /**
      * درس‌های عمومی محصول (بدون video_url) — هم‌شکل سرفصل‌های فرانت
+     *
+     * v1.4.0: مدت هر درس (duration_minutes) از ستون NEW جدول؛ صفر = null تا
+     * کلاینت «۰ دقیقه» نشان ندهد. درس‌های قدیمی (پیش از مهاجرت) هم null می‌گیرند.
      */
     private function get_product_lessons_public($product_id) {
         global $wpdb;
         $table_lessons = $wpdb->prefix . 'mrdastbaaf_lessons';
 
         $rows = $wpdb->get_results($wpdb->prepare(
-            "SELECT id, title, is_free, required_tier
+            "SELECT id, title, is_free, required_tier, duration_minutes
              FROM $table_lessons
              WHERE product_id = %d
              ORDER BY sort_order ASC, id ASC",
@@ -456,12 +625,14 @@ class MrDastbaaf_Courses_Controller {
 
         $lessons = array();
         foreach ($rows as $row) {
+            $lesson_duration = isset($row->duration_minutes) ? (int) $row->duration_minutes : 0;
             $lessons[] = array(
                 'id' => (string) (int) $row->id,
                 'title' => $row->title,
                 'isFreePreview' => (bool) $row->is_free,
                 'requiredTier' => (string) $row->required_tier,
-                'duration' => null,
+                // v1.4.0: مدت درس به دقیقه — صفر/ثبت‌نشده = null (کلاینت مخفی می‌کند)
+                'duration' => $lesson_duration > 0 ? $lesson_duration : null,
             );
         }
 
@@ -499,6 +670,36 @@ class MrDastbaaf_Courses_Controller {
         }
 
         return $counts;
+    }
+
+    /**
+     * v1.4.0: جمع دقیقه‌های درس‌های چند محصول در یک پرس‌وجو (همان الگوی
+     * get_lesson_counts) — مبناى فیلد duration عددی در لیست/جزئیات/my-courses
+     * بدون هیچ N+1.
+     *
+     * @param array $product_ids شناسه‌های عددی محصول
+     * @return array نگاشت product_id => جمع دقیقه‌ها (int)
+     */
+    private function sum_lesson_durations(array $product_ids) {
+        global $wpdb;
+        $table_lessons = $wpdb->prefix . 'mrdastbaaf_lessons';
+
+        if (empty($product_ids)) {
+            return array();
+        }
+
+        // شناسه‌ها با absint تصفیه شده‌اند — امن برای IN
+        $sanitized_ids = array_map('absint', $product_ids);
+        $ids_sql = implode(',', $sanitized_ids);
+
+        $rows = $wpdb->get_results("SELECT product_id, COALESCE(SUM(duration_minutes), 0) AS duration_total FROM $table_lessons WHERE product_id IN ($ids_sql) GROUP BY product_id");
+
+        $totals = array();
+        foreach ($rows as $row) {
+            $totals[(int) $row->product_id] = (int) $row->duration_total;
+        }
+
+        return $totals;
     }
 
     /**
@@ -572,6 +773,26 @@ class MrDastbaaf_Courses_Controller {
     /**
      * v1.3.5: آیا کاربر این محصول (دوره) را در سفارش پرداخت‌شدهٔ ووکامرس دارد؟
      *
+     * v1.4.0: پوستهٔ نازکِ هستهٔ مشترک get_paid_product_ids_for_user — همان
+     * استراتژی‌های قبلی (customer_id + مهمان با سه زیر-استراتژی شمارهٔ موبایل +
+     * نگاشت والدِ variation) عیناً حفظ شده‌اند؛ فراخوانی تکی جزئیات/بلیط بدون
+     * تغییر رفتار است.
+     *
+     * @param int $user_id    شناسهٔ کاربر فعلی
+     * @param int $product_id شناسهٔ محصول ووکامرس (دوره)
+     * @return bool
+     */
+    private function user_owns_course_product($user_id, $product_id) {
+        if (!$user_id || $product_id <= 0) {
+            return false;
+        }
+        return in_array((int) $product_id, $this->get_paid_product_ids_for_user((int) $user_id), true);
+    }
+
+    /**
+     * v1.4.0: مجموعهٔ شناسهٔ محصولاتِ (دوره‌های) پرداخت‌شدهٔ یک کاربر — هستهٔ مشترک
+     * پرچم owned در لیست (GET /courses)، جزئیات، GET /my/courses و گیت بلیط پخش.
+     *
      * پوشش کامل هر دو سناریو:
      *  ۱) سفارش‌های حساب کاربری (customer_id) — خرید لاگین‌شده
      *  ۲) سفارش‌های مهمان با همان شماره موبایل (billing_phone) — کاربرِ OTP
@@ -583,17 +804,19 @@ class MrDastbaaf_Courses_Controller {
      * سپس جدول wp_wc_orders (HPOS) و در نهایت postmeta قدیمی (_billing_phone)
      * امتحان می‌شود — روی هر نصبی یکی حتماً جواب می‌دهد.
      *
-     * کارایی: بدون کش — کوئری فقط هنگام بازکردن جزئیات دوره/صدور بلیط اجرا
-     * می‌شود و روی فروشگاه‌های کوچک/متوسط به‌شدت ارزان است؛ بدون کش، نتیجهٔ
-     * خریدِ همین لحظه هم بلافاصله دیده می‌شود (رفتار مورد انتظار کارفرما).
+     * اقلام هر سفارش به شناسهٔ محصول نگاشت می‌شود؛ variation هم به والدش اضافه
+     * می‌شود (خرید واریانتِ دوره = مالکیت دوره).
      *
-     * @param int $user_id    شناسهٔ کاربر فعلی
-     * @param int $product_id شناسهٔ محصول ووکامرس (دوره)
-     * @return bool
+     * کارایی: بدون کش — GET /courses این متد را «یک‌بار» برای کل لیست صدا می‌زند
+     * (بدون N+1) و خریدِ همین لحظه بلافاصله در پاسخ دیده می‌شود (رفتار مورد
+     * انتظار کارفرما).
+     *
+     * @param int $user_id شناسهٔ کاربر (مهمان = ۰)
+     * @return int[] شناسه‌های یکتای محصول
      */
-    private function user_owns_course_product($user_id, $product_id) {
-        if (!$user_id || $product_id <= 0 || !class_exists('WooCommerce') || !function_exists('wc_get_order')) {
-            return false;
+    private function get_paid_product_ids_for_user($user_id) {
+        if (!$user_id || !class_exists('WooCommerce') || !function_exists('wc_get_order')) {
+            return array();
         }
 
         $paid_statuses = array('wc-completed', 'wc-processing');
@@ -623,11 +846,12 @@ class MrDastbaaf_Courses_Controller {
         }
 
         if (empty($order_ids)) {
-            return false;
+            return array();
         }
         $order_ids = array_values(array_unique(array_map('intval', $order_ids)));
 
-        // تطبیق اقلام سفارش‌ها با محصول — شامل variation (والدش چک می‌شود)
+        // نگاشت اقلام سفارش‌ها به شناسهٔ محصول — شامل variation (والدش هم اضافه می‌شود)
+        $product_ids = array();
         foreach ($order_ids as $order_id) {
             $order = wc_get_order($order_id);
             if (!$order || !method_exists($order, 'get_items')) {
@@ -638,21 +862,20 @@ class MrDastbaaf_Courses_Controller {
                     continue;
                 }
                 $item_product_id = (int) $item->get_product_id();
-                $item_variation_id = method_exists($item, 'get_variation_id') ? (int) $item->get_variation_id() : 0;
-
-                if ($item_product_id === $product_id) {
-                    return true;
+                if ($item_product_id > 0) {
+                    $product_ids[] = $item_product_id;
                 }
+                $item_variation_id = method_exists($item, 'get_variation_id') ? (int) $item->get_variation_id() : 0;
                 if ($item_variation_id > 0) {
                     $variation = wc_get_product($item_variation_id);
-                    if ($variation && method_exists($variation, 'get_parent_id') && (int) $variation->get_parent_id() === $product_id) {
-                        return true;
+                    if ($variation && method_exists($variation, 'get_parent_id') && (int) $variation->get_parent_id() > 0) {
+                        $product_ids[] = (int) $variation->get_parent_id();
                     }
                 }
             }
         }
 
-        return false;
+        return array_values(array_unique(array_map('intval', $product_ids)));
     }
 
     /**

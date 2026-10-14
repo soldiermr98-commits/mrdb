@@ -15,6 +15,7 @@ import {
   Bookmark,
   Calendar,
   RefreshCw,
+  ShoppingBag,
 } from 'lucide-react';
 // BUG-52: unused imports removed (User, FileText, Landmark, AlertTriangle,
 // Sparkles). Play + Bookmark stay — they are used by the DEV-4 «ادامه یادگیری»
@@ -26,6 +27,7 @@ import { courseService } from '../services/courseService';
 import { membershipService } from '../services/membershipService';
 import { formatJalali, daysUntil, formatToman } from '../utils/format';
 import { AsyncState } from '../components/common/AsyncState';
+import { useOnlineRefetch } from '../hooks/useOnlineRefetch';
 
 interface UserDashboardViewProps {
   currentUser: UserProfile;
@@ -131,6 +133,8 @@ export const UserDashboardView: React.FC<UserDashboardViewProps> = ({
   const [orders, setOrders] = useState<PaymentOrder[]>([]);
   const [accessibleCourses, setAccessibleCourses] = useState<Course[]>([]);
   const [allCourses, setAllCourses] = useState<Course[]>([]);
+  // v1.3.0 — «دوره‌های من»: دوره‌های خریداری‌شدهٔ مستقیم (GET /my/courses)
+  const [myCourses, setMyCourses] = useState<Course[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
 
@@ -171,11 +175,24 @@ export const UserDashboardView: React.FC<UserDashboardViewProps> = ({
         setLoadError(true);
         setIsLoading(false);
       });
+
+    // v1.3.0 — «دوره‌های من» مستقل از بارگذاری اصلی است: شکستش هرگز کارت خطای
+    // کل داشبورد را نمی‌سازد؛ سکشن بی‌صدا مخفی می‌شود (فقط console.warn).
+    courseService
+      .fetchMyCourses()
+      .then((list) => setMyCourses(list))
+      .catch((e) => {
+        console.warn('fetchMyCourses failed — «دوره‌های من» مخفی می‌شود.', e);
+        setMyCourses([]);
+      });
   }, [currentUser]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // v1.3.0 — بازگشت اتصال → یک refetch بی‌صدا وقتی آخرین بار خطا خورده بود
+  useOnlineRefetch(loadError, loadData);
 
   const membership = currentUser.membership;
   // LIVE STATUS FIX (BUG-18/BUG-24): «فعال» فقط وقتی status=active و انقضا در آینده باشد؛
@@ -334,6 +351,53 @@ export const UserDashboardView: React.FC<UserDashboardViewProps> = ({
           </div>
           <div className="h-4 w-52 bg-stone-200 rounded animate-pulse" />
           <div className="h-20 rounded-2xl bg-stone-100 animate-pulse" />
+        </div>
+      )}
+
+      {/* v1.3.0 — «دوره‌های من»: دوره‌های خریداری‌شدهٔ مستقیم. ماندگار است و
+          مستقل از وضعیت عضویت رندر می‌شود (حتی وقتی کارت عضویت «غیرفعال/منقضی»
+          نشان می‌دهد)؛ فهرست خالی/شکست fetch = سکشن اصلاً رندر نمی‌شود. */}
+      {myCourses.length > 0 && (
+        <div className="bg-white rounded-3xl p-5 sm:p-6 border border-stone-200/90 shadow-xs space-y-4">
+          <div>
+            <h3 className="font-bold text-sm sm:text-base text-amber-950 flex items-center gap-2">
+              <ShoppingBag className="w-4 h-4 text-amber-800" />
+              دوره‌های من
+            </h3>
+            <p className="text-xs text-stone-500 mt-0.5">
+              دوره‌هایی که مستقیماً خریداری کرده‌اید — همیشه در دسترس‌اند، حتی بدون اشتراک فعال.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {myCourses.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => onNavigate('course_detail', { courseId: c.id })}
+                className="p-3.5 rounded-2xl border border-stone-200 hover:border-amber-700/60 transition space-y-2.5 bg-[#fdfbf7]/60 text-right"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 truncate">
+                    <img
+                      src={c.thumbnailUrl}
+                      alt={c.title}
+                      className="w-12 h-12 rounded-xl object-cover shrink-0"
+                    />
+                    <div className="truncate">
+                      <h4 className="font-bold text-xs text-stone-900 truncate">{c.title}</h4>
+                      <p className="text-[11px] text-stone-500 mt-0.5">استاد: {c.instructorName}</p>
+                    </div>
+                  </div>
+
+                  {/* نشان خرید — زمردی و متمایز از نشان‌های سطح اشتراک */}
+                  <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1 shrink-0">
+                    <CheckCircle className="w-3 h-3 text-emerald-600" />
+                    خریداری‌شده
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -529,7 +593,9 @@ export const UserDashboardView: React.FC<UserDashboardViewProps> = ({
                 <div className="min-w-0">
                   <p className="font-bold text-stone-900 truncate">{lesson.title}</p>
                   <p className="text-[11px] text-stone-500 mt-0.5 truncate">
-                    {course.title} · {faNum(lesson.durationMinutes)} دقیقه
+                    {course.title}
+                    {/* v1.3.0: چیپ دقیقه فقط برای درس‌های با مدت مشخص (> 0) — هرگز «۰ دقیقه» */}
+                    {lesson.durationMinutes > 0 && <span> · {faNum(lesson.durationMinutes)} دقیقه</span>}
                   </p>
                 </div>
 

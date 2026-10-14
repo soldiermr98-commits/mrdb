@@ -14,14 +14,17 @@ import {
   HeartHandshake,
   Play,
   Flame,
+  ShoppingBag,
+  ExternalLink,
 } from 'lucide-react';
 // BUG-52: unused icon imports removed (Award, HelpCircle, Layers). BookOpen
 // stays — it is used by the DEV/BUG-53 featured empty-state card.
-import { Course, HomepageSectionConfig, MembershipPlan, AppUiConfig } from '../types';
+import { Course, HomepageSectionConfig, MembershipPlan, ShopCategory, UserProfile, AppUiConfig } from '../types';
 import { INITIAL_HOMEPAGE_SECTIONS } from '../data/mockData';
 import { adminService } from '../services/adminService';
 import { courseService } from '../services/courseService';
 import { membershipService } from '../services/membershipService';
+import { shopService } from '../services/shopService';
 import { PWAInstallButton } from '../components/common/PWAInstallButton';
 
 interface HomeViewProps {
@@ -33,6 +36,8 @@ interface HomeViewProps {
    * نمایانی/ترتیب سکشن‌ها. null/undefined = دمو یا خطا → رفتار قبلی (پیش‌فرض‌های کد).
    */
   appUi?: AppUiConfig | null;
+  /** v1.3.0: برای حالت خالی سکشن «محصولات دست‌ساز» — راهنمای پیشخوان فقط برای مدیر */
+  currentUser?: UserProfile | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +75,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onOpenLessonPreview,
   onSelectPlan,
   appUi,
+  currentUser,
 }) => {
   const [sections, setSections] = useState<HomepageSectionConfig[]>(INITIAL_HOMEPAGE_SECTIONS);
   // BUG-53: the full course list feeds the featuredCourses derivation
@@ -78,6 +84,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const [plans, setPlans] = useState<MembershipPlan[]>([]);
   const [isCoursesLoading, setIsCoursesLoading] = useState(true);
   const [isPlansLoading, setIsPlansLoading] = useState(true);
+  // v1.3.0 — «محصولات دست‌ساز» (GET /shop/products): خالی = سکشن محتوایی ندارد
+  const [shopCategories, setShopCategories] = useState<ShopCategory[]>([]);
+  const [isShopLoading, setIsShopLoading] = useState(true);
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
 
   useEffect(() => {
@@ -106,6 +115,21 @@ export const HomeView: React.FC<HomeViewProps> = ({
       })
       .catch(() => {
         if (!stale) setIsPlansLoading(false);
+      });
+
+    // v1.3.0 — «محصولات دست‌ساز» (GET /shop/products): شکست ساکت است — سکشن
+    // خالی می‌ماند و کل صفحهٔ نخست هرگز با شکست فروشگاه نمی‌شکند (همان الگوی
+    // تحمل‌خطای بقیهٔ سکشن‌ها).
+    shopService
+      .fetchShopProducts()
+      .then((cats) => {
+        if (!stale) {
+          setShopCategories(cats);
+          setIsShopLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!stale) setIsShopLoading(false);
       });
 
     return () => {
@@ -417,7 +441,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                       '«هر گره‌ای که بر تار قالی می‌نشیند، تپش قلبی است که فرهنگ و صبوری ایرانی را به آیندگان می‌سپارد.»'}
                   </blockquote>
                   <p className="text-[11px] text-amber-900 font-bold">
-                    {storyData.author || 'علیرضا بافنده - بنیان‌گذار مستر دستباف'}
+                    {storyData.author || 'محمدرضا خاموشیان - بنیان‌گذار مستر دستباف'}
                   </p>
                 </div>
                 <button
@@ -427,6 +451,114 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   مطالعه داستان کامل
                 </button>
               </div>
+            </section>
+          );
+        }
+
+        // 4.5 — v1.3.0: «محصولات دست‌ساز» (GET /shop/products — افزونهٔ ۱.۴.۰)
+        // عنوان/زیرنویس از appUi (سرو‌پذیر از پیشخوان)؛ خالی بودن فروشگاه برای
+        // کاربر عادی یعنی سکشن اصلاً رندر نمی‌شود و فقط مدیر راهنمای پیشخوان می‌بیند.
+        if (sec.key === 'physical_products') {
+          const isShopEmpty = !isShopLoading && shopCategories.length === 0;
+          if (isShopEmpty && currentUser?.role !== 'admin') return null;
+
+          return (
+            <section key={sec.id} className="max-w-5xl mx-auto px-4">
+              <div className="text-center max-w-xl mx-auto mb-6">
+                <h2 className="text-lg sm:text-xl font-bold text-amber-950 flex items-center justify-center gap-2">
+                  <ShoppingBag className="w-5 h-5 text-amber-800" />
+                  <span>{sec.title}</span>
+                </h2>
+                <p className="text-xs text-stone-500 mt-1">{sec.subtitle}</p>
+              </div>
+
+              {isShopLoading ? (
+                // skeleton هم‌سبک بقیهٔ سکشن‌ها
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {[0, 1, 2, 3].map((i) => (
+                    <div key={i} className="bg-white rounded-2xl border border-stone-200/90 overflow-hidden shadow-xs">
+                      <div className="aspect-square bg-stone-200 animate-pulse" />
+                      <div className="p-3 space-y-2">
+                        <div className="h-3 w-3/4 bg-stone-200 rounded animate-pulse" />
+                        <div className="h-3 w-1/3 bg-stone-100 rounded animate-pulse" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : isShopEmpty ? (
+                // فقط برای مدیر — راهنمای مسیر پیشخوان
+                <div className="bg-white rounded-2xl p-8 text-center border border-amber-200 text-amber-900 space-y-2 max-w-xl mx-auto">
+                  <ShoppingBag className="w-8 h-8 text-amber-400 mx-auto" />
+                  <p className="text-xs leading-relaxed">
+                    محصولات فیزیکی از پیشخوان ← مستر دستباف ← محصولات فیزیکی انتخاب می‌شوند.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-8">
+                  {shopCategories.map((cat) => (
+                    <div key={cat.id}>
+                      <h3 className="text-sm font-bold text-stone-900 mb-3 flex items-center gap-2">
+                        <span className="w-1 h-4 rounded-full bg-amber-700" />
+                        {cat.name}
+                      </h3>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                        {cat.products.map((p) => {
+                          // همان گارد امنیتی configData این فایل — فقط http/https/mailto/tel
+                          const safeProductUrl = safeExternalUrl(p.url);
+                          const safeImageUrl = safeExternalUrl(p.imageUrl);
+                          return (
+                            <div
+                              key={p.id}
+                              className="bg-white rounded-2xl border border-stone-200/90 overflow-hidden shadow-xs hover:shadow-md transition flex flex-col"
+                            >
+                              {safeImageUrl ? (
+                                <img
+                                  src={safeImageUrl}
+                                  alt={p.title}
+                                  loading="lazy"
+                                  className="aspect-square w-full object-cover bg-stone-100"
+                                />
+                              ) : (
+                                // کاشی حرف‌اول — دمو و محصولات بدون تصویر (بدون هیچ تصویر بیرونی)
+                                <div className="aspect-square w-full bg-gradient-to-br from-amber-100 to-amber-200 flex items-center justify-center">
+                                  <span className="text-2xl font-black text-amber-800">
+                                    {p.title.slice(0, 1)}
+                                  </span>
+                                </div>
+                              )}
+
+                              <div className="p-3 flex-1 flex flex-col justify-between gap-2.5">
+                                <h4 className="text-xs font-bold text-stone-900 leading-snug line-clamp-2">
+                                  {p.title}
+                                </h4>
+                                <div className="space-y-2">
+                                  <p className="text-[11px] text-stone-500">
+                                    <span className="font-black text-amber-900 font-mono">
+                                      {p.price.toLocaleString('fa-IR')}
+                                    </span>{' '}
+                                    تومان
+                                  </p>
+                                  {safeProductUrl && (
+                                    <a
+                                      href={safeProductUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="w-full bg-stone-900 hover:bg-amber-900 text-white text-[11px] font-semibold px-3 py-2 rounded-xl transition flex items-center justify-center gap-1.5"
+                                    >
+                                      <ExternalLink className="w-3 h-3" />
+                                      <span>مشاهده در سایت</span>
+                                    </a>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
           );
         }

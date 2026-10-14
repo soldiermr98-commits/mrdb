@@ -32,6 +32,14 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [timer, setTimer] = useState(90);
+  // v1.3.0 — تکمیل ثبت‌نام شمارهٔ جدید: پرچم از پاسخ requestOtp می‌آید
+  // (true = کاربر موجود → هیچ فیلد نامی نشان داده نمی‌شود؛ undefined = سرور
+  // قدیمی/دموی شناخته‌شده — همان رفتار بدون اصطکاک؛ false = ثبت‌نام جدید →
+  // دو ورودی الزامی «نام» و «نام خانوادگی» در گام OTP).
+  const [isRegistered, setIsRegistered] = useState<boolean | undefined>(undefined);
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [nameError, setNameError] = useState<string | null>(null);
 
   useEffect(() => {
     let interval: any;
@@ -44,10 +52,14 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+    setNameError(null);
     setIsLoading(true);
 
     try {
-      await authService.requestOtp(phone);
+      const res = await authService.requestOtp(phone);
+      setIsRegistered(res.isRegistered);
+      setFirstName('');
+      setLastName('');
       setStep('otp');
       setTimer(90);
       setOtp(isRealApiMode ? '' : '12345'); // Pre-fill mock code (demo mode only)
@@ -61,10 +73,22 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+
+    // v1.3.0: ثبت‌نام شمارهٔ جدید — نام و نام خانوادگی الزامی (اعتبارسنجی ملایم)
+    const cleanFirstName = firstName.trim();
+    const cleanLastName = lastName.trim();
+    if (isRegistered === false && (cleanFirstName === '' || cleanLastName === '')) {
+      setNameError('نام و نام خانوادگی را وارد کنید.');
+      return;
+    }
+    setNameError(null);
     setIsLoading(true);
 
     try {
-      const { user } = await authService.verifyOtp(phone, otp);
+      const { user } = await authService.verifyOtp(phone, otp, {
+        firstName: cleanFirstName,
+        lastName: cleanLastName,
+      });
       onSuccess(user);
       onClose();
     } catch (err: any) {
@@ -93,9 +117,12 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
   // the 90-second timer) instead of only resetting the countdown.
   const handleResendOtp = async () => {
     setErrorMessage(null);
+    setNameError(null);
     setIsLoading(true);
     try {
-      await authService.requestOtp(phone);
+      const res = await authService.requestOtp(phone);
+      // پرچم ثبت‌نام با ارسال مجدد هم تازه می‌شود (وضعیت شماره ممکن است تغییر کرده باشد)
+      setIsRegistered(res.isRegistered);
       setTimer(90);
       setOtp(isRealApiMode ? '' : '12345'); // Pre-fill mock code (demo mode only)
     } catch (err: any) {
@@ -109,6 +136,10 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
     setStep('phone');
     setOtp('');
     setErrorMessage(null);
+    setIsRegistered(undefined);
+    setFirstName('');
+    setLastName('');
+    setNameError(null);
   };
 
   return (
@@ -203,7 +234,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
                   disabled={isLoading}
                   className="p-2 rounded-xl border border-stone-200 hover:border-red-700 hover:bg-red-50/50 text-right transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <p className="font-bold text-red-900">علیرضا بافنده</p>
+                  <p className="font-bold text-red-900">محمدرضا خاموشیان</p>
                   <p className="text-[10px] text-stone-500">مدیر ارشد پلتفرم</p>
                 </button>
               </div>
@@ -222,6 +253,53 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
                 ویرایش شماره
               </button>
             </div>
+
+            {/* v1.3.0 — تکمیل ثبت‌نام: فقط برای شمارهٔ بدون حساب (isRegistered === false).
+                کاربران موجود (پرچم true/undefined از سرور قدیمی) بدون هیچ فیلد اضافی وارد می‌شوند. */}
+            {isRegistered === false && (
+              <div className="space-y-2.5 bg-amber-50/50 border border-amber-100 rounded-xl p-3">
+                <p className="text-[11px] text-amber-900 leading-relaxed">
+                  این شماره عضو مستر دستباف نیست؛ برای ساخت حساب کاربری، نام و نام خانوادگی خود را وارد کنید.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-stone-700 mb-1.5">نام</label>
+                    <input
+                      type="text"
+                      dir="rtl"
+                      value={firstName}
+                      onChange={(e) => setFirstName(e.target.value)}
+                      autoComplete="off"
+                      maxLength={60}
+                      placeholder="مثلاً سارا"
+                      className={`w-full px-3 py-2.5 bg-stone-50 border rounded-xl text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-700/30 focus:border-amber-700 transition ${
+                        nameError ? 'border-red-300' : 'border-stone-200'
+                      }`}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-stone-700 mb-1.5">نام خانوادگی</label>
+                    <input
+                      type="text"
+                      dir="rtl"
+                      value={lastName}
+                      onChange={(e) => setLastName(e.target.value)}
+                      autoComplete="off"
+                      maxLength={60}
+                      placeholder="مثلاً احمدی"
+                      className={`w-full px-3 py-2.5 bg-stone-50 border rounded-xl text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-700/30 focus:border-amber-700 transition ${
+                        nameError ? 'border-red-300' : 'border-stone-200'
+                      }`}
+                    />
+                  </div>
+                </div>
+                {nameError && (
+                  <p className="text-[11px] text-red-700 bg-red-50 border border-red-100 rounded-lg px-2.5 py-1.5">
+                    {nameError}
+                  </p>
+                )}
+              </div>
+            )}
 
             <div>
               <label className="block text-xs font-semibold text-stone-700 mb-1.5">

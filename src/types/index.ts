@@ -56,6 +56,12 @@ export interface Lesson {
   courseId: string;
   sectionId: string;
   title: string;
+  /**
+   * v1.3.0 قرارداد سرور: duration عدد | null است (null/غایب = نامشخص).
+   * نگاشت کلاینت: هر مقدار غیرمثبت/نامشخص → 0 و رندر سمت UI چیپ «دقیقه» را
+   * فقط برای مقادیر > 0 نشان می‌دهد (هرگز «۰ دقیقه»). پلیر در حالت Real مدت
+   * واقعی را از متادیتای <video> می‌گیرد.
+   */
   durationMinutes: number;
   order: number;
   isFreePreview: boolean;
@@ -93,6 +99,11 @@ export interface Course {
   sections: CourseSection[];
   learningOutcomes: string[];
   prerequisites: string[];
+  /**
+   * v1.3.0 — مدت کل دوره به‌صورت دقیقهٔ صحیح از سرور (0/غایب = نامشخص).
+   * فرمت نمایش: «{n} دقیقه» یا برای ≥۶۰ «{h} ساعت و {m} دقیقه» (utils/format.formatDurationFa).
+   */
+  durationMinutes?: number;
   /** v1.2.6 Real-API: شناسهٔ عددی محصول ووکامرس — مسیر مطمئن جزئیات (/courses/by-id) */
   productId?: number | null;
   /** v1.2.6 Real-API: تعداد درس‌های پیش‌نمایش رایگان (نشان کارت در کاتالوگ) */
@@ -164,7 +175,8 @@ export interface PaymentOrder {
 export interface HomepageSectionConfig {
   id: string;
   // v1.2.8: سکشن «categories» بازنشسته شد (به درخواست کارفرما — دوره‌ها دسته‌بندی لازم ندارند)
-  key: 'hero' | 'featured_courses' | 'membership_plans' | 'artisan_story' | 'faq';
+  // v1.3.0: سکشن «physical_products» (محصولات دست‌ساز از GET /shop/products) اضافه شد
+  key: 'hero' | 'featured_courses' | 'membership_plans' | 'artisan_story' | 'faq' | 'physical_products';
   title: string;
   subtitle?: string;
   isEnabled: boolean;
@@ -258,11 +270,13 @@ export interface AppUiHero {
 
 /** کلیدهای مجاز — دقیقاً همان‌هایی که HomeView رندر می‌کند (hero جدا سرو می‌شود) */
 // v1.2.8: «categories» بازنشسته شد (به درخواست کارفرما)
+// v1.3.0: «physical_products» (محصولات دست‌ساز) اضافه شد
 export type AppUiSectionKey =
   | 'featured_courses'
   | 'artisan_story'
   | 'membership_plans'
-  | 'faq';
+  | 'faq'
+  | 'physical_products';
 
 export interface AppUiSection {
   key: AppUiSectionKey;
@@ -285,6 +299,29 @@ export interface AppUiGuideItem {
   label: string;
   enabled: boolean;
   sortOrder: number;
+}
+
+// ---------------------------------------------------------------------------
+// v1.3.0 — «محصولات دست‌ساز» (GET /shop/products — افزونهٔ 1.4.0)
+// گروه‌بندی محصولات فیزیکی بر اساس دستهٔ ووکامرس؛ رندر در سکشن «physical_products».
+// ---------------------------------------------------------------------------
+
+export interface ShopProduct {
+  id: number;
+  title: string;
+  /** قیمت به تومان (عدد صحیح) */
+  price: number;
+  /** null = بدون تصویر → کاشی حرف‌اول در UI */
+  imageUrl: string | null;
+  /** نشانی صفحهٔ محصول در سایت — لینک «مشاهده در سایت» (target=_blank) */
+  url: string;
+}
+
+export interface ShopCategory {
+  id: number;
+  slug: string;
+  name: string;
+  products: ShopProduct[];
 }
 
 export interface AppUiConfig {

@@ -9,6 +9,7 @@ import { MembershipPlan, UserProfile } from '../types';
 import { membershipService } from '../services/membershipService';
 import { formatJalali, daysUntil } from '../utils/format';
 import { AsyncState } from '../components/common/AsyncState';
+import { useOnlineRefetch } from '../hooks/useOnlineRefetch';
 
 interface MembershipViewProps {
   onSelectPlan: (plan: MembershipPlan) => void;
@@ -47,6 +48,9 @@ export const MembershipView: React.FC<MembershipViewProps> = ({
   useEffect(() => {
     loadPlans();
   }, [loadPlans]);
+
+  // v1.3.0 — بازگشت اتصال → یک refetch بی‌صدا وقتی آخرین بار خطا خورده بود
+  useOnlineRefetch(loadError, loadPlans);
 
   const formatPrice = (p: number) => p.toLocaleString('fa-IR');
 

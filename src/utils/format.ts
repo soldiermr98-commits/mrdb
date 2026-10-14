@@ -106,3 +106,21 @@ export function isLive(iso: string | null | undefined): boolean {
 export function formatToman(value: number): string {
   return Number.isFinite(value) ? value.toLocaleString('fa-IR') : '—';
 }
+
+/**
+ * v1.3.0 — قالب مدت (دقیقهٔ صحیح) به فارسی:
+ *  - ۰ / منفی / غیرمتناهی → null (نامشخص؛ caller چیپ را کلاً حذف می‌کند — هرگز «۰ دقیقه»)
+ *  - کمتر از ۶۰ دقیقه → «۴۵ دقیقه»
+ *  - ۶۰ دقیقه یا بیشتر → «۲ ساعت» یا «۱ ساعت و ۳۰ دقیقه» (دقیقهٔ صفر حذف می‌شود)
+ */
+export function formatDurationFa(totalMinutes: number | null | undefined): string | null {
+  if (typeof totalMinutes !== 'number' || !Number.isFinite(totalMinutes) || totalMinutes <= 0) {
+    return null;
+  }
+  const minutes = Math.round(totalMinutes);
+  const faNum = (n: number) => n.toLocaleString('fa-IR');
+  if (minutes < 60) return `${faNum(minutes)} دقیقه`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest > 0 ? `${faNum(hours)} ساعت و ${faNum(rest)} دقیقه` : `${faNum(hours)} ساعت`;
+}

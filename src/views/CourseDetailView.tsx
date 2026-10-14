@@ -18,7 +18,9 @@ import {
 } from 'lucide-react';
 import { Course, Lesson, UserProfile } from '../types';
 import { courseService } from '../services/courseService';
+import { formatDurationFa } from '../utils/format';
 import { AsyncState } from '../components/common/AsyncState';
+import { useOnlineRefetch } from '../hooks/useOnlineRefetch';
 
 interface CourseDetailViewProps {
   courseId: string;
@@ -62,6 +64,9 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
   useEffect(() => {
     loadCourse();
   }, [loadCourse]);
+
+  // v1.3.0 — بازگشت اتصال → یک refetch بی‌صدا وقتی آخرین بار خطا خورده بود
+  useOnlineRefetch(loadError, loadCourse);
 
   if (isLoading) {
     return (
@@ -121,6 +126,12 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
   const allLessons = course.sections.flatMap((s) => s.lessons);
   const freePreviews = allLessons.filter((l) => l.isFreePreview);
 
+  // v1.3.0 — مدت کل دوره: اولویت با دقیقهٔ صحیح سرور (duration)؛ فال‌بک به
+  // totalDurationHours دمو/سرور قدیمی. هر دو نامشخص = چیپ کلاً حذف می‌شود.
+  const courseDurationLabel =
+    formatDurationFa(course.durationMinutes) ??
+    (course.totalDurationHours > 0 ? `${course.totalDurationHours.toLocaleString('fa-IR')} ساعت آموزش` : null);
+
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 space-y-8 pb-28">
       {/* Back button */}
@@ -149,10 +160,13 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
               {course.title}
             </h1>
             <div className="flex flex-wrap items-center gap-4 text-xs text-stone-300 pt-1">
-              <span className="flex items-center gap-1">
-                <Clock className="w-3.5 h-3.5 text-amber-400" />
-                {course.totalDurationHours} ساعت آموزش
-              </span>
+              {/* v1.3.0: چیپ مدت فقط وقتی مقدار مشخصی هست (هرگز «۰ دقیقه»/«۰ ساعت») */}
+              {courseDurationLabel && (
+                <span className="flex items-center gap-1">
+                  <Clock className="w-3.5 h-3.5 text-amber-400" />
+                  {courseDurationLabel}
+                </span>
+              )}
               <span className="flex items-center gap-1">
                 <BookOpen className="w-3.5 h-3.5 text-amber-400" />
                 {allLessons.length} درس ویدیویی
@@ -304,10 +318,13 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
                             )}
                           </p>
                           <div className="flex items-center gap-3 text-[11px] text-stone-500 mt-0.5">
-                            <span className="flex items-center gap-1 font-mono">
-                              <Clock className="w-3 h-3" />
-                              {lesson.durationMinutes} دقیقه
-                            </span>
+                            {/* v1.3.0: چیپ دقیقه فقط برای درس‌های با مدت مشخص (> 0) — هرگز «۰ دقیقه» */}
+                            {lesson.durationMinutes > 0 && (
+                              <span className="flex items-center gap-1 font-mono">
+                                <Clock className="w-3 h-3" />
+                                {lesson.durationMinutes.toLocaleString('fa-IR')} دقیقه
+                              </span>
+                            )}
                             {lesson.isFreePreview && (
                               <span className="text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.2 rounded">
                                 رایگان

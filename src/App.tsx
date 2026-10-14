@@ -19,6 +19,7 @@ import { paymentService } from './services/paymentService';
 import { isRealApiMode } from './services/apiClient';
 import { detectZibalCallback, clearZibalCallbackParams } from './services/zibalCallback';
 import { mutateOrder, orderStore } from './services/orderStore';
+import { ONLINE_REFETCH_EVENT } from './hooks/useOnlineRefetch';
 
 // Common Components
 import { Header } from './components/common/Header';
@@ -523,6 +524,20 @@ export default function App() {
     };
   }, [currentUser?.id]);
 
+  // ---------------------------------------------------------------------------
+  // v1.3.0 — «خطای اتصال» گاه‌به‌گاه: وقتی اتصال مرورگر برمی‌گردد (رویداد online)
+  // رویداد داخلی refetch یک بار ارسال می‌شود؛ نماها (داشبورد/کاتالوگ/جزئیات دوره
+  // /عضویت/صفحات) فقط وقتی آخرین بارگذاری‌شان خطا خورده باشد یک refetch بی‌صدا
+  // می‌زنند (useOnlineRefetch). بدون پیام/اسپینر اضافه.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    const handleOnline = () => {
+      window.dispatchEvent(new Event(ONLINE_REFETCH_EVENT));
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, []);
+
   // DEV-4/3-b: parent-owned completion handler — persists through the
   // whitelisted updater AND refreshes App state (setUser) so the dashboard /
   // CourseDetailView re-render live (player icon state derives from props).
@@ -596,6 +611,7 @@ export default function App() {
             onOpenLessonPreview={handleOpenLessonPreview}
             onSelectPlan={handleSelectPlan}
             appUi={appUi}
+            currentUser={currentUser}
           />
         )}
 
@@ -702,7 +718,7 @@ export default function App() {
 
           <div className="pt-4 border-t border-stone-800/80 flex flex-col sm:flex-row items-center justify-between gap-2 text-[10px] text-stone-500">
             <p>© تمام حقوق مادی و معنوی آموزش‌ها متعلق به مجموعه مستر دستباف است.</p>
-            <p className="font-mono">PWA Prototype v1.0.0 · WordPress & Otino Ready</p>
+            <p>وب‌اپ نسخهٔ 1.3.0</p>
           </div>
         </div>
       </footer>

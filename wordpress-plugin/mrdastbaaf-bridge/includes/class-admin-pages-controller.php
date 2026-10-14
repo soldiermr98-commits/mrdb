@@ -28,6 +28,12 @@
  *     منطق پرداخت در کنترلر NEW class-woo-bridge-controller.php است و این
  *     صفحه فقط فرم نگاشت (انتخاب محصول برای هر پلن) را نگه می‌دارد.
  *
+ *  ۵) (v1.4.0) محصولات فیزیکی — انتخاب محصولات ووکامرسی «دست‌ساز» با چک‌باکس
+ *     (فیلتر دسته) برای بخش «محصولات دست‌ساز» وب‌اپ؛ سرو REST با GET
+ *     /shop/products از کنترلر NEW class-shop-controller.php و آپشن مشترک
+ *     mrdastbaaf_physical_products. ذخیره، تیک‌های همهٔ دسته‌ها را ادغام می‌کند
+ *     و برداشتن تیک در دستهٔ جاری واقعاً حذف می‌کند.
+ *
  * امنیت: همهٔ عملیات نوشتن از admin-post.php با check_admin_referer +
  * current_user_can('manage_options') + sanitize ورودی‌ها؛ خروجی‌ها با
  * esc_html/esc_attr/esc_url. پیام نتیجهٔ هر عملیات در transient کوتاه‌عمر
@@ -47,6 +53,8 @@ class MrDastbaaf_Admin_Pages_Controller {
     // v1.3.4: محتوای وب‌اپ + اتصال خرید سایت
     const APP_UI_SLUG = 'mrdastbaaf-app-ui';
     const WOO_MAP_SLUG = 'mrdastbaaf-woo-map';
+    // v1.4.0: محصولات فیزیکی (بخش «محصولات دست‌ساز» وب‌اپ)
+    const PHYSICAL_SLUG = 'mrdastbaaf-physical';
 
     public function register() {
         add_action('admin_menu', array($this, 'register_admin_menu'));
@@ -68,6 +76,8 @@ class MrDastbaaf_Admin_Pages_Controller {
         add_action('admin_post_mrdastbaaf_app_ui_save_featured', array($this, 'handle_app_ui_save_featured'));
         // v1.3.4: اتصال خرید سایت (نگاشت پلن → محصول ووکامرس)
         add_action('admin_post_mrdastbaaf_woo_map_save', array($this, 'handle_woo_map_save'));
+        // v1.4.0: محصولات فیزیکی (تیک محصولات بخش «محصولات دست‌ساز» وب‌اپ)
+        add_action('admin_post_mrdastbaaf_physical_save', array($this, 'handle_physical_save'));
     }
 
     /**
@@ -121,6 +131,16 @@ class MrDastbaaf_Admin_Pages_Controller {
             'manage_options',
             self::WOO_MAP_SLUG,
             array($this, 'render_woo_map_page')
+        );
+
+        // v1.4.0: محصولات فیزیکی
+        add_submenu_page(
+            MrDastbaaf_Settings_Controller::MENU_SLUG,
+            'محصولات فیزیکی مستر دستباف',
+            'محصولات فیزیکی',
+            'manage_options',
+            self::PHYSICAL_SLUG,
+            array($this, 'render_physical_page')
         );
     }
 
@@ -1923,6 +1943,207 @@ class MrDastbaaf_Admin_Pages_Controller {
             $this->flash('success', 'نگاشت پلن‌ها به محصولات ذخیره شد؛ خریدهای جدید از همین لحظه عضویت می‌سازند.');
         }
         $this->redirect_to_page(self::WOO_MAP_SLUG);
+    }
+
+    /* ─────────────────────── صفحهٔ «محصولات فیزیکی» (v1.4.0) ─────────────────────── */
+
+    /**
+     * صفحهٔ «محصولات فیزیکی» — دراپ‌داون دسته (پارامتر GET cat) + چک‌باکس
+     * محصولات منتشرشدهٔ همان دسته (تصویر/عنوان/قیمت/دسته‌ها) با پیش‌انتخاب از
+     * آپشن مشترک mrdastbaaf_physical_products (کنترلر فروشگاه). محصولات تیک‌خورده
+     * در بخش «محصولات دست‌ساز» وب‌اپ (GET /shop/products) نمایش داده می‌شوند.
+     */
+    public function render_physical_page() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $flash = $this->pull_flash();
+        $selected_cat = isset($_GET['cat']) ? absint($_GET['cat']) : 0; // GET — فقط شناسهٔ عددی دسته
+        $physical_ids = MrDastbaaf_Shop_Controller::get_physical_product_ids();
+        $admin_post = admin_url('admin-post.php');
+        ?>
+        <div class="wrap mrd-scope">
+            <div class="mrd-hero">
+                <div class="mrd-hero__icon" aria-hidden="true">🧶</div>
+                <div>
+                    <h1 class="mrd-hero__title">محصولات فیزیکی</h1>
+                    <p class="mrd-hero__desc">محصولات دست‌سازِ آمادهٔ ارسال را انتخاب کنید تا در بخش «محصولات دست‌ساز» وب‌اپلیکیشن (سکشن «محصولات دست‌ساز» صفحهٔ نخست و اندپوینت <code dir="ltr">GET /shop/products</code>) نمایش داده شوند. نام، قیمت و تصویر هر محصول از خود ووکامرس خوانده می‌شود؛ برداشتن تیک و ذخیره، محصول را از اپ حذف می‌کند.</p>
+                </div>
+            </div>
+
+            <?php $this->render_flash_notice($flash); ?>
+
+            <?php if (!class_exists('WooCommerce')): ?>
+                <div class="notice notice-error"><p>ووکامرس فعال نیست؛ ابتدا افزونهٔ ووکامرس را نصب و فعال کنید تا فهرست محصول‌ها نمایش داده شود.</p></div>
+            <?php else:
+                // محصولات منتشرشده (حداکثر ۲۰۰ بر اساس عنوان — همان قرارداد صفحات دیگر)
+                $query_args = array(
+                    'post_type'              => 'product',
+                    'post_status'            => 'publish',
+                    'posts_per_page'         => 200,
+                    'orderby'                => 'title',
+                    'order'                  => 'ASC',
+                    'no_found_rows'          => true,
+                    'ignore_sticky_posts'    => true,
+                );
+                if ($selected_cat > 0) {
+                    $query_args['tax_query'] = array(array(
+                        'taxonomy' => 'product_cat',
+                        'field'    => 'term_id',
+                        'terms'    => $selected_cat,
+                    ));
+                }
+                $products_query = new WP_Query($query_args);
+
+                // دسته‌های دارای محصول منتشرشده (از همان فهرست ۲۰۰تایی) — برای دراپ‌داون
+                $cat_options = array();
+                $product_terms_cache = array();
+                foreach ($products_query->posts as $product_post) {
+                    $pid = (int) $product_post->ID;
+                    $terms = get_the_terms($pid, 'product_cat');
+                    $product_terms_cache[$pid] = is_array($terms) ? $terms : array();
+                    foreach ($product_terms_cache[$pid] as $term) {
+                        $cat_options[(int) $term->term_id] = (string) $term->name;
+                    }
+                }
+                uasort($cat_options, 'strcmp');
+                ?>
+                <div class="mrd-card">
+                <h2 class="mrd-card__title">فیلتر دسته و انتخاب محصولات</h2>
+                <form method="get" action="<?php echo esc_url(admin_url('admin.php')); ?>" style="margin:6px 0 4px;">
+                    <input type="hidden" name="page" value="<?php echo esc_attr(self::PHYSICAL_SLUG); ?>" />
+                    <select name="cat">
+                        <option value="0" <?php selected($selected_cat, 0); ?>>— همهٔ دسته‌ها —</option>
+                        <?php foreach ($cat_options as $cat_id => $cat_name): ?>
+                            <option value="<?php echo esc_attr((string) $cat_id); ?>" <?php selected($selected_cat, (int) $cat_id); ?>><?php echo esc_html($cat_name); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <button type="submit" class="button">نمایش</button>
+                </form>
+                <?php if (empty($products_query->posts)): ?>
+                    <p class="mrd-empty">هیچ محصول منتشرشده‌ای <?php echo $selected_cat > 0 ? 'در این دسته' : 'در ووکامرس'; ?> یافت نشد.</p>
+                <?php else: ?>
+                <form method="post" action="<?php echo esc_url($admin_post); ?>">
+                    <input type="hidden" name="action" value="mrdastbaaf_physical_save" />
+                    <input type="hidden" name="cat" value="<?php echo esc_attr((string) $selected_cat); ?>" />
+                    <?php wp_nonce_field('mrdastbaaf_physical_save', 'mrd_nonce'); ?>
+                    <div class="mrd-table-wrap">
+                    <table class="widefat striped">
+                        <thead>
+                            <tr>
+                                <th style="width:48px;">انتخاب</th>
+                                <th style="width:64px;">تصویر</th>
+                                <th>محصول</th>
+                                <th>قیمت (تومان)</th>
+                                <th>دسته‌ها</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($products_query->posts as $product_post): $pid = (int) $product_post->ID;
+                                $thumb = get_the_post_thumbnail_url($pid, 'thumbnail');
+                                $product = function_exists('wc_get_product') ? wc_get_product($pid) : null;
+                                $price = ($product && '' !== $product->get_price() && null !== $product->get_price()) ? (int) $product->get_price() : 0;
+                                $term_names = wp_list_pluck($product_terms_cache[$pid], 'name');
+                            ?>
+                                <tr>
+                                    <td><input type="checkbox" name="physical[]" value="<?php echo esc_attr((string) $pid); ?>" <?php checked(in_array($pid, $physical_ids, true)); ?> /></td>
+                                    <td>
+                                        <?php if (is_string($thumb) && '' !== $thumb): ?>
+                                            <img src="<?php echo esc_url($thumb); ?>" alt="" style="width:40px;height:40px;object-fit:cover;border-radius:6px;" />
+                                        <?php else: ?>
+                                            <span class="mrd-muted">—</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td><strong><?php echo esc_html($product_post->post_title); ?></strong> <code dir="ltr">#<?php echo esc_html((string) $pid); ?></code></td>
+                                    <td><?php echo esc_html(number_format_i18n($price)); ?></td>
+                                    <td><?php echo esc_html(implode('، ', $term_names)); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    </div>
+                    <p class="mrd-hint">با هر ذخیره، تیک‌های همین فهرست اعمال و تیک‌های دسته‌های دیگر حفظ می‌شود — برداشتن تیک در دستهٔ جاری و ذخیره، همان محصول را از اپ حذف می‌کند.</p>
+                    <?php submit_button('ذخیرهٔ محصولات فیزیکی'); ?>
+                </form>
+                <?php endif; ?>
+                </div>
+            <?php endif; ?>
+        </div>
+        <?php
+    }
+
+    /**
+     * ذخیرهٔ «محصولات فیزیکی» — تیک‌های همهٔ دسته‌ها ادغام می‌شوند: شناسه‌های
+     * نمایانِ همین فرم (همان پرس‌وجوی صفحه) از انتخاب فعلی کنار گذاشته و به‌جایشان
+     * تیک‌های ارسالی می‌نشینند؛ به این ترتیب هم تیکِ دسته‌های دیگر از دست نمی‌رود
+     * و هم برداشتن تیک در دستهٔ جاری واقعاً حذف می‌کند. خروجی: int[] یکتا در
+     * آپشن mrdastbaaf_physical_products (بدون autoload).
+     */
+    public function handle_physical_save() {
+        check_admin_referer('mrdastbaaf_physical_save', 'mrd_nonce');
+        if (!current_user_can('manage_options')) {
+            wp_die('شما مجوز انجام این عملیات را ندارید.');
+        }
+
+        $cat = isset($_POST['cat']) ? absint($_POST['cat']) : 0;
+        $visible_ids = $this->get_physical_visible_product_ids($cat);
+
+        $ticked = array();
+        $posted = (isset($_POST['physical']) && is_array($_POST['physical'])) ? wp_unslash($_POST['physical']) : array();
+        foreach ($posted as $pid) {
+            $pid = absint($pid);
+            if ($pid > 0) {
+                $ticked[] = $pid;
+            }
+        }
+        $ticked = array_values(array_unique($ticked));
+
+        $existing = MrDastbaaf_Shop_Controller::get_physical_product_ids();
+        $merged = array_values(array_unique(array_merge(array_diff($existing, $visible_ids), $ticked)));
+
+        update_option(MrDastbaaf_Shop_Controller::PHYSICAL_PRODUCTS_OPTION, $merged, false);
+
+        if (empty($merged)) {
+            $this->flash('success', 'ذخیره شد — هیچ محصول فیزیکی انتخاب نشده است و بخش «محصولات دست‌ساز» در اپ خالی می‌ماند.');
+        } else {
+            $this->flash('success', 'محصولات فیزیکی ذخیره شد؛ بخش «محصولات دست‌ساز» اپ از همین لحظه تازه می‌شود.');
+        }
+        $this->redirect_to_page(self::PHYSICAL_SLUG, $cat > 0 ? array('cat' => $cat) : array());
+    }
+
+    /**
+     * v1.4.0: شناسه‌های محصول نمایان در فرم «محصولات فیزیکی» (همان پرس‌وجوی
+     * صفحهٔ رندر با فیلتر دسته) — مبنای ادغام بین‌دسته‌ای در handle_physical_save.
+     *
+     * @param int $cat شناسهٔ دسته (۰ = همهٔ دسته‌ها)
+     * @return int[]
+     */
+    private function get_physical_visible_product_ids($cat) {
+        $query_args = array(
+            'post_type'           => 'product',
+            'post_status'         => 'publish',
+            'posts_per_page'      => 200,
+            'orderby'             => 'title',
+            'order'               => 'ASC',
+            'no_found_rows'       => true,
+            'ignore_sticky_posts' => true,
+            'fields'              => 'ids',
+        );
+        if ($cat > 0) {
+            $query_args['tax_query'] = array(array(
+                'taxonomy' => 'product_cat',
+                'field'    => 'term_id',
+                'terms'    => (int) $cat,
+            ));
+        }
+        $query = new WP_Query($query_args);
+
+        $ids = array();
+        foreach ($query->posts as $pid) {
+            $ids[] = (int) $pid;
+        }
+        return $ids;
     }
 
     /**

@@ -13,6 +13,8 @@
  *    تقریباً آنی دارد).
  * v1.2.8: سکشن «categories» بازنشسته شد؛ featuredCourseIds (دوره‌های برگزیده از
  * پیشخوان) اضافه شد.
+ * v1.3.0: سکشن NEW «physical_products» (محصولات دست‌ساز — GET /shop/products)
+ * با sortOrder 7 به پیش‌فرض‌ها اضافه شد (کلید در types + SECTION_KEYS همگام).
  */
 
 import { AppUiConfig, AppUiSectionKey } from '../types';
@@ -65,6 +67,14 @@ export const DEFAULT_APP_UI: AppUiConfig = {
       enabled: true,
       sortOrder: 6,
     },
+    // v1.3.0: «محصولات دست‌ساز» — همان پیش‌فرض افزونهٔ ۱.۴.۰ (سرو از /shop/products)
+    {
+      key: 'physical_products',
+      title: 'محصولات دست‌ساز',
+      subtitle: 'آثار هنری آمادهٔ ارسال مستقیم',
+      enabled: true,
+      sortOrder: 7,
+    },
   ],
   menu: {
     dock: [
@@ -88,6 +98,8 @@ const SECTION_KEYS: AppUiSectionKey[] = [
   'artisan_story',
   'membership_plans',
   'faq',
+  // v1.3.0: کلید NEW — سرور قدیمی این کلید را نمی‌فرستد (فقط پیش‌فرض کد)
+  'physical_products',
 ];
 
 const DOCK_KEYS = ['home', 'catalogue', 'membership', 'dashboard'] as const;

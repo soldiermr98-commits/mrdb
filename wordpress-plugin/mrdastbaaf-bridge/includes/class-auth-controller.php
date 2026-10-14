@@ -166,6 +166,10 @@ class MrDastbaaf_Auth_Controller {
             'success' => true,
             'message' => 'کد تایید پیامکی ارسال گردید.',
             'expires_in_seconds' => 120,
+            // v1.4.0: «قبلاً ثبت‌نام کرده» — اگر برای این شماره حساب هنرجوی موجودی
+            // باشد true است تا کلاینت برچسب «ورود» را به‌جای «ثبت‌نام» نشان دهد
+            // (camelCase مانند smsWarning؛ گارد نقش‌ها بالاتر خطای ۴۰۳ می‌دهد).
+            'isRegistered' => !empty($existing_user),
         );
         if (true !== $sms_result) {
             // حتی اگر ارسال پیامک شکست خورد، کد در سیستم معتبر است — پاسخ موفق
@@ -219,6 +223,14 @@ class MrDastbaaf_Auth_Controller {
         delete_transient($attempts_key);
         wp_cache_delete($attempts_key, 'mrdastbaaf_otp'); // BUG-28: پاک‌سازی شمارنده در آبجکت‌کش
 
+        // v1.4.0: نام و نام‌خانوادگی اختیاری — فیلدهای ورودی پاکسازی می‌شوند
+        // (فقط حروف فارسی/فاصله/نیم‌فاصله می‌مانند؛ حداکثر ۶۰ کاراکتر). ورودی
+        // اختیاری است: نام‌های نامعتبر بی‌صدا دور ریخته می‌شوند و هرگز جریان
+        // ورود کاربران فعلی را نمی‌شکنند.
+        $first_name = $this->sanitize_person_name($request->get_param('first_name'));
+        $last_name = $this->sanitize_person_name($request->get_param('last_name'));
+        $display_name = trim($first_name . ' ' . $last_name);
+
         // جستجوی کاربر: user_login (شماره) سپس فال‌بک billing_phone (یافتهٔ ۲-۱۵:
         // حساب‌های ساخته‌شده خارج از مسیر OTP ممکن است login شان شماره نباشد)
         $user = self::find_user_by_phone($phone);
@@ -227,11 +239,14 @@ class MrDastbaaf_Auth_Controller {
             // v1.2.0: ساخت کاربر با wp_insert_user و نقش صریح «subscriber» — نقش
             // قبلی از تنظیمات پیش‌فرض سایت می‌آمد (get_option default_role) و اگر
             // ادمین نقش پیش‌فرض را تغییر داده بود، هنرجوی تازه با نقش ممتاز ساخته می‌شد.
+            // v1.4.0: نام واقعی (در صورت ارسال) جای برچسب پیش‌فرض «هنرجو NNNN» می‌نشیند.
             $new_user_id = wp_insert_user(array(
                 'user_login'   => $phone,
                 'user_pass'    => wp_generate_password(24, true),
                 'user_email'   => $phone . '@mrdastbaaf.local',
-                'display_name' => 'هنرجو ' . substr($phone, -4),
+                'display_name' => ('' !== $display_name) ? $display_name : 'هنرجو ' . substr($phone, -4),
+                'first_name'   => $first_name,
+                'last_name'    => $last_name,
                 'role'         => 'subscriber',
             ));
             if (is_wp_error($new_user_id)) {
@@ -241,6 +256,14 @@ class MrDastbaaf_Auth_Controller {
                 return new WP_Error('registration_conflict', 'ساخت حساب کاربری با این شماره موبایل ممکن نشد؛ احتمالاً حسابی با این شماره وجود دارد. لطفاً دوباره تلاش کنید.', array('status' => 409));
             }
             update_user_meta($new_user_id, 'billing_phone', $phone);
+            // v1.4.0: متیاهای صورتحساب ووکامرس — تطبیق سفارش‌های مهمانِ آینده با
+            // نام واقعی در فاکتور؛ فقط مقادیر غیرخالی نوشته می‌شوند.
+            if ('' !== $first_name) {
+                update_user_meta($new_user_id, 'billing_first_name', $first_name);
+            }
+            if ('' !== $last_name) {
+                update_user_meta($new_user_id, 'billing_last_name', $last_name);
+            }
             $user = get_user_by('ID', $new_user_id);
         }
 
@@ -254,6 +277,33 @@ class MrDastbaaf_Auth_Controller {
         $role_guard = self::guard_student_role($user);
         if (is_wp_error($role_guard)) {
             return $role_guard;
+        }
+
+        // v1.4.0: نام برای کاربرِ موجود — display_name هرگز بی‌دلیل عوض نمی‌شود؛
+        // فقط متیاهای صورتحساب ووکامرس (فاکتور) به‌روز می‌شوند. استثنا («خوددرمانی»):
+        // اگر نام فعلی همان برچسب پیش‌فرض «هنرجو NNNN» باشد و نام تازه رسیده باشد،
+        // نام واقعی جایگزین می‌شود تا کاربرِ ساخته‌شده با نسخهٔ قدیمی هم نام بگیرد.
+        if ('' !== $first_name || '' !== $last_name) {
+            if ('' !== $first_name) {
+                update_user_meta($user->ID, 'billing_first_name', $first_name);
+            }
+            if ('' !== $last_name) {
+                update_user_meta($user->ID, 'billing_last_name', $last_name);
+            }
+            if ('' !== $display_name && preg_match('/^هنرجو \d{4}$/u', (string) $user->display_name)) {
+                $user_update = array(
+                    'ID'           => $user->ID,
+                    'display_name' => $display_name,
+                );
+                if ('' !== $first_name) {
+                    $user_update['first_name'] = $first_name;
+                }
+                if ('' !== $last_name) {
+                    $user_update['last_name'] = $last_name;
+                }
+                wp_update_user($user_update);
+                $user = get_user_by('ID', $user->ID); // تازه‌سازی برای پاسخ
+            }
         }
 
         // v1.2.0 (یافتهٔ ۲-۱۲): توکن سخت‌شده — فرمت «{user_id}.{secret}»؛ سرور فقط
@@ -292,6 +342,29 @@ class MrDastbaaf_Auth_Controller {
             'success' => true,
             'message' => 'با موفقیت از حساب کاربری خارج شدید.',
         ));
+    }
+
+    /**
+     * v1.4.0: پاکسازی نام اختیاری هنرجو — تگ‌ها حذف، فقط حروف فارسی/فاصله/نیم‌فاصله
+     * (ZWNJ) باقی می‌مانند؛ فاصله‌های تکراری جمع و سقف ۶۰ کاراکتر اعمال می‌شود.
+     * ورودی اختیاری است — رشتهٔ خالی یعنی «نام ارسال نشده/معتبر نیست».
+     *
+     * @param mixed $raw مقدار خام پارامتر
+     * @return string نام پاکسازی‌شده یا رشتهٔ خالی
+     */
+    private function sanitize_person_name($raw) {
+        if (null === $raw) {
+            return '';
+        }
+        $name = wp_strip_all_tags((string) $raw);
+        // فقط محدودهٔ حروف فارسی/عربی + نیم‌فاصله + فاصله‌ها مجاز می‌مانند
+        $name = preg_replace('/[^\x{0600}-\x{06FF}\x{200C}\s]+/u', '', (string) $name);
+        $name = preg_replace('/\s+/u', ' ', (string) $name);
+        $name = trim((string) $name);
+        if ('' === $name) {
+            return '';
+        }
+        return mb_substr($name, 0, 60);
     }
 
     /**

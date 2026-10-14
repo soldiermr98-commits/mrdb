@@ -777,7 +777,7 @@ class MrDastbaaf_Admin_Controller {
             // قابل لینک‌دادن/سوخت‌سوزی است؛ فقط هاست‌های مجاز پذیرفته می‌شوند. لیست در
             // تنظیمات (mrdastbaaf_video_hosts — یکی در هر خط) قابل گسترش است.
             $host = strtolower((string) wp_parse_url($validated_url, PHP_URL_HOST));
-            $allowed_hosts = $this->get_allowed_video_hosts();
+            $allowed_hosts = self::get_allowed_video_hosts();
             if ('' === $host || !in_array($host, $allowed_hosts, true)) {
                 return new WP_Error('video_host_not_allowed', 'فقط ویدیوهای هاست مجاز (dll.mrdastbaaf.com) پذیرفته می‌شوند.', array('status' => 400));
             }
@@ -785,6 +785,27 @@ class MrDastbaaf_Admin_Controller {
             $fields['video_url'] = $validated_url;
         } elseif (!$is_update) {
             return new WP_Error('invalid_video_url', 'آدرس ویدیوی درس الزامی است و باید با https:// شروع شود.', array('status' => 400));
+        }
+
+        // v1.4.0: مدت درس به دقیقه — absint + سقف ۱۴۴۰ (شبانه‌روز)؛ پیش‌فرض ۰
+        $duration_minutes = $request->get_param('duration_minutes');
+        if (null !== $duration_minutes) {
+            $fields['duration_minutes'] = min(1440, absint($duration_minutes));
+        } elseif (!$is_update) {
+            $fields['duration_minutes'] = 0;
+        }
+
+        // v1.4.0: کیفیت‌های اختیاری ۴۸۰/۷۲۰/۱۰۸۰ — فقط نشانی‌های پرشده اعتبارسنجی
+        // و به JSON تبدیل می‌شوند؛ خالی = NULL (بدون کیفیت). پارامتر ارسال‌نشده
+        // در ویرایش، مقدار قبلی را دست‌نخورده نگه می‌دارد (سازگاری رو به عقب).
+        if (null !== $request->get_param('qualities')) {
+            $qualities = $this->validate_lesson_qualities($request->get_param('qualities'));
+            if (is_wp_error($qualities)) {
+                return $qualities;
+            }
+            $fields['qualities_json'] = empty($qualities)
+                ? null
+                : wp_json_encode($qualities, JSON_UNESCAPED_UNICODE);
         }
 
         if (null !== $is_free_param) {
@@ -818,10 +839,12 @@ class MrDastbaaf_Admin_Controller {
     /**
      * v1.2.0: لیست سفید هاست‌های ویدیو (حروف کوچک) — از آپشن mrdastbaaf_video_hosts
      * (یکی در هر خط) خوانده می‌شود؛ پیش‌فرض فقط dll.mrdastbaaf.com.
+     * v1.4.0: عمومی/استاتیک شد تا همان گیت برای کیفیت‌های درس (playback در
+     * کنترلر دوره‌ها) هم استفاده شود — یک لیست، یک مرجع.
      *
      * @return array
      */
-    private function get_allowed_video_hosts() {
+    public static function get_allowed_video_hosts() {
         $raw = (string) get_option('mrdastbaaf_video_hosts', 'dll.mrdastbaaf.com');
         $hosts = array_filter(array_map('trim', explode("\n", $raw)));
         $hosts = array_map('strtolower', $hosts);
@@ -829,9 +852,76 @@ class MrDastbaaf_Admin_Controller {
     }
 
     /**
+     * v1.4.0: اعتبارسنجی کیفیت‌های اختیاری درس (۴۸۰p/۷۲۰p/۱۰۸۰p) — ورودی آرایه‌ای
+     * از {label,url} از پیشخوان؛ فقط نشانی‌های غیرخالی پذیرفته می‌شوند و هرکدام
+     * باید دقیقاً همان گیت video_url را بگذرند (https + لیست سفید هاست) با همان
+     * سبک خطای فارسی. برچسب نامعتبر/ارسال‌نشده بر اساس ترتیب از لیست استاندارد
+     * پر می‌شود (حداکثر سه کیفیت).
+     *
+     * @param mixed $qualities_param پارامتر خام qualities
+     * @return array|WP_Error آرایهٔ [{label,url}, …] یا خطا
+     */
+    private function validate_lesson_qualities($qualities_param) {
+        if (!is_array($qualities_param)) {
+            return new WP_Error('invalid_qualities', 'فرمت کیفیت‌های ویدیو نامعتبر است.', array('status' => 400));
+        }
+
+        $canonical_labels = array('480p', '720p', '1080p');
+        $allowed_hosts = self::get_allowed_video_hosts();
+        $clean = array();
+        $index = 0;
+        foreach ($qualities_param as $entry) {
+            if (!is_array($entry) || !isset($entry['url'])) {
+                continue;
+            }
+            $url = trim((string) $entry['url']);
+            if ('' === $url) {
+                continue; // نشانی خالی = کیفیت حذف‌شده (اختیاری بودن حفظ می‌شود)
+            }
+            $validated_url = esc_url_raw($url);
+            if ('' === $validated_url || 0 !== strpos($validated_url, 'https://')) {
+                return new WP_Error('invalid_quality_url', 'آدرس کیفیت باید یک نشانی معتبر با https:// باشد (هاست دانلود dll.mrdastbaaf.com).', array('status' => 400));
+            }
+            $host = strtolower((string) wp_parse_url($validated_url, PHP_URL_HOST));
+            if ('' === $host || !in_array($host, $allowed_hosts, true)) {
+                return new WP_Error('quality_host_not_allowed', 'فقط کیفیت‌های هاست مجاز (dll.mrdastbaaf.com) پذیرفته می‌شوند.', array('status' => 400));
+            }
+            $label = isset($entry['label']) ? sanitize_text_field((string) $entry['label']) : '';
+            if (!in_array($label, $canonical_labels, true)) {
+                $label = isset($canonical_labels[$index]) ? $canonical_labels[$index] : $canonical_labels[count($canonical_labels) - 1];
+            }
+            $clean[] = array(
+                'label' => $label,
+                'url'   => $validated_url,
+            );
+            $index++;
+        }
+
+        return $clean;
+    }
+
+    /**
      * شکل خروجی درس برای پیشخوان (شامل videoUrl — فقط ادمین)
+     *
+     * v1.4.0: durationMinutes (int؛ ۰ برای درس‌های قدیمی) + qualities (آرایهٔ
+     * {label,url} — ممکن است خالی) اضافه شد؛ درس‌های بدون مقدار هم شکل ثابت دارند.
      */
     private function format_admin_lesson($row) {
+        $qualities = array();
+        if (isset($row->qualities_json) && '' !== trim((string) $row->qualities_json)) {
+            $decoded = json_decode((string) $row->qualities_json, true);
+            if (is_array($decoded)) {
+                foreach ($decoded as $entry) {
+                    if (is_array($entry) && isset($entry['url'], $entry['label'])) {
+                        $qualities[] = array(
+                            'label' => (string) $entry['label'],
+                            'url'   => (string) $entry['url'],
+                        );
+                    }
+                }
+            }
+        }
+
         return array(
             'id'            => (int) $row->id,
             'productId'     => (int) $row->product_id,
@@ -840,6 +930,9 @@ class MrDastbaaf_Admin_Controller {
             'isFree'        => (bool) $row->is_free,
             'requiredTier'  => (string) $row->required_tier,
             'sortOrder'     => (int) $row->sort_order,
+            // v1.4.0: مدت و کیفیت‌های درس
+            'durationMinutes' => isset($row->duration_minutes) ? (int) $row->duration_minutes : 0,
+            'qualities'       => $qualities,
             'createdAt'     => (string) $row->created_at,
         );
     }

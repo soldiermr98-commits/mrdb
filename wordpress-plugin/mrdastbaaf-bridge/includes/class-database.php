@@ -112,13 +112,21 @@ class MrDastbaaf_Database {
         // هر درس به یک محصول ووکامرس (دوره) متصل است؛ آدرس ویدیو فقط در
         // اندپوینت پخش (playback) با بلیط معتبر تحویل می‌شود و هرگز در
         // اندپوینت‌های لیست عمومی نیست.
+        // v1.4.0 (اسکیما ۱.۴.۰): دو ستون NEW — duration_minutes (مدت درس به دقیقه؛
+        // جمع آن در /courses و /courses/{slug} فیلد duration را عددی می‌کند) و
+        // qualities_json (کیفیت‌های اختیاری ۴۸۰p/۷۲۰p/۱۰۸۰p هر درس که در پاسخ
+        // playback پس از گذر از فیلتر mrdastbaaf_stream_video_qualities سرو می‌شود).
+        // dbDelta روی نصب‌های موجود هر دو ستون را خودکار اضافه می‌کند (چک نسخهٔ
+        // mrdastbaaf_db_version در فایل اصلی افزونه) و درس‌های قدیمی ۰/NULL می‌گیرند.
         $table_lessons = $wpdb->prefix . 'mrdastbaaf_lessons';
         $sql_lessons = "CREATE TABLE $table_lessons (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             product_id bigint(20) unsigned NOT NULL,
             title varchar(191) NOT NULL,
             video_url text NOT NULL,
+            qualities_json text NULL,
             is_free tinyint(1) DEFAULT 0 NOT NULL,
+            duration_minutes smallint(5) unsigned DEFAULT 0 NOT NULL,
             required_tier varchar(20) DEFAULT 'bronze' NOT NULL,
             sort_order int(11) DEFAULT 0 NOT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,

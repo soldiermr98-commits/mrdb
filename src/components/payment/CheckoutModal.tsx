@@ -111,7 +111,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   </span>
                 </div>
                 <p className="text-stone-500 text-[11px] mt-0.5">
-                  پرداخت با کلیه کارت‌های عضو شبکه شتاب (در این پروتوتایپ درگاه آزمایشی فعال است)
+                  پرداخت با کلیه کارت‌های عضو شبکه شتاب
                 </p>
               </div>
             </label>
@@ -171,7 +171,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             <span>
               {currentUser
                 ? selectedGateway === 'zibal'
-                  ? 'انتقال به درگاه آزمایشی زیبال'
+                  ? 'انتقال به درگاه پرداخت زیبال'
                   : 'ادامه و ثبت فیش کارت به کارت'
                 : 'ورود به حساب و ادامه خرید'}
             </span>

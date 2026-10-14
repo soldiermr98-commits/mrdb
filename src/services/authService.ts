@@ -257,8 +257,15 @@ export const authService = {
   /**
    * Send mock OTP to Iranian mobile number
    * Valid format: 09xxxxxxxxx or 9xxxxxxxxx
+   *
+   * v1.3.0: پاسخ سرور پرچم اختیاری «isRegistered» را هم دارد (true = شماره قبلاً
+   * حساب دارد). سرور قدیمی پرچم را نمی‌فرستد → undefined (کلاینت برای کاربران
+   * موجود اصلاً فیلد نام نمی‌خواهد — صفر اصطکاک). دمو: شمارهٔ شناخته‌شدهٔ رجیستری
+   * = true، شمارهٔ جدید = false (نام‌ها در verifyOtp ثبت می‌شوند).
    */
-  async requestOtp(phoneNumber: string): Promise<{ success: boolean; message: string; mockOtpCode: string }> {
+  async requestOtp(
+    phoneNumber: string
+  ): Promise<{ success: boolean; message: string; mockOtpCode: string; isRegistered?: boolean }> {
     // BUG-26: normalize Persian digits + trim BEFORE validation (shared helper
     // with verifyOtp so both paths accept the exact same inputs).
     const cleanPhone = normalizeIranPhone(phoneNumber);
@@ -267,12 +274,14 @@ export const authService = {
     }
 
     // v1.1.0 Real-API: POST /auth/request-otp {phone} → {success, message, expires_in_seconds, smsWarning?}
+    // v1.3.0: + isRegistered اختیاری (پلاگین 1.4.0) — غایب = undefined
     if (isRealApiMode) {
       const res = await apiFetch<{
         success?: unknown;
         message?: unknown;
         expires_in_seconds?: unknown;
         smsWarning?: unknown;
+        isRegistered?: unknown;
       }>('/auth/request-otp', { method: 'POST', body: { phone: cleanPhone } });
       const baseMessage = asTrimmedString(res.message, `کد تایید پیامکی برای شماره ${cleanPhone} ارسال شد.`);
       const smsWarning = asTrimmedString(res.smsWarning);
@@ -281,23 +290,40 @@ export const authService = {
         // هشدار سرور (مثلاً تأخیر پیامک) بدون تغییر UI به همان پیام چسبانده می‌شود.
         message: smsWarning ? `${baseMessage} ${smsWarning}` : baseMessage,
         mockOtpCode: '',
+        isRegistered:
+          typeof res.isRegistered === 'boolean' ? res.isRegistered : undefined,
       };
     }
 
     // Simulate network delay
     await new Promise((res) => setTimeout(res, 600));
 
+    // v1.3.0 (دمو): شمارهٔ موجود در رجیستری = ثبت‌نام‌شده؛ شمارهٔ جدید = false
+    // (مودال ورود برای تکمیل ثبت‌نام «نام/نام خانوادگی» می‌گیرد).
+    const isRegistered = loadUserRegistry().some((u) => u.phoneNumber === cleanPhone);
+
     // Prototype note: Mock code is fixed to 12345 for ease of testing
     return {
       success: true,
       message: `کد تایید پیامکی (آزمایشی) برای شماره ${cleanPhone} ارسال شد.`,
       mockOtpCode: '12345',
+      isRegistered,
     };
   },
   /**
    * Verify mock OTP
+   *
+   * v1.3.0: گزینهٔ اختیاری names — فقط برای تکمیل ثبت‌نام شمارهٔ جدید
+   * (isRegistered=false). متن فارسی تا ۶۰ کاراکتر؛ فقط وقتی جمع‌آوری شده
+   * باشند در بدنهٔ سرور می‌روند (first_name/last_name — سرور display_name را
+   * برای کاربران جدید ست می‌کند و «هنرجو NNNN» را خودترمیم می‌کند). در دمو
+   * نام کامل به رجیستری محلی داده می‌شود.
    */
-  async verifyOtp(phoneNumber: string, otpCode: string): Promise<{ user: UserProfile; token: string }> {
+  async verifyOtp(
+    phoneNumber: string,
+    otpCode: string,
+    options?: { firstName?: string; lastName?: string }
+  ): Promise<{ user: UserProfile; token: string }> {
     // BUG-26: verifyOtp previously skipped phone validation entirely — apply the
     // same normalizeIranPhone guard as requestOtp, and normalize the OTP digits
     // (a keyboard with Persian digits like ۱۲۳۴۵ must still pass).
@@ -307,13 +333,27 @@ export const authService = {
     }
     const cleanOtp = toEnglishDigits(otpCode ?? '').trim();
 
+    // v1.3.0: نام‌ها فقط وقتی معتبر و جمع‌آوری‌شده باشند؛ حداکثر ۶۰ کاراکتر (قرارداد سرور)
+    const firstName = (options?.firstName ?? '').trim().slice(0, 60);
+    const lastName = (options?.lastName ?? '').trim().slice(0, 60);
+    const hasNames = firstName !== '' && lastName !== '';
+
     // v1.1.0 Real-API: POST /auth/verify-otp {phone, otp_code} → {success, token, user}
     if (isRealApiMode) {
       const res = await apiFetch<{
         success?: unknown;
         token?: unknown;
         user?: ApiUserProfileShape;
-      }>('/auth/verify-otp', { method: 'POST', body: { phone: cleanPhone, otp_code: cleanOtp } });
+      }>(
+        '/auth/verify-otp',
+        {
+          method: 'POST',
+          // first_name/last_name فقط وقتی جمع‌آوری شده‌اند (کاربران موجود همان بدنهٔ قبلی)
+          body: hasNames
+            ? { phone: cleanPhone, otp_code: cleanOtp, first_name: firstName, last_name: lastName }
+            : { phone: cleanPhone, otp_code: cleanOtp },
+        }
+      );
 
       const token = asTrimmedString(res.token);
       if (!token) {
@@ -350,7 +390,9 @@ export const authService = {
 
     // BUG-25: resolve through the persistent users registry — re-login restores
     // the SAME id/membership/progress instead of minting a fresh user.
-    const user = findOrRegisterUser(cleanPhone);
+    // v1.3.0: نام جمع‌آوری‌شدهٔ ثبت‌نام جدید در رجیستری ذخیره می‌شود
+    // (findOrRegisterUser نام را فقط برای کاربر جدید اعمال می‌کند).
+    const user = findOrRegisterUser(cleanPhone, hasNames ? `${firstName} ${lastName}`.trim() : undefined);
 
     const mockToken = `mock-wp-jwt-${Date.now()}`;
     currentUser = user;
