@@ -259,3 +259,23 @@
 	.mrd-hero { flex-direction: column; align-items: flex-start; gap: 10px; }
 	.mrd-scope .mrd-table-wrap td, .mrd-scope .mrd-table-wrap thead th { padding: 10px 10px; }
 }
+
+/* ── گرید چک‌باکس محصولات فیزیکی/ویژه (v1.5.0) ─────────────── */
+
+.mrd-check-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+	gap: 8px;
+}
+.mrd-check-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px;
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-radius: 8px;
+	cursor: pointer;
+}
+.mrd-check-item input[type="checkbox"] { margin-top: 0; }
+.mrd-check-item code { font-size: 11px; }

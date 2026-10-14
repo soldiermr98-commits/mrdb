@@ -151,6 +151,8 @@ export default function App() {
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
   const [selectedPlanForCheckout, setSelectedPlanForCheckout] = useState<MembershipPlan | null>(null);
+  // v1.4.0: خرید مستقیم دوره — دورهٔ انتخابی برای مودال پرداخت (هم‌الگوی پلن؛ BUG-46 resume)
+  const [selectedCourseForCheckout, setSelectedCourseForCheckout] = useState<Course | null>(null);
 
   const [isZibalModalOpen, setIsZibalModalOpen] = useState(false);
   const [currentZibalOrder, setCurrentZibalOrder] = useState<PaymentOrder | null>(null);
@@ -351,6 +353,38 @@ export default function App() {
       }
     } else {
       setIsManualTransferModalOpen(true);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // v1.4.0 — خرید مستقیم تک‌دوره‌ای با درگاه زیبال (قرارداد افزونهٔ 1.5.0:
+  // POST /payment/zibal/initiate {product_id}). گاردها آینهٔ handleSelectGateway است:
+  // بدون ورود → مودال ورود (دوره در state می‌ماند تا پس از لاگین resume شود)؛
+  // سپس initiate و خروج واقعی به درگاه با window.location.href. در دمو سرویس
+  // خطای فارسی روشن پرتاب می‌کند (خرید تک‌دوره‌ای فقط در حالت Real فعال است).
+  // پس از بازگشت از درگاه، همان مسیر کال‌بک زیبال (verifyZibalCallback در boot)
+  // نتیجه را تایید می‌کند و syncSessionFromServer سشن را تازه می‌کند — سفارش
+  // دوره‌ای (itemType:'course') هیچ شاخهٔ اشتراکی را لمس نمی‌کند و crash نمی‌دهد.
+  // ---------------------------------------------------------------------------
+  const handleBuyCourse = async (gateway: PaymentGatewayType, course: Course) => {
+    setIsCheckoutModalOpen(false);
+
+    if (!currentUser) {
+      setIsLoginModalOpen(true);
+      return;
+    }
+
+    if (gateway === 'zibal') {
+      try {
+        const { gatewayUrl } = await paymentService.initiateCourseZibalPayment(currentUser, course);
+        if (isRealApiMode) {
+          window.location.href = gatewayUrl;
+          return;
+        }
+        showToast('خرید آنلاین دوره در حالت دمو فعال نیست', 'info');
+      } catch (e: any) {
+        showToast(e.message || 'خطا در اتصال به درگاه زیبال', 'error');
+      }
     }
   };
 
@@ -632,6 +666,7 @@ export default function App() {
             currentUser={currentUser}
             onOpenMembership={() => handleNavigate('membership')}
             onOpenLogin={() => setIsLoginModalOpen(true)}
+            onBuyCourse={handleBuyCourse}
           />
         )}
 
@@ -718,7 +753,7 @@ export default function App() {
 
           <div className="pt-4 border-t border-stone-800/80 flex flex-col sm:flex-row items-center justify-between gap-2 text-[10px] text-stone-500">
             <p>© تمام حقوق مادی و معنوی آموزش‌ها متعلق به مجموعه مستر دستباف است.</p>
-            <p>وب‌اپ نسخهٔ 1.3.0</p>
+            <p>وب‌اپ نسخهٔ 1.4.0</p>
           </div>
         </div>
       </footer>
@@ -759,6 +794,8 @@ export default function App() {
           // login — selectedPlanForCheckout survived the modal switch (both the
           // paid-checkout path and the free-plan path keep it in state).
           const pendingPlan = selectedPlanForCheckout;
+          // v1.4.0: resume جریان خرید دوره پس از ورود موفق (هم‌الگوی BUG-46 پلن)
+          const pendingCourse = selectedCourseForCheckout;
           if (pendingPlan) {
             if (pendingPlan.priceToman === 0) {
               // free plan: instant-activation path (same as handleSelectPlan)
@@ -768,11 +805,14 @@ export default function App() {
               setIsCheckoutModalOpen(true);
               showToast('ادامه خرید…', 'info');
             }
+          } else if (pendingCourse) {
+            setIsCheckoutModalOpen(true);
+            showToast('ادامه خرید دوره…', 'info');
           }
         }}
       />
 
-      {/* 2. Membership Checkout Modal */}
+      {/* 2. Membership Checkout Modal (v1.4.0: + حالت خرید مستقیم دوره) */}
       <CheckoutModal
         isOpen={isCheckoutModalOpen}
         onClose={() => setIsCheckoutModalOpen(false)}
@@ -780,6 +820,8 @@ export default function App() {
         currentUser={currentUser}
         onSelectGateway={handleSelectGateway}
         onOpenLogin={() => setIsLoginModalOpen(true)}
+        course={selectedCourseForCheckout}
+        onBuyCourse={handleBuyCourse}
       />
 
       {/* 3. Zibal Gateway Simulator */}

@@ -15,8 +15,9 @@ import {
   Crown,
   ChevronDown,
   ShieldAlert,
+  ShoppingBag,
 } from 'lucide-react';
-import { Course, Lesson, UserProfile } from '../types';
+import { Course, Lesson, PaymentGatewayType, UserProfile } from '../types';
 import { courseService } from '../services/courseService';
 import { formatDurationFa } from '../utils/format';
 import { AsyncState } from '../components/common/AsyncState';
@@ -29,6 +30,11 @@ interface CourseDetailViewProps {
   currentUser: UserProfile | null;
   onOpenMembership: () => void;
   onOpenLogin: () => void;
+  /**
+   * v1.4.0 — خرید مستقیم این دوره با درگاه زیبال (مودال پرداخت). وقتی از App پاس
+   * نشده باشد (پیش‌فرض undefined) دکمهٔ خرید رندر نمی‌شود تا مسیرهای قدیمی نشکنند.
+   */
+  onBuyCourse?: (gateway: PaymentGatewayType, course: Course) => void;
 }
 
 export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
@@ -38,6 +44,7 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
   currentUser,
   onOpenMembership,
   onOpenLogin,
+  onBuyCourse,
 }) => {
   const [course, setCourse] = useState<Course | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -126,6 +133,12 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
   const allLessons = course.sections.flatMap((s) => s.lessons);
   const freePreviews = allLessons.filter((l) => l.isFreePreview);
 
+  // v1.4.0 — خرید مستقیم دوره: فقط برای دورهٔ ناخریده با قیمت مثبت و productId
+  // شناخته‌شده (قرارداد product_id زیبال). مهمان هم دکمه را می‌بیند؛ مودال ورود را
+  // مدیریت می‌کند (همان رفتار checkout پلن).
+  const canBuyDirectly =
+    !course.owned && course.priceToman > 0 && typeof course.productId === 'number' && course.productId != null;
+
   // v1.3.0 — مدت کل دوره: اولویت با دقیقهٔ صحیح سرور (duration)؛ فال‌بک به
   // totalDurationHours دمو/سرور قدیمی. هر دو نامشخص = چیپ کلاً حذف می‌شود.
   const courseDurationLabel =
@@ -203,13 +216,26 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
                 <span>این دوره در حساب شما فعال است — تمام جلسات باز است</span>
               </span>
             ) : (
-              <button
-                onClick={onOpenMembership}
-                className="bg-amber-100 hover:bg-amber-200 text-amber-900 font-semibold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 transition"
-              >
-                <Crown className="w-4 h-4 text-amber-700" />
-                <span>خرید اشتراک جهت دسترسی کامل</span>
-              </button>
+              <>
+                {/* v1.4.0: CTA اصلی خرید مستقیم دوره (زیبال) — amber توپر، بدون Crown */}
+                {canBuyDirectly && onBuyCourse && (
+                  <button
+                    onClick={() => onBuyCourse('zibal', course)}
+                    className="bg-amber-800 hover:bg-amber-900 text-white font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition"
+                  >
+                    <ShoppingBag className="w-4 h-4" />
+                    <span>خرید این دوره ({course.priceToman.toLocaleString('fa-IR')} تومان)</span>
+                  </button>
+                )}
+                {/* v1.4.0: CTA اشتراک — حالا دکمهٔ دوم (outline) کنار خرید مستقیم */}
+                <button
+                  onClick={onOpenMembership}
+                  className="bg-white hover:bg-amber-50 border border-amber-300 text-amber-900 font-semibold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 transition"
+                >
+                  <Crown className="w-4 h-4 text-amber-700" />
+                  <span>خرید اشتراک جهت دسترسی کامل</span>
+                </button>
+              </>
             )}
           </div>
         </div>

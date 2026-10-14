@@ -1,27 +1,39 @@
 <?php
 /**
- * کنترلر فروشگاه وب‌اپ (v1.4.0 — فایل NEW)
+ * کنترلر فروشگاه وب‌اپ (v1.4.0 — فایل NEW؛ v1.5.0: محصولات ویژهٔ اسلایدر)
  *
  * محصولات «فیزیکی/دست‌ساز» که ادمین در پیشخوان (زیرصفحهٔ NEW «محصولات فیزیکی»
  * در کنترلر صفحات ادمین) تیک می‌زند، از همین‌جا با REST عمومی سرو می‌شوند تا
- * بخش «محصولات دست‌ساز» وب‌اپ (سکشن NEW صفحهٔ نخست با کلید physical_products)
+ * بخش «محصولات» وب‌اپ (سکشن NEW صفحهٔ نخست با کلید physical_products)
  * از آن‌ها تغذیه شود.
  *
- * ذخیره‌سازی: فقط یک آپشن «mrdastbaaf_physical_products» (آرایهٔ int[] از
- * شناسهٔ محصول ووکامرس؛ update_option با autoload=false). هیچ جدول/تغییری در
- * اسکیمای دیتابیس — همان الگوی mrdastbaaf_app_ui و mrdastbaaf_woo_map.
+ * v1.5.0: علاوه بر دسته‌ها، آرایهٔ top-level «featured» (محصولات ویژهٔ اسلایدر
+ * افقی بالای فروشگاه وب‌اپ) از آپشن mrdastbaaf_featured_products سرو می‌شود —
+ * با همان آیتم قراردادی دسته‌ها و از پرس‌وجوی منتشرشدهٔ مشترک (بدون هیچ
+ * پرس‌وجوی سنگین اضافه‌ای).
+ *
+ * ذخیره‌سازی: فقط دو آپشن «mrdastbaaf_physical_products» و
+ * «mrdastbaaf_featured_products» (هرکدام آرایهٔ int[] از شناسهٔ محصول ووکامرس؛
+ * update_option با autoload=false). هیچ جدول/تغییری در اسکیمای دیتابیس —
+ * همان الگوی mrdastbaaf_app_ui و mrdastbaaf_woo_map.
  *
  * امنیت/خوانایی: فقط محصولات «منتشرشده» لیست می‌شوند (محصول پیش‌نویس/حذف‌شده
  * حتی اگر تیک خورده باشد هرگز بیرون نمی‌آید)؛ قیمت به تومان (واحد پول فروشگاه)
  * به‌صورت عددی؛ پاسخ از سربرگ سراسری no-store namespace (v1.3.1) عبور می‌کند.
  *
  * قرارداد پاسخ (PWA دقیقاً با همین شکل کدنویسی می‌شود — کلیدهای camelCase):
- *   { success: true, categories: [
+ *   { success: true,
+ *     featured:   [ { id: int, title: string, price: int,
+ *                     imageUrl: string|null, url: string }, … ],
+ *     categories: [
  *       { id: int, slug: string, name: string,
  *         products: [ { id: int, title: string, price: int,
  *                       imageUrl: string|null, url: string }, … ] }, … ] }
- * هر محصول تیک‌خورده زیر «هر یک» از دسته‌های product_cat خودش می‌آید؛ محصول
- * بی‌دسته زیر گروه جعلی {id:0, slug:'', name:'سایر'}؛ انتخاب خالی → categories: [].
+ * هر محصول تیک‌خوردهٔ «فیزیکی» زیر «هر یک» از دسته‌های product_cat خودش می‌آید؛
+ * محصول بی‌دسته زیر گروه جعلی {id:0, slug:'', name:'سایر'}؛ انتخاب خالی →
+ * categories: [] و featured: []. «featured» نیز مرتب بر اساس عنوان است و
+ * تیک‌خوردهٔ نامنتشرشده بی‌صدا حذف می‌شود؛ محصولِ «فقط-ویژه» (غیر فیزیکی)
+ * فقط در featured می‌آید و دسته‌ها را تغییر نمی‌دهد (قرارداد ۱.۴.۰ عیناً حفظ می‌شود).
  */
 
 if (!defined('ABSPATH')) {
@@ -31,6 +43,13 @@ if (!defined('ABSPATH')) {
 class MrDastbaaf_Shop_Controller {
 
     const PHYSICAL_PRODUCTS_OPTION = 'mrdastbaaf_physical_products';
+
+    /**
+     * v1.5.0: محصولات ویژهٔ اسلایدر افقی «محصولات ویژه» بالای فروشگاه وب‌اپ —
+     * همان الگوی ذخیره‌سازی/خواندن آپشن فیزیکی؛ صفحهٔ پیشخوان «محصولات فیزیکی»
+     * آن را کنار همان فهرست تیک می‌زند.
+     */
+    const FEATURED_PRODUCTS_OPTION = 'mrdastbaaf_featured_products';
 
     public function register_routes() {
         register_rest_route(MRDASTBAAF_API_NAMESPACE, '/shop/products', array(
@@ -63,9 +82,32 @@ class MrDastbaaf_Shop_Controller {
     }
 
     /**
+     * v1.5.0: شناسه‌های تیک‌خوردهٔ «محصولات ویژه» پیشخوان — فهرست int[] پاکسازی‌شده؛
+     * آینهٔ get_physical_product_ids (هم REST و هم پیشخوان از همین متد می‌خوانند
+     * تا شکل داده هرگز واگرا نشود).
+     *
+     * @return int[]
+     */
+    public static function get_featured_product_ids() {
+        $stored = get_option(self::FEATURED_PRODUCTS_OPTION, array());
+        if (!is_array($stored)) {
+            return array();
+        }
+        $ids = array();
+        foreach ($stored as $pid) {
+            $pid = absint($pid);
+            if ($pid > 0) {
+                $ids[] = $pid;
+            }
+        }
+        return array_values(array_unique($ids));
+    }
+
+    /**
      * GET /shop/products — محصولات فیزیکی تیک‌خوردهٔ پیشخوان، گروه‌بندی‌شده بر
      * اساس دسته‌های product_cat (مرتب بر اساس نام دسته؛ محصولات مرتب بر اساس
-     * عنوان). عمومی است و هیچ دادهٔ کاربری ندارد.
+     * عنوان) + آرایهٔ top-level «featured» (محصولات ویژهٔ اسلایدر — v1.5.0).
+     * عمومی است و هیچ دادهٔ کاربری ندارد.
      */
     public function handle_get_shop_products() {
         if (!class_exists('WooCommerce')) {
@@ -73,10 +115,18 @@ class MrDastbaaf_Shop_Controller {
         }
 
         $physical_ids = self::get_physical_product_ids();
-        if (empty($physical_ids)) {
+        // v1.5.0: تیک‌خورده‌های «محصولات ویژه» — فیلترِ همان فهرست در حافظه
+        $featured_ids = self::get_featured_product_ids();
+
+        // v1.5.0: پرس‌وجوی واحد روی اجتماع دو لیست — محصولِ «فقط-ویژه» هم در
+        // featured می‌آید بدون هیچ پرس‌وجوی سنگین اضافه‌ای (قرارداد categories
+        // عیناً از ۱.۴.۰ باقی می‌ماند؛ محصولات فقط-ویژه وارد دسته‌ها نمی‌شوند).
+        $query_ids = array_values(array_unique(array_merge($physical_ids, $featured_ids)));
+        if (empty($query_ids)) {
             return rest_ensure_response(array(
                 'success'    => true,
                 'categories' => array(),
+                'featured'   => array(),
             ));
         }
 
@@ -84,8 +134,8 @@ class MrDastbaaf_Shop_Controller {
         $query = new WP_Query(array(
             'post_type'           => 'product',
             'post_status'         => 'publish',
-            'post__in'            => $physical_ids,
-            'posts_per_page'      => count($physical_ids),
+            'post__in'            => $query_ids,
+            'posts_per_page'      => count($query_ids),
             'orderby'             => 'title',
             'order'               => 'ASC',
             'no_found_rows'       => true,
@@ -96,6 +146,7 @@ class MrDastbaaf_Shop_Controller {
             return rest_ensure_response(array(
                 'success'    => true,
                 'categories' => array(),
+                'featured'   => array(),
             ));
         }
 
@@ -118,10 +169,25 @@ class MrDastbaaf_Shop_Controller {
             );
         }
 
-        // گروه‌بندی بر اساس دسته‌ها — محصول بی‌دسته → «سایر» (id=0)
+        // v1.5.0: محصولات ویژه = فیلترِ همان فهرست در حافظه با شناسه‌های featured —
+        // پرس‌وجو مرتب بر عنوان است پس ترتیب خروجی هم عنوان صعودی است؛ تیک‌خوردهٔ
+        // نامنتشرشده/حذف‌شده بی‌صدا حذف می‌شود.
+        $featured = array();
+        foreach ($query->posts as $product_post) {
+            $pid = (int) $product_post->ID;
+            if (isset($items[$pid]) && in_array($pid, $featured_ids, true)) {
+                $featured[] = $items[$pid];
+            }
+        }
+
+        // گروه‌بندی بر اساس دسته‌ها — محصول بی‌دسته → «سایر» (id=0)؛
+        // فقط «فیزیکی»‌ها (قرارداد ۱.۴.۰ — محصول فقط-ویژه دسته نمی‌سازد)
         $buckets = array();
         foreach ($query->posts as $product_post) {
             $pid = (int) $product_post->ID;
+            if (!in_array($pid, $physical_ids, true)) {
+                continue;
+            }
             $terms = get_the_terms($pid, 'product_cat');
             if (is_array($terms) && !empty($terms)) {
                 foreach ($terms as $term) {
@@ -176,6 +242,7 @@ class MrDastbaaf_Shop_Controller {
         return rest_ensure_response(array(
             'success'    => true,
             'categories' => $categories,
+            'featured'   => $featured,
         ));
     }
 

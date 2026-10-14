@@ -29,10 +29,14 @@
  *     صفحه فقط فرم نگاشت (انتخاب محصول برای هر پلن) را نگه می‌دارد.
  *
  *  ۵) (v1.4.0) محصولات فیزیکی — انتخاب محصولات ووکامرسی «دست‌ساز» با چک‌باکس
- *     (فیلتر دسته) برای بخش «محصولات دست‌ساز» وب‌اپ؛ سرو REST با GET
+ *     (فیلتر دسته) برای بخش «محصولات» وب‌اپ؛ سرو REST با GET
  *     /shop/products از کنترلر NEW class-shop-controller.php و آپشن مشترک
  *     mrdastbaaf_physical_products. ذخیره، تیک‌های همهٔ دسته‌ها را ادغام می‌کند
  *     و برداشتن تیک در دستهٔ جاری واقعاً حذف می‌کند.
+ *
+ *  ۶) (v1.5.0) همان صفحه، فیلدست دوم «محصولات ویژه (اسلایدر وب‌اپ)» — چک‌باکس
+ *     featured[] با همان گرید واکنش‌گرا و ذخیرهٔ مستقل در آپشن
+ *     mrdastbaaf_featured_products (اسلایدر افقی بالای فروشگاه اپ).
  *
  * امنیت: همهٔ عملیات نوشتن از admin-post.php با check_admin_referer +
  * current_user_can('manage_options') + sanitize ورودی‌ها؛ خروجی‌ها با
@@ -53,7 +57,7 @@ class MrDastbaaf_Admin_Pages_Controller {
     // v1.3.4: محتوای وب‌اپ + اتصال خرید سایت
     const APP_UI_SLUG = 'mrdastbaaf-app-ui';
     const WOO_MAP_SLUG = 'mrdastbaaf-woo-map';
-    // v1.4.0: محصولات فیزیکی (بخش «محصولات دست‌ساز» وب‌اپ)
+    // v1.4.0: محصولات فیزیکی (بخش «محصولات» وب‌اپ) + v1.5.0: محصولات ویژه (اسلایدر)
     const PHYSICAL_SLUG = 'mrdastbaaf-physical';
 
     public function register() {
@@ -1945,13 +1949,15 @@ class MrDastbaaf_Admin_Pages_Controller {
         $this->redirect_to_page(self::WOO_MAP_SLUG);
     }
 
-    /* ─────────────────────── صفحهٔ «محصولات فیزیکی» (v1.4.0) ─────────────────────── */
+    /* ───────────────────── صفحهٔ «محصولات فیزیکی» (v1.4.0؛ v1.5.0: ویژه) ───────────────────── */
 
     /**
-     * صفحهٔ «محصولات فیزیکی» — دراپ‌داون دسته (پارامتر GET cat) + چک‌باکس
-     * محصولات منتشرشدهٔ همان دسته (تصویر/عنوان/قیمت/دسته‌ها) با پیش‌انتخاب از
-     * آپشن مشترک mrdastbaaf_physical_products (کنترلر فروشگاه). محصولات تیک‌خورده
-     * در بخش «محصولات دست‌ساز» وب‌اپ (GET /shop/products) نمایش داده می‌شوند.
+     * صفحهٔ «محصولات فیزیکی» — دراپ‌داون دسته (پارامتر GET cat) + گرید واکنش‌گرای
+     * چک‌باکس محصولات منتشرشدهٔ همان دسته (تصویر/عنوان/قیمت/دسته‌ها) با پیش‌انتخاب از
+     * آپشن‌های مشترک mrdastbaaf_physical_products و mrdastbaaf_featured_products
+     * (کنترلر فروشگاه؛ v1.5.0: فیلدست دوم «محصولات ویژه» برای اسلایدر وب‌اپ).
+     * تیک‌خورده‌های فیزیکی در بخش «محصولات» وب‌اپ (GET /shop/products) و
+     * تیک‌خورده‌های ویژه در اسلایدر افقی «محصولات ویژه» بالای فروشگاه نمایش داده می‌شوند.
      */
     public function render_physical_page() {
         if (!current_user_can('manage_options')) {
@@ -1961,6 +1967,8 @@ class MrDastbaaf_Admin_Pages_Controller {
         $flash = $this->pull_flash();
         $selected_cat = isset($_GET['cat']) ? absint($_GET['cat']) : 0; // GET — فقط شناسهٔ عددی دسته
         $physical_ids = MrDastbaaf_Shop_Controller::get_physical_product_ids();
+        // v1.5.0: پیش‌انتخاب محصولات ویژه (اسلایدر وب‌اپ)
+        $featured_ids = MrDastbaaf_Shop_Controller::get_featured_product_ids();
         $admin_post = admin_url('admin-post.php');
         ?>
         <div class="wrap mrd-scope">
@@ -1968,7 +1976,7 @@ class MrDastbaaf_Admin_Pages_Controller {
                 <div class="mrd-hero__icon" aria-hidden="true">🧶</div>
                 <div>
                     <h1 class="mrd-hero__title">محصولات فیزیکی</h1>
-                    <p class="mrd-hero__desc">محصولات دست‌سازِ آمادهٔ ارسال را انتخاب کنید تا در بخش «محصولات دست‌ساز» وب‌اپلیکیشن (سکشن «محصولات دست‌ساز» صفحهٔ نخست و اندپوینت <code dir="ltr">GET /shop/products</code>) نمایش داده شوند. نام، قیمت و تصویر هر محصول از خود ووکامرس خوانده می‌شود؛ برداشتن تیک و ذخیره، محصول را از اپ حذف می‌کند.</p>
+                    <p class="mrd-hero__desc">محصولات دست‌سازِ آمادهٔ ارسال را انتخاب کنید تا در بخش «محصولات» وب‌اپلیکیشن (سکشن فروشگاه صفحهٔ نخست و اندپوینت <code dir="ltr">GET /shop/products</code>) نمایش داده شوند؛ از همین صفحه فهرست «محصولات ویژه» اسلایدر افقی بالای فروشگاه اپ هم انتخاب می‌شود. نام، قیمت و تصویر هر محصول از خود ووکامرس خوانده می‌شود؛ برداشتن تیک و ذخیره، محصول را از اپ حذف می‌کند.</p>
                 </div>
             </div>
 
@@ -2028,43 +2036,17 @@ class MrDastbaaf_Admin_Pages_Controller {
                     <input type="hidden" name="action" value="mrdastbaaf_physical_save" />
                     <input type="hidden" name="cat" value="<?php echo esc_attr((string) $selected_cat); ?>" />
                     <?php wp_nonce_field('mrdastbaaf_physical_save', 'mrd_nonce'); ?>
-                    <div class="mrd-table-wrap">
-                    <table class="widefat striped">
-                        <thead>
-                            <tr>
-                                <th style="width:48px;">انتخاب</th>
-                                <th style="width:64px;">تصویر</th>
-                                <th>محصول</th>
-                                <th>قیمت (تومان)</th>
-                                <th>دسته‌ها</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($products_query->posts as $product_post): $pid = (int) $product_post->ID;
-                                $thumb = get_the_post_thumbnail_url($pid, 'thumbnail');
-                                $product = function_exists('wc_get_product') ? wc_get_product($pid) : null;
-                                $price = ($product && '' !== $product->get_price() && null !== $product->get_price()) ? (int) $product->get_price() : 0;
-                                $term_names = wp_list_pluck($product_terms_cache[$pid], 'name');
-                            ?>
-                                <tr>
-                                    <td><input type="checkbox" name="physical[]" value="<?php echo esc_attr((string) $pid); ?>" <?php checked(in_array($pid, $physical_ids, true)); ?> /></td>
-                                    <td>
-                                        <?php if (is_string($thumb) && '' !== $thumb): ?>
-                                            <img src="<?php echo esc_url($thumb); ?>" alt="" style="width:40px;height:40px;object-fit:cover;border-radius:6px;" />
-                                        <?php else: ?>
-                                            <span class="mrd-muted">—</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td><strong><?php echo esc_html($product_post->post_title); ?></strong> <code dir="ltr">#<?php echo esc_html((string) $pid); ?></code></td>
-                                    <td><?php echo esc_html(number_format_i18n($price)); ?></td>
-                                    <td><?php echo esc_html(implode('، ', $term_names)); ?></td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                    </div>
+                    <h3 style="margin:16px 0 8px;">محصولات فیزیکی</h3>
+                    <?php $this->render_product_checkbox_grid('physical', $physical_ids, $products_query->posts, $product_terms_cache); ?>
                     <p class="mrd-hint">با هر ذخیره، تیک‌های همین فهرست اعمال و تیک‌های دسته‌های دیگر حفظ می‌شود — برداشتن تیک در دستهٔ جاری و ذخیره، همان محصول را از اپ حذف می‌کند.</p>
-                    <?php submit_button('ذخیرهٔ محصولات فیزیکی'); ?>
+
+                    <hr style="margin:18px 0;border:none;border-top:1px solid #e2e4e7;" />
+
+                    <h3 style="margin:0 0 4px;">محصولات ویژه (اسلایدر وب‌اپ)</h3>
+                    <p class="mrd-hint">این محصولات در اسلایدر افقی «محصولات ویژه» بالای فروشگاه وب‌اپ نمایش داده می‌شوند.</p>
+                    <?php $this->render_product_checkbox_grid('featured', $featured_ids, $products_query->posts, $product_terms_cache); ?>
+                    <p class="mrd-hint">ذخیرهٔ این فهرست هم با همان قاعدهٔ ادغام انجام می‌شود — مستقل از فهرست فیزیکی.</p>
+                    <?php submit_button('ذخیرهٔ محصولات'); ?>
                 </form>
                 <?php endif; ?>
                 </div>
@@ -2074,11 +2056,12 @@ class MrDastbaaf_Admin_Pages_Controller {
     }
 
     /**
-     * ذخیرهٔ «محصولات فیزیکی» — تیک‌های همهٔ دسته‌ها ادغام می‌شوند: شناسه‌های
+     * v1.5.0: ذخیرهٔ «محصولات فیزیکی» و «محصولات ویژه» (هر دو در یک فرم) —
+     * تیک‌های همهٔ دسته‌ها در هر لیست به‌طور مستقل ادغام می‌شوند: شناسه‌های
      * نمایانِ همین فرم (همان پرس‌وجوی صفحه) از انتخاب فعلی کنار گذاشته و به‌جایشان
      * تیک‌های ارسالی می‌نشینند؛ به این ترتیب هم تیکِ دسته‌های دیگر از دست نمی‌رود
-     * و هم برداشتن تیک در دستهٔ جاری واقعاً حذف می‌کند. خروجی: int[] یکتا در
-     * آپشن mrdastbaaf_physical_products (بدون autoload).
+     * و هم برداشتن تیک در دستهٔ جاری واقعاً حذف می‌کند. خروجی هر لیست: int[] یکتا در
+     * آپشن mrdastbaaf_physical_products / mrdastbaaf_featured_products (بدون autoload).
      */
     public function handle_physical_save() {
         check_admin_referer('mrdastbaaf_physical_save', 'mrd_nonce');
@@ -2089,27 +2072,82 @@ class MrDastbaaf_Admin_Pages_Controller {
         $cat = isset($_POST['cat']) ? absint($_POST['cat']) : 0;
         $visible_ids = $this->get_physical_visible_product_ids($cat);
 
+        $existing_physical = MrDastbaaf_Shop_Controller::get_physical_product_ids();
+        $physical_merged = array_values(array_unique(array_merge(array_diff($existing_physical, $visible_ids), $this->collect_ticked_product_ids('physical'))));
+        update_option(MrDastbaaf_Shop_Controller::PHYSICAL_PRODUCTS_OPTION, $physical_merged, false);
+
+        // v1.5.0: محصولات ویژه — همان الگوی ادغام، کاملاً مستقل از لیست فیزیکی
+        $existing_featured = MrDastbaaf_Shop_Controller::get_featured_product_ids();
+        $featured_merged = array_values(array_unique(array_merge(array_diff($existing_featured, $visible_ids), $this->collect_ticked_product_ids('featured'))));
+        update_option(MrDastbaaf_Shop_Controller::FEATURED_PRODUCTS_OPTION, $featured_merged, false);
+
+        if (empty($physical_merged) && empty($featured_merged)) {
+            $this->flash('success', 'ذخیره شد — هیچ محصولی انتخاب نشده است؛ بخش «محصولات» و اسلایدر «محصولات ویژه» در اپ خالی می‌ماند.');
+        } else {
+            $this->flash('success', 'ذخیره شد — محصولات فیزیکی و ویژه به‌روز شدند؛ فروشگاه و اسلایدر اپ از همین لحظه تازه می‌شوند.');
+        }
+        $this->redirect_to_page(self::PHYSICAL_SLUG, $cat > 0 ? array('cat' => $cat) : array());
+    }
+
+    /**
+     * v1.5.0: جمع‌آوری شناسه‌های عددی تیک‌خورده از POST (physical[] یا featured[])
+     * — همان پاکسازی قبلی، حالا مشترک برای هر دو لیست.
+     *
+     * @param string $post_key نام فیلد POST
+     * @return int[]
+     */
+    private function collect_ticked_product_ids($post_key) {
         $ticked = array();
-        $posted = (isset($_POST['physical']) && is_array($_POST['physical'])) ? wp_unslash($_POST['physical']) : array();
+        $posted = (isset($_POST[$post_key]) && is_array($_POST[$post_key])) ? wp_unslash($_POST[$post_key]) : array();
         foreach ($posted as $pid) {
             $pid = absint($pid);
             if ($pid > 0) {
                 $ticked[] = $pid;
             }
         }
-        $ticked = array_values(array_unique($ticked));
+        return array_values(array_unique($ticked));
+    }
 
-        $existing = MrDastbaaf_Shop_Controller::get_physical_product_ids();
-        $merged = array_values(array_unique(array_merge(array_diff($existing, $visible_ids), $ticked)));
-
-        update_option(MrDastbaaf_Shop_Controller::PHYSICAL_PRODUCTS_OPTION, $merged, false);
-
-        if (empty($merged)) {
-            $this->flash('success', 'ذخیره شد — هیچ محصول فیزیکی انتخاب نشده است و بخش «محصولات دست‌ساز» در اپ خالی می‌ماند.');
-        } else {
-            $this->flash('success', 'محصولات فیزیکی ذخیره شد؛ بخش «محصولات دست‌ساز» اپ از همین لحظه تازه می‌شود.');
-        }
-        $this->redirect_to_page(self::PHYSICAL_SLUG, $cat > 0 ? array('cat' => $cat) : array());
+    /**
+     * v1.5.0: گرید واکنش‌گرای چک‌باکس محصولات (مشترک بین «فیزیکی» و «ویژه») —
+     * جای جدول تک‌ردیفی قبلی: کارت هر محصول تصویر/عنوان/قیمت/دسته‌ها دارد و
+     * چک‌باکسش با نام POST خواسته‌شده رندر می‌شود (استایل گرید در admin-ui.css: mrd-check-grid).
+     *
+     * @param string $post_key            نام فیلد POST (physical/featured)
+     * @param int[]  $selected_ids        شناسه‌های پیش‌انتخاب (آپشن فعلی)
+     * @param array  $posts               ردیف‌های WP_Query (محصولات منتشرشدهٔ نمایان)
+     * @param array  $product_terms_cache نگاشت pid → دسته‌ها (محاسبه‌شده در رندر صفحه)
+     * @return void
+     */
+    private function render_product_checkbox_grid($post_key, $selected_ids, $posts, $product_terms_cache) {
+        ?>
+        <div class="mrd-check-grid">
+            <?php foreach ($posts as $product_post): $pid = (int) $product_post->ID;
+                $thumb = get_the_post_thumbnail_url($pid, 'thumbnail');
+                $product = function_exists('wc_get_product') ? wc_get_product($pid) : null;
+                $price = ($product && '' !== $product->get_price() && null !== $product->get_price()) ? (int) $product->get_price() : 0;
+                $term_names = wp_list_pluck(isset($product_terms_cache[$pid]) ? $product_terms_cache[$pid] : array(), 'name');
+                $meta_bits = array();
+                if ($price > 0) {
+                    $meta_bits[] = esc_html(number_format_i18n($price)) . ' تومان';
+                }
+                if (!empty($term_names)) {
+                    $meta_bits[] = esc_html(implode('، ', $term_names));
+                }
+            ?>
+                <label class="mrd-check-item">
+                    <input type="checkbox" name="<?php echo esc_attr($post_key); ?>[]" value="<?php echo esc_attr((string) $pid); ?>" <?php checked(in_array($pid, $selected_ids, true)); ?> />
+                    <?php if (is_string($thumb) && '' !== $thumb): ?>
+                        <img src="<?php echo esc_url($thumb); ?>" alt="" style="width:36px;height:36px;object-fit:cover;border-radius:6px;flex:none;" />
+                    <?php endif; ?>
+                    <span style="display:block;min-width:0;">
+                        <strong><?php echo esc_html($product_post->post_title); ?></strong> <code dir="ltr">#<?php echo esc_html((string) $pid); ?></code>
+                        <?php if (!empty($meta_bits)): ?><br /><span class="mrd-muted"><?php echo implode(' · ', $meta_bits); ?></span><?php endif; ?>
+                    </span>
+                </label>
+            <?php endforeach; ?>
+        </div>
+        <?php
     }
 
     /**

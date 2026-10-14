@@ -324,6 +324,16 @@ export interface ShopCategory {
   products: ShopProduct[];
 }
 
+/**
+ * v1.4.0 — خوراک کامل «GET /shop/products» (قرارداد افزونهٔ 1.5.0):
+ * {featured: [{id,title,price,imageUrl,url}], categories: [...]} — فهرست «featured»
+ * سطح بالای پاسخ است (هم‌شکل آیتم محصولات دسته‌ها) و روی سرور قدیمی غایب است → [].
+ */
+export interface ShopFeed {
+  featured: ShopProduct[];
+  categories: ShopCategory[];
+}
+
 export interface AppUiConfig {
   hero: AppUiHero;
   sections: AppUiSection[];

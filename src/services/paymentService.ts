@@ -14,7 +14,7 @@
  * تاریخچهٔ سفارش واقعی از GET /me/orders (fetchOrders) خوانده می‌شود.
  */
 
-import { MembershipPlan, OrderStatus, PaymentGatewayType, PaymentOrder, UserProfile } from '../types';
+import { Course, MembershipPlan, OrderStatus, PaymentGatewayType, PaymentOrder, UserProfile } from '../types';
 import { ApiError, apiFetch, isRealApiMode } from './apiClient';
 import { authService } from './authService';
 import { membershipService, planDurationToDays, planFromSnapshot } from './membershipService';
@@ -107,6 +107,35 @@ function normalizeApiOrder(raw: ApiOrderShape, fallbackUserId: string): PaymentO
   };
 }
 
+/**
+ * v1.4.0 — پارسر مشترک پاسخ «POST /payment/zibal/initiate» (قرارداد فریز افزونه):
+ * {orderId, orderNumber, trackId, paymentUrl} — نام فیلد «paymentUrl» عیناً از
+ * class-payment-controller.php مصرف می‌شود (gatewayUrl فقط fallback). هم پلن و
+ * هم خرید تک‌دوره‌ای (product_id) از همین پارسر استفاده می‌کنند.
+ */
+interface ZibalInitiateResponse {
+  orderId?: unknown;
+  orderNumber?: unknown;
+  trackId?: unknown;
+  paymentUrl?: unknown;
+  gatewayUrl?: unknown;
+}
+
+function parseZibalInitiateResponse(res: ZibalInitiateResponse): {
+  trackId: string;
+  paymentUrl: string;
+} {
+  const trackId = typeof res.trackId === 'string' ? res.trackId : '';
+  const paymentUrl =
+    (typeof res.paymentUrl === 'string' && res.paymentUrl) ||
+    (typeof res.gatewayUrl === 'string' && res.gatewayUrl) ||
+    '';
+  if (!paymentUrl) {
+    throw new Error('لینک پرداخت از سرور دریافت نشد؛ لطفاً دوباره تلاش کنید.');
+  }
+  return { trackId, paymentUrl };
+}
+
 export const paymentService = {
   /**
    * Hardening (prelive 18-b — یافتهٔ 1-9): تاریخچهٔ سفارش‌های واقعی کاربر از سرور.
@@ -156,22 +185,13 @@ export const paymentService = {
     // سفارش واقعی سمت سرور ثبت می‌شود؛ رکورد محلی فقط برای UI است و در orderStore ذخیره نمی‌شود.
     // ----------------------------------------------------------------------
     if (isRealApiMode) {
-      const res = await apiFetch<{
-        orderId?: unknown;
-        orderNumber?: unknown;
-        trackId?: unknown;
-        paymentUrl?: unknown;
-        gatewayUrl?: unknown;
-      }>('/payment/zibal/initiate', { method: 'POST', auth: true, body: { plan_id: plan.id } });
+      const res = await apiFetch<ZibalInitiateResponse>('/payment/zibal/initiate', {
+        method: 'POST',
+        auth: true,
+        body: { plan_id: plan.id },
+      });
 
-      const trackId = typeof res.trackId === 'string' ? res.trackId : '';
-      const paymentUrl =
-        (typeof res.paymentUrl === 'string' && res.paymentUrl) ||
-        (typeof res.gatewayUrl === 'string' && res.gatewayUrl) ||
-        '';
-      if (!paymentUrl) {
-        throw new Error('لینک پرداخت از سرور دریافت نشد؛ لطفاً دوباره تلاش کنید.');
-      }
+      const { trackId, paymentUrl } = parseZibalInitiateResponse(res);
 
       const createdAt = new Date().toISOString();
       const gatewayOrder: PaymentOrder = {
@@ -233,6 +253,65 @@ export const paymentService = {
       zibalTrackId: trackId,
       gatewayUrl: `https://gateway.zibal.ir/start/${trackId}`, // Mock reference URL
     };
+  },
+
+  /**
+   * v1.4.0 — خرید مستقیم یک دوره با درگاه زیبال (قرارداد فریز افزونهٔ 1.5.0):
+   * POST /payment/zibal/initiate {product_id: <int>} — به‌جای plan_id؛ پاسخ دقیقاً
+   * همان {orderId, orderNumber, trackId, paymentUrl} است. پس از تایید پرداخت،
+   * سرور سفارش WooCommerce واقعی (processing) می‌سازد → پرچم owned فوراً باز می‌شود.
+   * خطاهای فارسی سرور (404 محصول / 409 قبلاً خریداری‌شده) از apiFetch پاس داده می‌شوند.
+   *
+   * سفارش برگشتی فقط برای UI است و در orderStore ذخیره نمی‌شود (آینهٔ محلیِ مسیر پلن؛
+   * دفتر مالی واقعی سرور است) و planSnapshot ندارد (مخصوص اشتراک است).
+   *
+   * حالت دمو: پرتاب خطای فارسی روشن — خرید تک‌دوره‌ای فقط در حالت Real معنا دارد
+   * (شبیه‌ساز زیبال و گرنت محلی فقط برای اشتراک کار می‌کنند؛ مسیر دموی جعلی برای
+   * دوره، تایید/گرنت ندارد و کاربر را گمراه می‌کند). تصمیم برای پایداری تست‌ها ثبت شد.
+   */
+  async initiateCourseZibalPayment(
+    user: UserProfile,
+    course: Course
+  ): Promise<{ order: PaymentOrder; zibalTrackId: string; gatewayUrl: string }> {
+    if (!isRealApiMode) {
+      throw new Error('خرید آنلاین دوره در حالت دمو فعال نیست');
+    }
+
+    const productId = typeof course.productId === 'number' && Number.isFinite(course.productId) && course.productId > 0
+      ? Math.round(course.productId)
+      : null;
+    if (!productId) {
+      throw new Error('این دوره قابل خرید مستقیم نیست؛ لطفاً با پشتیبانی تماس بگیرید.');
+    }
+
+    const res = await apiFetch<ZibalInitiateResponse>('/payment/zibal/initiate', {
+      method: 'POST',
+      auth: true,
+      // قرارداد فریز افزونهٔ 1.5.0: بدنهٔ snake_case با کلید product_id
+      body: { product_id: productId },
+    });
+
+    const { trackId, paymentUrl } = parseZibalInitiateResponse(res);
+
+    const createdAt = new Date().toISOString();
+    const gatewayOrder: PaymentOrder = {
+      id: typeof res.orderId === 'string' && res.orderId ? res.orderId : `ord-zibal-${trackId}`,
+      orderNumber: typeof res.orderNumber === 'string' ? res.orderNumber : '',
+      userId: user.id,
+      userPhone: user.phoneNumber,
+      userFullName: user.fullName,
+      itemType: 'course',
+      itemId: String(productId),
+      itemTitle: course.title,
+      amountToman: course.priceToman,
+      gateway: 'zibal',
+      status: 'pending',
+      createdAt,
+      createdAtJalali: formatJalali(createdAt, true),
+      zibalTrackId: trackId,
+    };
+
+    return { order: gatewayOrder, zibalTrackId: trackId, gatewayUrl: paymentUrl };
   },
 
   /**

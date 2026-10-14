@@ -9,7 +9,10 @@
 
 import { INITIAL_COURSES } from '../data/mockData';
 import { Course, CourseCategory, CourseLevel, CourseSection, Lesson, LessonNote, MembershipTier, UserProfile } from '../types';
-import { ApiError, apiFetch, isRealApiMode } from './apiClient';
+// v1.4.0: getStoredAuthToken — فیکس «خطای قفل» بعد از خرید دوره: بدون هدر Bearer،
+// سرور بیننده را مهمان می‌گرفت و owned:false برمی‌گشت (داشبورد «دوره‌های من» دوره را
+// نشان می‌داد ولی جزئیات قفل بود). حالا getCourses/getCourseById هم توکن می‌فرستند.
+import { ApiError, apiFetch, getStoredAuthToken, isRealApiMode } from './apiClient';
 import { authService } from './authService';
 import { hasStringId, readJsonArray } from './storageGuard';
 import { isLive } from '../utils/format';
@@ -282,7 +285,11 @@ export const courseService = {
         params.set('search', filters.searchTerm.trim());
       }
       const query = params.toString();
-      const data = await apiFetch<ApiCourseShape[]>(`/courses${query ? `?${query}` : ''}`);
+      // v1.4.0: توکن فقط وقتی هست می‌رود (مهمان بدون توکن دقیقاً مثل قبل — و
+      // throw-when-missing برآمده از auth:true رخ نمی‌دهد).
+      const data = await apiFetch<ApiCourseShape[]>(`/courses${query ? `?${query}` : ''}`, {
+        auth: !!getStoredAuthToken(),
+      });
       const courses = (Array.isArray(data) ? data : []).map((c) => normalizeApiCourse(c));
       // فیلتر سطح (level) در قرارداد API نیست — مثل دمو سمت کلاینت اعمال می‌شود.
       if (filters?.level && filters.level !== 'all') {
@@ -345,10 +352,13 @@ export const courseService = {
     // سپس فال‌بک اسلاگ — ۴۰۴ نهایی یعنی دوره واقعاً نیست (UI کارت «دوره یافت نشد» دارد).
     if (isRealApiMode) {
       try {
+        // v1.4.0: هر دو مسیر (by-id و slug) توکن را می‌فرستند تا owned سرور درست
+        // محاسبه شود (فیکس «خریداری‌شده ولی قفل»)؛ مهمان بدون توکن مثل قبل.
+        const withAuth = !!getStoredAuthToken();
         const pid = courseIdToProductId.get(courseId);
         if (pid) {
           try {
-            const byId = await apiFetch<ApiCourseShape>(`/courses/by-id/${pid}`);
+            const byId = await apiFetch<ApiCourseShape>(`/courses/by-id/${pid}`, { auth: withAuth });
             return normalizeApiCourse(byId);
           } catch (byIdError) {
             // فقط ۴۰۴ به مسیر اسلاگ فال‌بک می‌کند؛ سایر خطاها (شبکه/۵xx) بالا می‌روند
@@ -357,7 +367,9 @@ export const courseService = {
             }
           }
         }
-        const data = await apiFetch<ApiCourseShape>(`/courses/${encodeURIComponent(courseId)}`);
+        const data = await apiFetch<ApiCourseShape>(`/courses/${encodeURIComponent(courseId)}`, {
+          auth: withAuth,
+        });
         return normalizeApiCourse(data);
       } catch (e) {
         // UI فعلی برای ۴۰۴ کارت «دوره یافت نشد» دارد — null معنای همان است.
