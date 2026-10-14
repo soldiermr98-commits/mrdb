@@ -10,9 +10,10 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
-import { Course, CourseCategory, Lesson, MembershipPlan, PaymentGatewayType, PaymentOrder, UserProfile } from './types';
+import { Course, CourseCategory, Lesson, MembershipPlan, PaymentGatewayType, PaymentOrder, UserProfile, AppPage } from './types';
 import { authService } from './services/authService';
 import { courseService } from './services/courseService';
+import { appPagesService } from './services/appPagesService';
 import { paymentService } from './services/paymentService';
 import { isRealApiMode } from './services/apiClient';
 import { detectZibalCallback, clearZibalCallbackParams } from './services/zibalCallback';
@@ -21,6 +22,7 @@ import { mutateOrder, orderStore } from './services/orderStore';
 // Common Components
 import { Header } from './components/common/Header';
 import { BottomNav } from './components/common/BottomNav';
+import { MenuSheet } from './components/common/MenuSheet';
 import { OfflineIndicator } from './components/common/OfflineIndicator';
 import { PWAUpdatePrompt } from './components/common/PWAUpdatePrompt';
 
@@ -45,13 +47,16 @@ interface AppViewParams {
   category?: CourseCategory | 'all';
   courseId?: string;
   slug?: string;
+  /** v1.2.6: شناسهٔ صفحهٔ سایت (منوی اپ) */
+  pageId?: string;
 }
 
 // DEV-2: lightweight hash router (no new deps) — view ⇄ URL mapping.
 // Route map: #/ → home · #/catalogue[?cat={category}] → catalogue ·
 //   #/course/{courseId} → course_detail · #/membership → membership ·
 //   #/dashboard → dashboard · #/admin → admin ·
-//   #/page/{slug} → editorial page · #/editorial → editorial (about-us).
+//   #/page/{slug} → editorial page · #/editorial → editorial (about-us) ·
+//   #/app-page/{id} → صفحهٔ سایت از پیشخوان (v1.2.6).
 // Unknown/invalid routes fall back to home. Modals (player/checkout/gateway)
 // are intentionally NOT routed — future work.
 const serializeRoute = (view: string, params: AppViewParams): string => {
@@ -73,6 +78,8 @@ const serializeRoute = (view: string, params: AppViewParams): string => {
       return '#/admin';
     case 'editorial':
       return params.slug ? `#/page/${encodeURIComponent(params.slug)}` : '#/editorial';
+    case 'app_page':
+      return params.pageId ? `#/app-page/${encodeURIComponent(params.pageId)}` : '#/';
     default:
       return '#/';
   }
@@ -103,6 +110,11 @@ const parseRoute = (hash: string): { view: string; params: AppViewParams } => {
         : { view: 'editorial', params: {} };
     case 'editorial':
       return { view: 'editorial', params: {} };
+    case 'app-page':
+      // v1.2.6: صفحهٔ سایت از پیشخوان — عمومی (فیلتر دسترسی سمت سرور است)
+      return segments[1]
+        ? { view: 'app_page', params: { pageId: decodeURIComponent(segments[1]) } }
+        : { view: 'home', params: {} };
     default:
       // DEV-2: empty/unknown hash → home.
       return { view: 'home', params: {} };
@@ -147,6 +159,10 @@ export default function App() {
   const [isPlayerOpen, setIsPlayerOpen] = useState(false);
   const [activePlayerCourse, setActivePlayerCourse] = useState<Course | null>(null);
   const [activePlayerLesson, setActivePlayerLesson] = useState<Lesson | null>(null);
+
+  // v1.2.6 — صفحات سایت (منوی اپ) + شیت منو
+  const [appPages, setAppPages] = useState<AppPage[]>([]);
+  const [isMenuSheetOpen, setIsMenuSheetOpen] = useState(false);
 
   // Toast feedback message
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -460,6 +476,29 @@ export default function App() {
     handleNavigate('dashboard');
   };
 
+  // ---------------------------------------------------------------------------
+  // v1.2.6 — صفحات سایت برای منوی اپ: هر بار که هویت/اشتراک کاربر تغییر می‌کند
+  // (ورود/خروج/فعال‌شدن اشتراک) فهرست از سرور تازه می‌شود تا سطح دسترسی درست نشان داده شود.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!isRealApiMode) {
+      setAppPages([]);
+      return;
+    }
+    let cancelled = false;
+    appPagesService
+      .getPages()
+      .then((pages) => {
+        if (!cancelled) setAppPages(pages);
+      })
+      .catch(() => {
+        if (!cancelled) setAppPages([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.id, currentUser?.role, currentUser?.membership?.tier, currentUser?.membership?.status]);
+
   // DEV-4/3-b: parent-owned completion handler — persists through the
   // whitelisted updater AND refreshes App state (setUser) so the dashboard /
   // CourseDetailView re-render live (player icon state derives from props).
@@ -519,6 +558,8 @@ export default function App() {
         onSwitchRole={handleSwitchRole}
         onNavigate={handleNavigate}
         activeView={activeView}
+        appPages={appPages}
+        onOpenMenuSheet={() => setIsMenuSheetOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -576,6 +617,15 @@ export default function App() {
         {activeView === 'editorial' && (
           <EditorialPageView
             slug={viewParams.slug || 'about-us'}
+            onNavigate={handleNavigate}
+          />
+        )}
+
+        {/* v1.2.6: صفحهٔ سایت از پیشخوان (منوی اپ) */}
+        {activeView === 'app_page' && (
+          <EditorialPageView
+            slug=""
+            pageId={viewParams.pageId || ''}
             onNavigate={handleNavigate}
           />
         )}
@@ -637,6 +687,19 @@ export default function App() {
         userRole={currentUser?.role}
         isLoggedIn={!!currentUser}
         onOpenLogin={() => setIsLoginModalOpen(true)}
+        onOpenMenuSheet={() => setIsMenuSheetOpen(true)}
+      />
+
+      {/* v1.2.6: شیت شیشه‌ای منو — صفحات سایت + راهنماها */}
+      <MenuSheet
+        isOpen={isMenuSheetOpen}
+        onClose={() => setIsMenuSheetOpen(false)}
+        appPages={appPages}
+        userRole={currentUser?.role}
+        onNavigate={(view, params) => {
+          setIsMenuSheetOpen(false);
+          handleNavigate(view, params || {});
+        }}
       />
 
       {/* MODALS */}

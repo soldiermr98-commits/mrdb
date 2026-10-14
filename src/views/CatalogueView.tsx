@@ -4,10 +4,11 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Filter, BookOpen, Clock, User, Play, ArrowLeft, Layers, X, AlertTriangle } from 'lucide-react';
+import { Search, Filter, BookOpen, Clock, User, Play, ArrowLeft, Layers, X, AlertTriangle, Sparkles } from 'lucide-react';
 import { Course, CourseCategory, UserProfile } from '../types';
 import { courseService } from '../services/courseService';
 import { membershipService } from '../services/membershipService';
+import { isRealApiMode } from '../services/apiClient';
 
 interface CatalogueViewProps {
   initialCategory?: CourseCategory | 'all';
@@ -215,10 +216,29 @@ export const CatalogueView: React.FC<CatalogueViewProps> = ({
                   (course.requiredTier === 'silver' && currentUser?.membership?.tier !== 'bronze') ||
                   (course.requiredTier === 'gold' && currentUser?.membership?.tier === 'gold')));
 
+            // v1.2.6: کل کارت کلیک‌پذیر است (باز شدن صفحهٔ دوره) — دکمه‌های داخلی
+            // با stopPropagation رفتار مستقل خود را حفظ می‌کنند.
+            const openCourse = () => onNavigate('course_detail', { courseId: course.id });
+            // v1.2.6: دکمهٔ پیش‌نمایش فقط وقتی معنا دارد که درسِ رایگان وجود دارد
+            // (در حالت Real از freePreviewCount سرور؛ در دمو دوره‌ها پیش‌نمایش دارند)
+            const hasFreePreview = isRealApiMode
+              ? (course.freePreviewCount ?? 0) > 0
+              : course.sections.some((s) => s.lessons.some((l) => l.isFreePreview)) || course.sections.length === 0;
+
             return (
               <div
                 key={course.id}
-                className="bg-white rounded-2xl border border-stone-200/90 overflow-hidden shadow-xs hover:shadow-md transition flex flex-col justify-between group"
+                onClick={openCourse}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openCourse();
+                  }
+                }}
+                tabIndex={0}
+                role="link"
+                aria-label={`مشاهده دورهٔ ${course.title}`}
+                className="bg-white rounded-2xl border border-stone-200/90 overflow-hidden shadow-xs hover:shadow-md transition flex flex-col justify-between group cursor-pointer focus-visible:ring-2 focus-visible:ring-amber-600 focus-visible:outline-none"
               >
                 <div>
                   <div className="relative aspect-video overflow-hidden bg-stone-100">
@@ -231,6 +251,16 @@ export const CatalogueView: React.FC<CatalogueViewProps> = ({
                     <div className="absolute top-2.5 right-2.5 bg-black/60 backdrop-blur-xs text-white text-[10px] px-2 py-0.5 rounded-md font-medium">
                       سطح: {course.level}
                     </div>
+
+                    {/* v1.2.6: نشان پیش‌نمایش رایگان — درس‌های is_free از سرور */}
+                    {hasFreePreview && (
+                      <div className="absolute top-2.5 left-2.5">
+                        <span className="flex items-center gap-1 bg-emerald-700/90 backdrop-blur-xs text-emerald-50 text-[10px] px-2 py-0.5 rounded-md font-bold shadow-xs">
+                          <Sparkles className="w-3 h-3" />
+                          پیش‌نمایش رایگان
+                        </span>
+                      </div>
+                    )}
 
                     {/* Entitlement badge */}
                     <div className="absolute bottom-2.5 left-2.5">
@@ -283,17 +313,25 @@ export const CatalogueView: React.FC<CatalogueViewProps> = ({
                     </div>
 
                     <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => onOpenLessonPreview(course)}
-                        className="p-1.5 text-amber-800 hover:bg-amber-50 rounded-lg text-xs font-semibold flex items-center gap-1 transition"
-                        title="مشاهده پیش‌نمایش درس"
-                      >
-                        <Play className="w-3.5 h-3.5 fill-amber-800" />
-                        <span className="hidden sm:inline">پیش‌نمایش</span>
-                      </button>
+                      {hasFreePreview && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenLessonPreview(course);
+                          }}
+                          className="p-1.5 text-amber-800 hover:bg-amber-50 rounded-lg text-xs font-semibold flex items-center gap-1 transition"
+                          title="مشاهده پیش‌نمایش رایگان"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-amber-800" />
+                          <span className="hidden sm:inline">پیش‌نمایش</span>
+                        </button>
+                      )}
 
                       <button
-                        onClick={() => onNavigate('course_detail', { courseId: course.id })}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onNavigate('course_detail', { courseId: course.id });
+                        }}
                         className="bg-stone-900 hover:bg-amber-900 text-white text-xs font-semibold px-3 py-1.5 rounded-xl transition"
                       >
                         سرفصل‌ها

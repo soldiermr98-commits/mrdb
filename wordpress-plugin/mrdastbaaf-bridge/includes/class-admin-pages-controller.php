@@ -34,6 +34,7 @@ class MrDastbaaf_Admin_Pages_Controller {
 
     const PLANS_SLUG = 'mrdastbaaf-plans';
     const RECEIPTS_SLUG = 'mrdastbaaf-receipts';
+    const APP_PAGES_SLUG = 'mrdastbaaf-app-pages';
 
     public function register() {
         add_action('admin_menu', array($this, 'register_admin_menu'));
@@ -41,6 +42,11 @@ class MrDastbaaf_Admin_Pages_Controller {
         add_action('admin_post_mrdastbaaf_plan_toggle', array($this, 'handle_plan_toggle'));
         add_action('admin_post_mrdastbaaf_plan_delete', array($this, 'handle_plan_delete'));
         add_action('admin_post_mrdastbaaf_receipt_review', array($this, 'handle_receipt_review'));
+        // v1.3.3: صفحات وب‌اپ — انتخاب صفحهٔ سایت + سطح دسترسی از پیشخوان
+        add_action('admin_post_mrdastbaaf_app_page_save', array($this, 'handle_app_page_save'));
+        add_action('admin_post_mrdastbaaf_app_page_toggle', array($this, 'handle_app_page_toggle'));
+        add_action('admin_post_mrdastbaaf_app_page_delete', array($this, 'handle_app_page_delete'));
+        add_action('admin_post_mrdastbaaf_app_page_move', array($this, 'handle_app_page_move'));
     }
 
     /**
@@ -64,6 +70,16 @@ class MrDastbaaf_Admin_Pages_Controller {
             'manage_options',
             self::RECEIPTS_SLUG,
             array($this, 'render_receipts_page')
+        );
+
+        // v1.3.3: صفحات وب‌اپ
+        add_submenu_page(
+            MrDastbaaf_Settings_Controller::MENU_SLUG,
+            'صفحات وب‌اپلیکیشن مستر دستباف',
+            'صفحات وب‌اپ',
+            'manage_options',
+            self::APP_PAGES_SLUG,
+            array($this, 'render_app_pages_page')
         );
     }
 
@@ -867,5 +883,404 @@ class MrDastbaaf_Admin_Pages_Controller {
         }
 
         $this->redirect_to_page(self::RECEIPTS_SLUG);
+    }
+
+    /* ───────────────────── صفحهٔ «صفحات وب‌اپ» (v1.3.3) ───────────────────── */
+
+    /**
+     * برچسب فارسی سطح دسترسی
+     */
+    private function access_label($access) {
+        $labels = array(
+            'all'     => 'همه کاربران',
+            'members' => 'اعضای فعال',
+            'admins'  => 'فقط مدیر کل',
+        );
+        $access = (string) $access;
+        return isset($labels[$access]) ? $labels[$access] : $access;
+    }
+
+    /**
+     * ذخیرهٔ آپشن صفحات وب‌اپ (پاکسازی کامل هر رکورد)
+     *
+     * @param array $entries
+     * @return bool
+     */
+    private function save_app_pages_option(array $entries) {
+        $clean = array();
+        foreach ($entries as $entry) {
+            if (!is_array($entry) || !isset($entry['uid'], $entry['page_id'])) {
+                continue;
+            }
+            $access = isset($entry['access']) ? (string) $entry['access'] : 'all';
+            $clean[] = array(
+                'uid'       => (string) $entry['uid'],
+                'page_id'   => (int) $entry['page_id'],
+                'title'     => isset($entry['title']) ? sanitize_text_field((string) $entry['title']) : '',
+                'access'    => in_array($access, array('all', 'members', 'admins'), true) ? $access : 'all',
+                'is_active' => !empty($entry['is_active']),
+                'sort'      => isset($entry['sort']) ? (int) $entry['sort'] : 0,
+            );
+        }
+        return update_option('mrdastbaaf_app_pages', $clean, false);
+    }
+
+    /**
+     * ساخت شناسهٔ یکتای آلفانومریک برای رکورد صفحه
+     */
+    private function generate_app_page_uid() {
+        $existing = wp_list_pluck(MrDastbaaf_App_Pages_Controller::get_pages_option(), 'uid');
+        do {
+            $uid = 'p' . strtolower(wp_generate_password(10, false, false));
+        } while (in_array($uid, $existing, true));
+        return $uid;
+    }
+
+    /**
+     * فهرست صفحات وب‌اپ + فرم افزودن/ویرایش
+     */
+    public function render_app_pages_page() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $flash = $this->pull_flash();
+        $pages = MrDastbaaf_App_Pages_Controller::get_pages_option();
+        usort($pages, function ($a, $b) {
+            return ($a['sort'] <=> $b['sort']) ?: strcmp($a['uid'], $b['uid']);
+        });
+
+        // حالت ویرایش: ?action=edit&uid=…
+        $editing = null;
+        $edit_action = isset($_GET['action']) ? sanitize_key(wp_unslash($_GET['action'])) : '';
+        if ('edit' === $edit_action && isset($_GET['uid'])) {
+            $edit_uid = sanitize_text_field(wp_unslash($_GET['uid']));
+            foreach ($pages as $entry) {
+                if ($entry['uid'] === $edit_uid) {
+                    $editing = $entry;
+                    break;
+                }
+            }
+        }
+
+        $is_edit = is_array($editing);
+        $current_page_id = $is_edit ? (int) $editing['page_id'] : 0;
+        ?>
+        <div class="wrap mrd-scope">
+            <div class="mrd-hero">
+                <div class="mrd-hero__icon" aria-hidden="true">📄</div>
+                <div>
+                    <h1 class="mrd-hero__title">صفحات وب‌اپلیکیشن</h1>
+                    <p class="mrd-hero__desc">صفحات منتشرشدهٔ سایت را به منوی وب‌اپ اضافه کنید و برای هر صفحه سطح دسترسی تعیین کنید: «همه کاربران» برای مهمان‌ها، «اعضای فعال» فقط برای کاربران با اشتراک فعال و «فقط مدیر کل». محتوای صفحه مستقیماً از ویرایشگر برگهٔ وردپرس خوانده می‌شود.</p>
+                </div>
+            </div>
+
+            <?php $this->render_flash_notice($flash); ?>
+
+            <?php if ('edit' === $edit_action && !$editing): ?>
+                <div class="notice notice-error"><p>صفحهٔ وب‌اپ برای ویرایش یافت نشد؛ شاید پیش از این حذف شده باشد.</p></div>
+            <?php endif; ?>
+
+            <div class="mrd-card">
+            <div class="mrd-table-wrap">
+            <table class="widefat striped">
+                <thead>
+                    <tr>
+                        <th>برچسب در منو</th>
+                        <th>برگهٔ وردپرس</th>
+                        <th>سطح دسترسی</th>
+                        <th>وضعیت</th>
+                        <th>ترتیب</th>
+                        <th>عملیات</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (empty($pages)): ?>
+                        <tr><td colspan="6" class="mrd-empty">هنوز صفحه‌ای به منوی اپ اضافه نشده است؛ با فرم پایین اولین صفحه را اضافه کنید.</td></tr>
+                    <?php else: ?>
+                        <?php $total = count($pages); foreach ($pages as $index => $entry): ?>
+                            <tr>
+                                <td>
+                                    <strong><?php echo esc_html('' !== $entry['title'] ? $entry['title'] : $this->app_page_fallback_title((int) $entry['page_id'])); ?></strong><br />
+                                    <code dir="ltr"><?php echo esc_html($entry['uid']); ?></code>
+                                </td>
+                                <td>
+                                    <?php
+                                    $wp_page = get_post((int) $entry['page_id']);
+                                    if ($wp_page && 'page' === $wp_page->post_type) {
+                                        echo esc_html($wp_page->post_title) . '<br />';
+                                        $view_link = get_permalink($wp_page);
+                                        if (is_string($view_link) && '' !== $view_link) {
+                                            echo '<a href="' . esc_url($view_link) . '" target="_blank" rel="noopener">مشاهده در سایت ↗</a>';
+                                        }
+                                        if ('publish' !== $wp_page->post_status) {
+                                            echo '<br /><span class="mrd-pill mrd-pill--off">برگه منتشرنشده — در اپ نمی‌آید</span>';
+                                        }
+                                    } else {
+                                        echo '<span class="mrd-pill mrd-pill--off">برگه حذف شده</span>';
+                                    }
+                                    ?>
+                                </td>
+                                <td><span class="mrd-pill mrd-pill--<?php echo esc_attr((string) $entry['access']); ?>"><?php echo esc_html($this->access_label($entry['access'])); ?></span></td>
+                                <td>
+                                    <span class="mrd-pill <?php echo $entry['is_active'] ? 'mrd-pill--on' : 'mrd-pill--off'; ?>">
+                                        <?php echo $entry['is_active'] ? 'فعال' : 'غیرفعال'; ?>
+                                    </span>
+                                    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:6px;">
+                                        <input type="hidden" name="action" value="mrdastbaaf_app_page_toggle" />
+                                        <input type="hidden" name="uid" value="<?php echo esc_attr($entry['uid']); ?>" />
+                                        <?php wp_nonce_field('mrdastbaaf_app_page_toggle', 'mrd_nonce'); ?>
+                                        <button type="submit" class="button button-small"><?php echo $entry['is_active'] ? 'غیرفعال کردن' : 'فعال کردن'; ?></button>
+                                    </form>
+                                </td>
+                                <td><?php echo esc_html(number_format_i18n($index + 1)); ?></td>
+                                <td>
+                                    <a class="button button-small" href="<?php echo esc_url(add_query_arg(array('page' => self::APP_PAGES_SLUG, 'action' => 'edit', 'uid' => $entry['uid']), admin_url('admin.php'))); ?>">ویرایش</a>
+                                    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;margin-top:6px;">
+                                        <input type="hidden" name="action" value="mrdastbaaf_app_page_move" />
+                                        <input type="hidden" name="uid" value="<?php echo esc_attr($entry['uid']); ?>" />
+                                        <input type="hidden" name="dir" value="up" />
+                                        <?php wp_nonce_field('mrdastbaaf_app_page_move', 'mrd_nonce'); ?>
+                                        <button type="submit" class="button button-small" <?php disabled(0 === $index); ?> aria-label="انتقال به بالا">↑</button>
+                                    </form>
+                                    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:inline-block;margin-top:6px;">
+                                        <input type="hidden" name="action" value="mrdastbaaf_app_page_move" />
+                                        <input type="hidden" name="uid" value="<?php echo esc_attr($entry['uid']); ?>" />
+                                        <input type="hidden" name="dir" value="down" />
+                                        <?php wp_nonce_field('mrdastbaaf_app_page_move', 'mrd_nonce'); ?>
+                                        <button type="submit" class="button button-small" <?php disabled($total - 1 === $index); ?> aria-label="انتقال به پایین">↓</button>
+                                    </form>
+                                    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:6px;" onsubmit="return confirm('این صفحه از منوی اپ حذف شود؟ برگهٔ وردپرس حذف نمی‌شود.');">
+                                        <input type="hidden" name="action" value="mrdastbaaf_app_page_delete" />
+                                        <input type="hidden" name="uid" value="<?php echo esc_attr($entry['uid']); ?>" />
+                                        <?php wp_nonce_field('mrdastbaaf_app_page_delete', 'mrd_nonce'); ?>
+                                        <button type="submit" class="button button-small button-link-delete">حذف</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </tbody>
+            </table>
+            </div>
+            </div>
+
+            <div class="mrd-card">
+            <h2 class="mrd-card__title"><?php echo $is_edit ? 'ویرایش صفحهٔ وب‌اپ' : 'افزودن صفحهٔ جدید به منوی اپ'; ?></h2>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <input type="hidden" name="action" value="mrdastbaaf_app_page_save" />
+                <input type="hidden" name="page_mode" value="<?php echo $is_edit ? 'edit' : 'add'; ?>" />
+                <?php if ($is_edit): ?>
+                    <input type="hidden" name="uid" value="<?php echo esc_attr($editing['uid']); ?>" />
+                <?php endif; ?>
+                <?php wp_nonce_field('mrdastbaaf_app_page_save', 'mrd_nonce'); ?>
+                <table class="form-table" role="presentation">
+                    <tr>
+                        <th scope="row"><label for="mrd-app-page-id">برگهٔ وردپرس</label></th>
+                        <td>
+                            <?php
+                            wp_dropdown_pages(array(
+                                'post_type'        => 'page',
+                                'post_status'      => 'publish,private',
+                                'sort_column'      => 'post_title',
+                                'sort_order'       => 'ASC',
+                                'name'             => 'page_id',
+                                'id'               => 'mrd-app-page-id',
+                                'show_option_none' => '— انتخاب برگه —',
+                                'option_none_value' => '0',
+                                'selected'         => $current_page_id,
+                            ));
+                            ?>
+                            <p class="description">فقط برگه‌های منتشرشده در اپ سرو می‌شوند؛ محتوای برگه از ویرایشگر وردپرس می‌آید.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="mrd-app-page-title">برچسب در منوی اپ (اختیاری)</label></th>
+                        <td>
+                            <input type="text" id="mrd-app-page-title" name="title" value="<?php echo $is_edit ? esc_attr($editing['title']) : ''; ?>" class="regular-text" maxlength="60" />
+                            <p class="description">خالی بگذارید تا عنوان برگه استفاده شود — حداکثر ۶۰ کاراکتر.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="mrd-app-page-access">سطح دسترسی</label></th>
+                        <td>
+                            <select id="mrd-app-page-access" name="access">
+                                <?php foreach (array('all' => 'همه کاربران (حتی مهمان)', 'members' => 'اعضای فعال (اشتراک فعال)', 'admins' => 'فقط مدیر کل') as $access_key => $access_label): ?>
+                                    <option value="<?php echo esc_attr($access_key); ?>" <?php selected($is_edit ? (string) $editing['access'] : 'all', $access_key); ?>><?php echo esc_html($access_label); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <p class="description">بررسی سطح دسترسی هم در سرور (REST) و هم در نمایش منو انجام می‌شود؛ مهمان هرگز محتوای «اعضای فعال» را دریافت نمی‌کند.</p>
+                        </td>
+                    </tr>
+                </table>
+                <?php submit_button($is_edit ? 'ذخیرهٔ تغییرات' : 'افزودن به منوی اپ'); ?>
+                <?php if ($is_edit): ?>
+                    <p><a href="<?php echo esc_url(add_query_arg(array('page' => self::APP_PAGES_SLUG), admin_url('admin.php'))); ?>">لغو ویرایش و بازگشت به فهرست</a></p>
+                <?php endif; ?>
+            </form>
+            </div>
+        </div>
+        <?php
+    }
+
+    /**
+     * عنوان برگه برای نمایش فهرست (fallback وقتی برچسب خالی است)
+     */
+    private function app_page_fallback_title($page_id) {
+        $title = get_the_title((int) $page_id);
+        return (is_string($title) && '' !== $title) ? $title : ('برگه #' . (int) $page_id);
+    }
+
+    /**
+     * ذخیرهٔ فرم افزودن/ویرایش صفحهٔ وب‌اپ
+     */
+    public function handle_app_page_save() {
+        check_admin_referer('mrdastbaaf_app_page_save', 'mrd_nonce');
+        if (!current_user_can('manage_options')) {
+            wp_die('شما مجوز انجام این عملیات را ندارید.');
+        }
+
+        $mode = isset($_POST['page_mode']) ? sanitize_key(wp_unslash($_POST['page_mode'])) : 'add';
+        $page_id = isset($_POST['page_id']) ? absint($_POST['page_id']) : 0;
+        $title = isset($_POST['title']) ? sanitize_text_field(wp_unslash($_POST['title'])) : '';
+        $access = isset($_POST['access']) ? sanitize_key(wp_unslash($_POST['access'])) : 'all';
+
+        if (!in_array($access, array('all', 'members', 'admins'), true)) {
+            $access = 'all';
+        }
+
+        $wp_page = $page_id ? get_post($page_id) : null;
+        if (!$wp_page || 'page' !== $wp_page->post_type) {
+            $this->flash('error', 'برگهٔ انتخابی معتبر نیست؛ یک برگه از فهرست انتخاب کنید.');
+            $this->redirect_to_page(self::APP_PAGES_SLUG);
+        }
+
+        $pages = MrDastbaaf_App_Pages_Controller::get_pages_option();
+
+        if ('edit' === $mode) {
+            $uid = isset($_POST['uid']) ? sanitize_text_field(wp_unslash($_POST['uid'])) : '';
+            $found = false;
+            foreach ($pages as $index => $entry) {
+                if ($entry['uid'] === $uid) {
+                    $pages[$index]['page_id'] = (int) $page_id;
+                    $pages[$index]['title'] = $title;
+                    $pages[$index]['access'] = $access;
+                    $found = true;
+                    break;
+                }
+            }
+            if (!$found) {
+                $this->flash('error', 'رکورد برای ویرایش یافت نشد؛ شاید حذف شده باشد.');
+                $this->redirect_to_page(self::APP_PAGES_SLUG);
+            }
+            $this->save_app_pages_option($pages);
+            $this->flash('success', 'تغییرات صفحهٔ «' . ('' !== $title ? $title : $wp_page->post_title) . '» ذخیره شد.');
+        } else {
+            if (count($pages) >= 30) {
+                $this->flash('error', 'سقف صفحات وب‌اپ (۳۰ صفحه) پر شده است؛ ابتدا موردی را حذف کنید.');
+                $this->redirect_to_page(self::APP_PAGES_SLUG);
+            }
+            $max_sort = 0;
+            foreach ($pages as $entry) {
+                $max_sort = max($max_sort, (int) $entry['sort']);
+            }
+            $pages[] = array(
+                'uid'       => $this->generate_app_page_uid(),
+                'page_id'   => (int) $page_id,
+                'title'     => $title,
+                'access'    => $access,
+                'is_active' => true,
+                'sort'      => $max_sort + 1,
+            );
+            $this->save_app_pages_option($pages);
+            $this->flash('success', 'صفحهٔ «' . ('' !== $title ? $title : $wp_page->post_title) . '» به منوی اپ اضافه شد.');
+        }
+
+        $this->redirect_to_page(self::APP_PAGES_SLUG);
+    }
+
+    /**
+     * فعال/غیرفعال کردن نمایش صفحه در اپ
+     */
+    public function handle_app_page_toggle() {
+        check_admin_referer('mrdastbaaf_app_page_toggle', 'mrd_nonce');
+        if (!current_user_can('manage_options')) {
+            wp_die('شما مجوز انجام این عملیات را ندارید.');
+        }
+
+        $uid = isset($_POST['uid']) ? sanitize_text_field(wp_unslash($_POST['uid'])) : '';
+        $pages = MrDastbaaf_App_Pages_Controller::get_pages_option();
+        foreach ($pages as $index => $entry) {
+            if ($entry['uid'] === $uid) {
+                $pages[$index]['is_active'] = empty($entry['is_active']);
+                $this->save_app_pages_option($pages);
+                $this->flash('success', $pages[$index]['is_active'] ? 'صفحه فعال شد.' : 'صفحه غیرفعال شد.');
+                break;
+            }
+        }
+
+        $this->redirect_to_page(self::APP_PAGES_SLUG);
+    }
+
+    /**
+     * حذف رکورد صفحهٔ وب‌اپ (برگهٔ وردپرس دست‌نخورده می‌ماند)
+     */
+    public function handle_app_page_delete() {
+        check_admin_referer('mrdastbaaf_app_page_delete', 'mrd_nonce');
+        if (!current_user_can('manage_options')) {
+            wp_die('شما مجوز انجام این عملیات را ندارید.');
+        }
+
+        $uid = isset($_POST['uid']) ? sanitize_text_field(wp_unslash($_POST['uid'])) : '';
+        $pages = MrDastbaaf_App_Pages_Controller::get_pages_option();
+        $remaining = array_values(array_filter($pages, function ($entry) use ($uid) {
+            return $entry['uid'] !== $uid;
+        }));
+
+        if (count($remaining) !== count($pages)) {
+            $this->save_app_pages_option($remaining);
+            $this->flash('success', 'صفحه از منوی اپ حذف شد (برگهٔ وردپرس حفظ شد).');
+        }
+
+        $this->redirect_to_page(self::APP_PAGES_SLUG);
+    }
+
+    /**
+     * جابه‌جایی ترتیب صفحه (بالا/پایین)
+     */
+    public function handle_app_page_move() {
+        check_admin_referer('mrdastbaaf_app_page_move', 'mrd_nonce');
+        if (!current_user_can('manage_options')) {
+            wp_die('شما مجوز انجام این عملیات را ندارید.');
+        }
+
+        $uid = isset($_POST['uid']) ? sanitize_text_field(wp_unslash($_POST['uid'])) : '';
+        $dir = isset($_POST['dir']) ? sanitize_key(wp_unslash($_POST['dir'])) : 'up';
+
+        $pages = MrDastbaaf_App_Pages_Controller::get_pages_option();
+        usort($pages, function ($a, $b) {
+            return ($a['sort'] <=> $b['sort']) ?: strcmp($a['uid'], $b['uid']);
+        });
+
+        $index = null;
+        foreach ($pages as $i => $entry) {
+            if ($entry['uid'] === $uid) {
+                $index = $i;
+                break;
+            }
+        }
+
+        if (null !== $index) {
+            $swap_with = ('up' === $dir) ? $index - 1 : $index + 1;
+            if ($swap_with >= 0 && $swap_with < count($pages)) {
+                $tmp = $pages[$index]['sort'];
+                $pages[$index]['sort'] = $pages[$swap_with]['sort'];
+                $pages[$swap_with]['sort'] = $tmp;
+                $this->save_app_pages_option(array_values($pages));
+                $this->flash('success', 'ترتیب صفحه به‌روزرسانی شد.');
+            }
+        }
+
+        $this->redirect_to_page(self::APP_PAGES_SLUG);
     }
 }
