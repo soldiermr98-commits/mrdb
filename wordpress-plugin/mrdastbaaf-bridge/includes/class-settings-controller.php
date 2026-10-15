@@ -134,6 +134,16 @@ class MrDastbaaf_Settings_Controller {
             'default' => '',
             'show_in_rest' => false,
         ));
+
+        // v1.7.0: حالت استریم پروکسی — URL واقعی ویدیو هرگز به کلاینت نمی‌رسد.
+        // فعال‌سازی: PHP ویدیو را از CDN می‌خواند و byte-by-byte به کلاینت stream می‌کند.
+        // هشدار: بار سرور بالا — فقط برای ویدیوهای حساس فعال کنید.
+        register_setting(self::SETTINGS_GROUP, 'mrdastbaaf_stream_proxy_mode', array(
+            'type' => 'boolean',
+            'sanitize_callback' => function ($v) { return (bool) $v; },
+            'default' => false,
+            'show_in_rest' => false,
+        ));
     }
 
     /**
@@ -231,6 +241,9 @@ class MrDastbaaf_Settings_Controller {
         $video_hosts = (string) get_option('mrdastbaaf_video_hosts', 'dll.mrdastbaaf.com');
         $cron_token = (string) get_option('mrdastbaaf_cron_token', '');
         $cron_example_url = rest_url(MRDASTBAAF_API_NAMESPACE . '/cron/reconcile') . '?token=' . ($cron_token !== '' ? $cron_token : 'TOKEN');
+
+        // v1.7.0: حالت استریم پروکسی — URL واقعی ویدیو پنهان می‌شود
+        $stream_proxy_mode = (bool) get_option('mrdastbaaf_stream_proxy_mode', false);
         ?>
         <div class="wrap mrd-scope">
             <div class="mrd-hero">
@@ -330,6 +343,23 @@ class MrDastbaaf_Settings_Controller {
                             <input type="text" id="mrd-cron-token" value="<?php echo esc_attr($cron_token); ?>" class="regular-text code" dir="ltr" readonly onclick="this.select()" />
                             <p class="description">توکن اختصاصی اندپوینت <code>GET /cron/reconcile?token=…</code> — خودکار تولید شده و فقط-خواندنی است (هیچ‌گاه در پاسخ‌های عمومی نمی‌آید). برای اجرای مطمئن کرون سرور (به‌جای WP-Cron تزویری)، این دستور را در crontab سرور بگذارید:</p>
                             <code dir="ltr"><?php echo esc_html('*/10 * * * * curl -s "' . $cron_example_url . '"'); ?></code>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">
+                            <label for="mrd-stream-proxy">حالت استریم امن (پروکسی)</label>
+                            <span class="mrd-badge mrd-badge--new">v1.7.0</span>
+                        </th>
+                        <td>
+                            <label class="mrd-switch">
+                                <input type="checkbox" id="mrd-stream-proxy" name="mrdastbaaf_stream_proxy_mode" value="1" <?php checked($stream_proxy_mode, true); ?> />
+                                <span class="mrd-switch__slider"></span>
+                            </label>
+                            <p class="description">
+                                <strong>وقتی فعال باشد:</strong> URL واقعی ویدیو (مثل <code dir="ltr">https://dll.mrdastbaaf.com/...</code>) هرگز در DevTools مرورگر دیده نمی‌شود. به جای آن، <code dir="ltr">/wp-json/.../stream?token=...</code> در <code dir="ltr">&lt;video src&gt;</code> قرار می‌گیرد. توکن ۶۰ ثانیه‌ای است و حتی اگه کسی آن را کپی کند، بعد از ۱ دقیقه بی‌اثر می‌شود.
+                                <br><strong>هشدار:</strong> بار سرور بالا — PHP باید هر بایت ویدیو را از CDN بخواند و به کلاینت بفرستد. برای ویدیوهای طولانی یا کاربران هم‌زمان زیاد، ممکن است هاست اشتراکی کُند شود. در صورت مشکل، غیرفعال کنید.
+                                <br><strong>پیش‌فرض:</strong> غیرفعال (URL مستقیم CDN — سریع‌تر ولی قابل دیدن در DevTools).
+                            </p>
                         </td>
                     </tr>
                 </table>

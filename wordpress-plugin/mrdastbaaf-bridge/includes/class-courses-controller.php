@@ -67,6 +67,16 @@ class MrDastbaaf_Courses_Controller {
             'callback' => array($this, 'handle_lesson_playback'),
             'permission_callback' => '__return_true',
         ));
+
+        // v1.7.0: استریم پروکسی — URL واقعی ویدیو هرگز به کلاینت نمی‌رسد.
+        // <video src="/wp-json/.../stream?token=..."> به جای URL مستقیم CDN.
+        // PHP ویدیو را از CDN می‌خواند و byte-by-byte به کلاینت stream می‌کند.
+        // پشتیبانی از Range requests برای seek. توکن کوتاه‌عمر (۶۰ ثانیه).
+        register_rest_route(MRDASTBAAF_API_NAMESPACE, '/lessons/(?P<id>[a-zA-Z0-9_-]+)/stream', array(
+            'methods' => 'GET',
+            'callback' => array($this, 'handle_lesson_stream_proxy'),
+            'permission_callback' => '__return_true',
+        ));
     }
 
     /**
@@ -496,13 +506,200 @@ class MrDastbaaf_Courses_Controller {
         }
         $stored_qualities = array_values($stored_qualities);
 
+        // v1.7.0: استریم پروکسی — وقتی فعال باشد، URL واقعی CDN هرگز به کلاینت
+        // نمی‌رسد. به جای آن، URL اندپوینت پروکسی برمی‌گردد که توکن کوتاه‌عمر دارد.
+        // کلاینت فقط /wp-json/.../stream?token=... را در <video src> می‌بیند.
+        $proxy_mode = (bool) get_option('mrdastbaaf_stream_proxy_mode', false);
+
+        if ($proxy_mode) {
+            // توکن کوتاه‌عمر برای استریم (۶۰ ثانیه — کافی برای شروع پخش)
+            $stream_token = wp_generate_password(20, false);
+            set_transient('mrdastbaaf_strm_' . $stream_token, array(
+                'user_id'   => (int) $user_id,
+                'lesson_id' => (string) $lesson_id,
+                'video_url' => $video_url, // URL واقعی فقط اینجا ذخیره می‌شود — هرگز به کلاینت نمی‌رود
+                'issued_at' => time(),
+            ), 60); // ۶۰ ثانیه
+
+            $base_url = rest_url(MRDASTBAAF_API_NAMESPACE . '/lessons/' . rawurlencode($lesson_id) . '/stream');
+            $proxy_video_url = add_query_arg('token', $stream_token, $base_url);
+
+            // کیفیت‌ها هم پروکسی می‌شوند — هر کدام توکن جداگانه
+            $proxy_qualities = array();
+            foreach ($stored_qualities as $q) {
+                $q_token = wp_generate_password(20, false);
+                set_transient('mrdastbaaf_strm_' . $q_token, array(
+                    'user_id'   => (int) $user_id,
+                    'lesson_id' => (string) $lesson_id,
+                    'video_url' => $q['url'],
+                    'issued_at' => time(),
+                ), 60);
+                $proxy_qualities[] = array(
+                    'label' => $q['label'],
+                    'url'   => add_query_arg('token', $q_token, $base_url),
+                );
+            }
+
+            return rest_ensure_response(array(
+                'videoUrl'     => $proxy_video_url,
+                'watermarkText' => $this->build_watermark($user_id)['text'],
+                'expiresAt'    => gmdate('c', $issued_at + self::TICKET_TTL),
+                'qualities'    => $proxy_qualities,
+                'proxyMode'    => true,
+            ));
+        }
+
         return rest_ensure_response(array(
             'videoUrl' => $video_url,
             'watermarkText' => $this->build_watermark($user_id)['text'],
             'expiresAt' => gmdate('c', $issued_at + self::TICKET_TTL),
             // v1.4.0: [{label,url}, …] — ممکن است خالی باشد (فقط «خودکار»)
             'qualities' => $stored_qualities,
+            'proxyMode' => false,
         ));
+    }
+
+    /**
+     * v1.7.0: استریم پروکسی — URL واقعی ویدیو را از CDN می‌خواند و byte-by-byte
+     * به کلاینت stream می‌کند. کلاینت هرگز URL واقعی dll.mrdastbaaf.com را نمی‌بیند.
+     *
+     * پشتیبانی از HTTP Range requests برای seek. توکن ۶۰ ثانیه‌ای.
+     * حافظه: chunked streaming — کل فایل در حافظه بارگذاری نمی‌شود.
+     */
+    public function handle_lesson_stream_proxy(WP_REST_Request $request) {
+        MrDastbaaf_Auth_Controller::maybe_authenticate_bearer();
+
+        $lesson_id = sanitize_text_field($request->get_param('id'));
+        $token = sanitize_text_field($request->get_param('token'));
+
+        if ('' === $token) {
+            return new WP_Error('missing_token', 'توکن استریم ارسال نشده است.', array('status' => 403));
+        }
+
+        $stream_data = get_transient('mrdastbaaf_strm_' . $token);
+        if (!is_array($stream_data) || !isset($stream_data['video_url'], $stream_data['user_id'], $stream_data['lesson_id'])) {
+            return new WP_Error('expired_token', 'توکن استریم منقضی شده است.', array('status' => 403));
+        }
+
+        // تطبیق درس — توکن باید دقیقاً متعلق به همین درس باشد
+        if ($lesson_id !== (string) $stream_data['lesson_id']) {
+            return new WP_Error('token_mismatch', 'توکن با درس درخواستی مطابقت ندارد.', array('status' => 403));
+        }
+
+        $video_url = (string) $stream_data['video_url'];
+        if ('' === trim($video_url)) {
+            return new WP_Error('no_video', 'ویدیوی این درس در دسترس نیست.', array('status' => 404));
+        }
+
+        // توکن یک‌بارمصرف نیست — ولی کوتاه‌عمر است (۶۰ ثانیه). در طول پخش،
+        // توکن معتبر می‌ماند. اگه کاربر seek کند، Range request جدید با همان
+        // توکن می‌آید — تا وقتی توکن معتبر است، کار می‌کند.
+
+        // اعتبارسنجی نهایی URL (https + allowlist)
+        $allowed_hosts = MrDastbaaf_Admin_Controller::get_allowed_video_hosts();
+        $parsed = wp_parse_url($video_url);
+        $host = isset($parsed['host']) ? strtolower($parsed['host']) : '';
+        $scheme = isset($parsed['scheme']) ? strtolower($parsed['scheme']) : '';
+
+        if ($scheme !== 'https' || !in_array($host, $allowed_hosts, true)) {
+            return new WP_Error('invalid_host', 'هاست ویدیو مجاز نیست.', array('status' => 403));
+        }
+
+        // ─── هدرهای no-cache ───
+        if (!headers_sent()) {
+            header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+            header('Pragma: no-cache');
+            header('Expires: Wed, 11 Jan 1984 05:00:00 GMT');
+        }
+
+        // ─── دریافت اطلاعات فایل از CDN (HEAD request) ───
+        // برای Content-Length و پشتیبانی از Range
+        $ch = curl_init($video_url);
+        curl_setopt_array($ch, array(
+            CURLOPT_NOBODY         => true,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 10,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_USERAGENT      => 'MrDastbaaf-Stream-Proxy/1.7',
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 3,
+        ));
+        curl_exec($ch);
+        $file_size = (int) curl_getinfo($ch, CURLINFO_CONTENT_LENGTH_DOWNLOAD);
+        $content_type = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+        $http_code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($http_code !== 200 || $file_size <= 0) {
+            // اگه HEAD شکست خورد، حداقل Content-Type را ست کن و GET را امتحان کن
+            $content_type = $content_type ?: 'video/mp4';
+            $file_size = 0; // مجهول — stream بدون Range
+        }
+
+        if (empty($content_type) || stripos($content_type, 'text/') !== false) {
+            $content_type = 'video/mp4';
+        }
+
+        // ─── پشتیبانی از Range requests (برای seek) ───
+        $range_header = isset($_SERVER['HTTP_RANGE']) ? $_SERVER['HTTP_RANGE'] : '';
+        $start = 0;
+        $end = $file_size - 1;
+
+        if ($file_size > 0 && preg_match('/bytes=(\d+)-(\d*)/', $range_header, $matches)) {
+            $start = (int) $matches[1];
+            $end = isset($matches[2]) && $matches[2] !== '' ? (int) $matches[2] : $file_size - 1;
+            if ($start > $end || $end >= $file_size) {
+                status_header(416); // Range Not Satisfiable
+                header('Content-Range: bytes */' . $file_size);
+                exit;
+            }
+            status_header(206); // Partial Content
+        } else {
+            status_header(200);
+        }
+
+        // ─── هدرهای استریم ───
+        header('Content-Type: ' . $content_type);
+        header('Accept-Ranges: bytes');
+        if ($file_size > 0) {
+            header('Content-Length: ' . ($end - $start + 1));
+            if (isset($matches)) {
+                header('Content-Range: bytes ' . $start . '-' . $end . '/' . $file_size);
+            }
+        }
+        header('Content-Disposition: inline');
+        header('X-Content-Type-Options: nosniff');
+
+        // ─── غیرفعال‌سازی output buffering ───
+        while (ob_get_level() > 0) {
+            ob_end_flush();
+        }
+        @set_time_limit(0); // برای ویدیوهای طولانی
+
+        // ─── استریم chunked از CDN به کلاینت ───
+        $range = $file_size > 0 ? "$start-$end" : '0-';
+        $ch = curl_init($video_url);
+        curl_setopt_array($ch, array(
+            CURLOPT_RETURNTRANSFER => false,
+            CURLOPT_TIMEOUT        => 0,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_USERAGENT      => 'MrDastbaaf-Stream-Proxy/1.7',
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 3,
+            CURLOPT_RANGE          => $range,
+            CURLOPT_WRITEFUNCTION  => function ($curl, $data) {
+                echo $data;
+                @flush();
+                // اگه کلاینت connection را قطع کرد، توقف کن
+                if (connection_aborted()) {
+                    return -1; // curl را متوقف می‌کند
+                }
+                return strlen($data);
+            },
+        ));
+        curl_exec($ch);
+        curl_close($ch);
+        exit;
     }
 
     /**
