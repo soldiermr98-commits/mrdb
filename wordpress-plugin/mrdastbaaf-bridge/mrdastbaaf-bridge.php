@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.7.0
+ * Version: 1.7.1
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
