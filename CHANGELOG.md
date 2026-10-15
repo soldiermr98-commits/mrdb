@@ -5,6 +5,39 @@
 
 ---
 
+## [Plugin 1.7.3] — روش رسمی LiteSpeed Cache API (تشکر از مشورت فنی همکار)
+
+> تشکر از همکار (مشورت فنی): راه‌حل دقیق‌تر از روش قبلی پیشنهاد شد و پیاده‌سازی شد.
+
+### افزونهٔ وردپرس — نسخه 1.7.3
+
+- **[CRITICAL FIX] روش رسمی LiteSpeed Cache API:** فیلتر جدید `rest_post_dispatch` با `do_action('litespeed_control_set_nocache', ...)` — مستقیم به پلاگین LiteSpeed Cache می‌گوید پاسخ را کش نکند.
+  - این قوی‌تر از `header()` است چون:
+    ۱) `rest_post_dispatch` در زمان درست اجرا می‌شود (بعد از پردازش، قبل از ارسال)
+    ۲) `litespeed_control_set_nocache` API رسمی پلاگین LiteSpeed Cache است
+    ۳) `$result->header()` متد رسمی `WP_REST_Response` است (نه `header()` خام)
+  - اگه پلاگین LiteSpeed Cache فعال نباشد، `do_action` یک no-op است (هیچ خطایی نمی‌دهد) — پس روی همه هاست‌ها امن است.
+
+- **[KEEP] روش قبلی (header()) هم نگه داشته شد** به‌عنوان fallback برای سرورهایی که LiteSpeed Web Server دارند ولی پلاگین فعال نیست.
+
+### چرا این مهم است
+
+تست زنده روی API واقعی نشان داد:
+```
+cache-control: no-store, no-cache, must-revalidate, max-age=0   ← هدر درست ست می‌شد
+x-litespeed-cache: hit                                          ← ولی LiteSpeed کش کرده بود!
+```
+
+یعنی هدر ما درست بود، ولی پلاگین LiteSpeed Cache **قبل از رسیدن هدر به کلاینت**، تصمیم می‌گرفت کش کند. تنها راه دور زدن این، استفاده از API رسمی خود پلاگینه: `do_action('litespeed_control_set_nocache', ...)`.
+
+### استقرار
+
+۱. **افزونه v1.7.3** را نصب کنید (PWA v1.5.4 بدون تغییر باقی می‌ماند).
+۲. به کاربران بگویید یک بار `app.mrdastbaaf.com/#/debug` را باز کنند و «پاک‌سازی کامل و بارگذاری مجدد» را بزنند.
+۳. از این به بعد، پاسخ‌های REST افزونه **هرگز** توسط LiteSpeed کش نمی‌شوند.
+
+---
+
 ## [1.5.4 / Plugin 1.7.2] — فاجعهٔ کش حل شد: cache-busting + version checker + content_hash
 
 > ریشهٔ مشکل: تست زنده نشان داد LiteSpeed Cache روی هاست اشتراکی cPanel هدرهای `Cache-Control: no-store, no-cache, must-revalidate` ما را **نادیده می‌گیرد** و پاسخ‌های REST را کش می‌کند (header: `x-litespeed-cache: hit`). این یعنی وقتی کارفرما قیمت را عوض می‌کند، کاربر همچنان قیمت قدیمی را می‌بیند!
