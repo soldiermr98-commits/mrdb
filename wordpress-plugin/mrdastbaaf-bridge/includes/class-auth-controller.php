@@ -155,16 +155,17 @@ class MrDastbaaf_Auth_Controller {
         update_option('mrdastbaaf_otp_hourly_started', $global_window_started, false);
 
         /**
-         * v1.7.6: ارسال OTP هرگز در درخواست REST اجرا نمی‌شود (حادثهٔ ۲۰۲۶/۱۰/۱۶:
-         * مسیر همگامِ «تولید کد + ارسال» تا ۴۶-۶۲ ثانیه و پاسخ ۲۰۰ با بدنهٔ خالی —
-         * وب‌اپ با سقف ۲۰ ثانیه‌ای پیام تایم‌اوت می‌داد). کد به صف WP-Cron واگذار
-         * می‌شود (spawn_cron شروع فوری می‌کند) و نتیجه با زمان‌سنجی مراحل در
-         * mrdastbaaf_sms_last_log ثبت می‌شود تا ادمین در تنظیمات ببیند.
-         * هوک سفارشی «mrdastbaaf_send_otp_sms» در مسیر پس‌زمینه اجرا می‌شود تا
-         * افزونه‌های ثالث بدون تغییر کار کنند.
-         * فقط وقتی صف‌کردن شکست بخورد (سرویس پیامک تنظیم/تکمیل نیست یا خطای
-         * زمان‌بندی)، تلاش همگامِ سبک انجام می‌شود که هیچ تماس شبکه‌ای ندارد و
-         * هشدار دقیق فارسی را همان‌جا به کلاینت می‌دهد.
+         * v1.7.7: مسیر پاسخ REST هیچ عملیات زمان‌بندی/شبکه‌ای/هوکی ندارد.
+         * حادثهٔ ۱.۷.۶/پروب‌های زندهٔ پروداکشن: حتی schedule_async_send/spawn_cron
+         * در درخواست می‌توانست پاسخ را تا ۷۴.۶s نگه دارد (HTTP 200 با ۰ بایت؛
+         * rate-limit در «همان درخواست معلق» نوشته شده بود → تعلیق بعد از نوشتن‌ها
+         * و قبل از پاسخ بود). اکنون:
+         *  - اگر سرویس پیامک آماده باشد یا افزونه‌ای به هوک «mrdastbaaf_send_otp_sms»
+         *    وصل باشد: ارسال به shutdown واگذار می‌شود (بعد از fastcgi_finish_request
+         *    اجرا می‌شود؛ پاسخ ~۲ ثانیه‌ای به کلاینت تحویل می‌شود).
+         *  - وگرنه: هشدار دقیق «تنظیم‌نبودن سرویس» بلافاصله در همان پاسخ می‌رود.
+         * نتیجه با زمان‌سنجی مراحل (هوک ثالث / ملی‌پیامک) در mrdastbaaf_sms_last_log
+         * ثبت می‌شود تا ریشهٔ هر تأخیر از پیشخوان قابل تشخیص باشد.
          */
         $response = array(
             'success' => true,
@@ -176,15 +177,12 @@ class MrDastbaaf_Auth_Controller {
             'isRegistered' => !empty($existing_user),
         );
 
-        if (!MrDastbaaf_Sms_Service::schedule_async_send($phone, $otp_code)) {
-            // fallback همگامِ سبک — یا سرویس/اعتبارنامه آماده نیست (خطای فوری بدون شبکه)
-            // یا زمان‌بندی WP-Cron شکست خورد؛ در هر دو حالت کد در سامانه معتبر می‌ماند.
-            $sms_result = MrDastbaaf_Sms_Service::send_otp($phone, $otp_code, 'full');
-            if (true !== $sms_result) {
-                // حتی اگر ارسال پیامک شکست خورد، کد در سیستم معتبر است — پاسخ موفق
-                // برگردانده می‌شود و فقط هشدار به کلاینت می‌رود.
-                $response['smsWarning'] = is_string($sms_result) ? $sms_result : 'ارسال پیامک با خطا مواجه شد؛ کد تایید شما در سامانه معتبر است.';
-            }
+        if (MrDastbaaf_Sms_Service::is_ready() || has_action('mrdastbaaf_send_otp_sms')) {
+            // واگذاری به shutdown — در مسیر پاسخ فقط ثبت صف است (چند millisecond)
+            MrDastbaaf_Sms_Service::queue_shutdown_send($phone, $otp_code);
+        } else {
+            // سرویس تنظیم نشده و افزونهٔ ثالثی هم روی هوک نیست — هشدار فوری بدون هیچ تماس شبکه‌ای
+            $response['smsWarning'] = 'سرویس پیامک هنوز تنظیم نشده است؛ کد تایید شما در سامانه معتبر است اما پیامکی ارسال نشد.';
         }
 
         return rest_ensure_response($response);
