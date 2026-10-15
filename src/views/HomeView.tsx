@@ -321,7 +321,16 @@ export const HomeView: React.FC<HomeViewProps> = ({
         //    دسته‌بندی لازم ندارن»)؛ ردیف ذخیره‌شدهٔ قدیمی در /app-ui نادیده گرفته می‌شود.
 
         // 3. FEATURED COURSES
+        // v1.5.2 — نشت ادمین به کاربر عادی:
+        // قبلاً وقتی دورهٔ ویژه‌ای وجود نداشت، کارت «هنوز دوره ویژه‌ای منتشر نشده است»
+        // به همهٔ کاربران نشان داده می‌شد و متن «این بخش از پیشخوان وردپرس مدیریت
+        // می‌شود» برای کاربر عادی نامناسب بود. حالا:
+        //   - کاربر عادی: کل سکشن مخفی می‌شود (مثل shop خالی)
+        //   - مدیر: راهنمای پیشخوان می‌بیند (برای راهنمایی خودش)
         if (sec.key === 'featured_courses') {
+          const isFeaturedEmpty = !isCoursesLoading && featuredCourses.length === 0;
+          if (isFeaturedEmpty && currentUser?.role !== 'admin') return null;
+
           return (
             <section key={sec.id} className="max-w-5xl mx-auto px-4">
               <div className="flex items-end justify-between mb-4">
@@ -358,14 +367,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
                     </div>
                   ))}
                 </div>
-              ) : featuredCourses.length === 0 ? (
-                // BUG-53: explicit empty-state card instead of an empty grid
-                // v1.2.8: راهنمای کارفرما — انتخاب دوره‌های برگزیده از پیشخوان
-                <div className="bg-white rounded-2xl p-10 text-center border border-stone-200 text-stone-500 space-y-2">
-                  <BookOpen className="w-10 h-10 text-stone-300 mx-auto" />
-                  <h3 className="font-bold text-sm text-stone-800">هنوز دوره ویژه‌ای منتشر نشده است</h3>
-                  <p className="text-xs text-stone-500 leading-relaxed">
-                    این بخش از پیشخوان وردپرس مدیریت می‌شود: مستر دستباف ← محتوای وب‌اپ ← دوره‌های برگزیده
+              ) : isFeaturedEmpty ? (
+                // v1.5.2: فقط برای مدیر — راهنمای مسیر پیشخوان (کاربر عادی کل سکشن را نمی‌بیند)
+                <div className="bg-white rounded-2xl p-8 text-center border border-amber-200 text-amber-900 space-y-2 max-w-xl mx-auto">
+                  <BookOpen className="w-8 h-8 text-amber-400 mx-auto" />
+                  <p className="text-xs leading-relaxed">
+                    دوره‌های برگزیده از پیشخوان ← مستر دستباف ← محتوای وب‌اپ ← دوره‌های برگزیده انتخاب می‌شوند.
                   </p>
                 </div>
               ) : (

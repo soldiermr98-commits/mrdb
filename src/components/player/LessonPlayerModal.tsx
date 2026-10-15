@@ -76,7 +76,20 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
   const totalDuration =
     currentLesson.durationMinutes * 60 ||
     (Number.isFinite(realVideoDuration) && realVideoDuration > 0 ? Math.ceil(realVideoDuration) : 0);
-  const [playbackSpeed, setPlaybackSpeed] = useState<'0.75' | '1' | '1.25' | '1.5'>('1');
+  // v1.5.2: گسترش بازهٔ سرعت پخش تا ۲x — کلاینت‌ساید، بدون نیاز به سرور.
+  // واترمارک (watermarkText + watermarkUserId) DOM overlay است و توسط سرور در
+  // ticket برای user_id صادر شده — playbackRate روی آن بی‌تأثیر است. ذخیرهٔ
+  // سرعت انتخاب‌شده در localStorage تا در درس‌های بعدی حفظ شود.
+  type PlaybackSpeed = '0.75' | '1' | '1.25' | '1.5' | '1.75' | '2';
+  const ALLOWED_RATES: readonly PlaybackSpeed[] = ['0.75', '1', '1.25', '1.5', '1.75', '2'];
+  const [playbackSpeed, setPlaybackSpeed] = useState<PlaybackSpeed>(() => {
+    try {
+      const saved = localStorage.getItem('mrdastbaaf_playback_rate');
+      return saved && (ALLOWED_RATES as readonly string[]).includes(saved) ? (saved as PlaybackSpeed) : '1';
+    } catch {
+      return '1';
+    }
+  });
   const [isMuted, setIsMuted] = useState(false);
   const [ticket, setTicket] = useState<VideoStreamingTicket | null>(null);
   // v1.1.0 Real-API: وقتی بلیط videoUrl واقعی دارد، پخش بومی <video> جایگزین شبیه‌ساز می‌شود.
@@ -923,16 +936,26 @@ export const LessonPlayerModal: React.FC<LessonPlayerModalProps> = ({
                   {isMuted ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4" />}
                 </button>
 
-                {/* Speed selector */}
+                {/* v1.5.2: Speed selector — کلاینت‌ساید، حفظ در localStorage.
+                    واترمارک DOM overlay است و playbackRate روی آن اثر ندارد. */}
                 <div className="flex items-center gap-1 bg-stone-800 px-2 py-0.5 rounded-md text-[11px]">
                   <span className="text-stone-400">سرعت:</span>
-                  {(['0.75', '1', '1.25', '1.5'] as const).map((s) => (
+                  {(['0.75', '1', '1.25', '1.5', '1.75', '2'] as const).map((s) => (
                     <button
                       key={s}
-                      onClick={() => setPlaybackSpeed(s)}
+                      onClick={() => {
+                        setPlaybackSpeed(s);
+                        try {
+                          localStorage.setItem('mrdastbaaf_playback_rate', s);
+                        } catch {
+                          // ignore — localStorage در دسترس نیست
+                        }
+                      }}
                       className={`px-1 rounded ${
                         playbackSpeed === s ? 'text-amber-400 font-bold' : 'text-stone-400 hover:text-stone-200'
                       }`}
+                      aria-label={`سرعت پخش ${s} برابر`}
+                      aria-pressed={playbackSpeed === s}
                     >
                       {s}x
                     </button>
