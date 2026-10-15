@@ -24,7 +24,11 @@
 
 ## لایهٔ ۱ — Hotlink Protection (الان پیاده‌سازی شد ✅)
 
-**فایل:** `docs/DLL_HOST_HTACCESS.sample` را در ریشهٔ `dll.mrdastbaaf.com` قرار دهید.
+**هاست:** cPanel 138 + Apache 2.4.67 + BitNinja WAF (60GB package)
+
+**فایل‌ها:**
+- `docs/DLL_HOST_HTACCESS.sample` — فایل `.htaccess` آماده (Apache 2.4 syntax)
+- `docs/DLL_HOST_INSTALL.md` — راهنمای گام‌به‌گام نصب و تست
 
 **تأثیر:**
 - ✅ URL از `app.mrdastbaaf.com` کار می‌کند
@@ -32,10 +36,26 @@
 - ❌ Hotlink از سایت/تلگرام/اینستاگرام → 403
 - ❌ wget/curl بدون Referer → 403
 - ✅ موتورهای جستجوی مجاز (Google/Bing/Yandex) → دسترسی دارند
+- ✅ کاربران بدون Referer (privacy browsers) → دسترسی دارند (fail-open)
 
 **محدودیت:** یک هکر می‌تواند Referer را جعل کند (با curl `--referer` یا افزونه‌های مرورگر). این لایه ۹۰٪ اشتراک‌گذاری کژوال را متوقف می‌کند، نه ۱۰۰٪.
 
-**نصب:** این فایل را به‌عنوان `.htaccess` در ریشهٔ `dll.mrdastbaaf.com` قرار دهید. اگه mod_setenvif فعال باشد (روی اکثر cPanel ها هست)، فوراً کار می‌کند.
+**نصب:** فایل `docs/DLL_HOST_HTACCESS.sample` را به‌عنوان `.htaccess` در ریشهٔ `dll.mrdastbaaf.com` (جایی که پوشهٔ `FA/` هست) قرار دهید. راهنمای کامل در `docs/DLL_HOST_INSTALL.md`.
+
+**تست زندهٔ قبل از اعمال (تأیید مشکل):**
+```
+بدون Referer:            HTTP 200 ← ویدیو سرو می‌شود (مشکل!)
+با Referer telegram:      HTTP 200 ← ویدیو سرو می‌شود (مشکل!)
+```
+هدف: بعد از اعمال، باید تبدیل شوند به:
+```
+بدون Referer:             HTTP 200 (اجازه — برای کاربران قانونی بدون Referer)
+با Referer app:           HTTP 200 (اجازه — پخش در اپ)
+با Referer telegram:      HTTP 403 (رد — hotlink متوقف شد)
+با Referer evil-site:    HTTP 403 (رد)
+```
+
+**توجه دربارهٔ BitNinja WAF:** هاست شما از BitNinja-WafPro به‌عنوان reverse proxy جلوی Apache استفاده می‌کند (header `server: BitNinja-WafPro`, `via: 1.1 Caddy`). این به این معناست که BitNinja درخواست را اول می‌بیند، ولی `.htaccess` همچنان توسط Apache پردازش می‌شود. اگه با وجود `.htaccess` درست، hotlink همچنان کار کرد، باید به پشتیبانی هاست تیکت بزنید و بپرسید «آیا BitNinja قبل از Apache Referer را strip می‌کند؟».
 
 ---
 
