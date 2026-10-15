@@ -85,6 +85,23 @@ describe('apiClient hardening', () => {
     expect(init.credentials).toBe('omit');
   });
 
+  it('v1.5.6 CORS contract: requests never send Pragma — incident 2026-10-15', async () => {
+    // ریشهٔ حادثهٔ «ارتباط با سرور برقرار نشد»: هدر Pragma (non-safelisted) به
+    // preflight می‌رفت و در allow-headers افزونه نبود → کل فچ‌های مرورگر شکست
+    // می‌خوردند. این تست قرارداد حیاتی است: Pragma هرگز نباید برگردد.
+    fetchMock.mockResolvedValueOnce(rawResponse(200, JSON.stringify([])));
+    const client = await loadRealClient();
+
+    await client.apiFetch('/courses');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Accept).toBe('application/json');
+    expect(headers['Cache-Control']).toBe('no-cache');
+    expect(headers.Pragma).toBeUndefined();
+    expect(Object.keys(headers).some((k) => k.toLowerCase() === 'pragma')).toBe(false);
+  });
+
   it('401 on a non-auth request keeps the token and passes the server message through', async () => {
     storage.setItem(TOKEN_KEY, 'tok-keep');
     fetchMock.mockResolvedValueOnce(

@@ -30,6 +30,8 @@ import { BottomNav } from './components/common/BottomNav';
 import { MenuSheet } from './components/common/MenuSheet';
 import { OfflineIndicator } from './components/common/OfflineIndicator';
 import { PWAUpdatePrompt } from './components/common/PWAUpdatePrompt';
+// v1.5.6: بنر مرئی «نسخهٔ جدید آماده است» — رویداد UPDATE_READY_EVENT از useVersionChecker
+import { UpdateReadyBanner } from './components/common/UpdateReadyBanner';
 
 // Modals
 import { PhoneLoginModal } from './components/auth/PhoneLoginModal';
@@ -668,6 +670,10 @@ export default function App() {
       {/* DEV-7: PWA update prompt — fixed bottom card when a new service
           worker is waiting in prompt mode (no scroll lock, dismissible). */}
       <PWAUpdatePrompt />
+
+      {/* v1.5.6: بنر «نسخهٔ جدید آماده است» با دکمهٔ بروزرسانی — زمانی که نسخهٔ
+          منتشرشده روی سرور (پیشخوان افزونه) از باندل فعلی جدیدتر باشد. */}
+      <UpdateReadyBanner />
 
       {/* Top Header */}
       <Header

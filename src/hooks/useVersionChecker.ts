@@ -1,6 +1,6 @@
 /**
  * @file src/hooks/useVersionChecker.ts
- * @description v1.5.4 → v1.5.5 — بررسی خودکار نسخهٔ PWA و محتوای سرور.
+ * @description v1.5.4 → v1.5.6 — بررسی خودکار نسخهٔ PWA و محتوای سرور.
  *
  * ریشهٔ «کاربر نسخهٔ قدیمی می‌بیند»:
  *   - SW قدیمی چسبیده و autoUpdate کار نمی‌کند
@@ -9,23 +9,26 @@
  * راه‌حل:
  *   ۱) هر ۲ دقیقه GET /version را صدا می‌زنیم (با cache-busting query param)
  *   ۲) pwa_version و content_hash را با نسخهٔ محلی مقایسه می‌کنیم
- *   ۳) اگه pwa_version «جدیدتر» بود → نسخهٔ جدید PWA مستقر شده → force reload
+ *   ۳) اگه pwa_version «جدیدتر» بود → رویداد UPDATE_READY_EVENT منتشر می‌شود و
+ *      بنر «نسخهٔ جدید آماده است» با دکمهٔ «بروزرسانی» نمایش داده می‌شود
+ *      (UpdateReadyBanner) — v1.5.6: به‌جای reload خاموشِ v1.5.5، کاربر خودش
+ *      کلیک می‌کند؛ دقیقاً همان UX نسخه‌های اولیهٔ محصول.
  *   ۴) اگه content_hash عوض شده بود → کارفرما چیزی در پیشخوان عوض کرده
- *      → یک رویداد سفارشی emit می‌کنیم تا ویوها داده‌ها را refetch کنند
+ *      → رویداد CONTENT_CHANGED_EVENT منتشر می‌شود تا ویوها refetch کنند
  *      (بدون reload کامل صفحه — فقط refresh داده‌ها)
  *
  * ─── فیکس v1.5.5 (باگ حلقهٔ reload) ────────────────────────────────────────
- *   چکر v1.5.4 با «!==» مقایسه می‌کرد؛ اگر گزینهٔ نسخهٔ سرور «قدیمی‌تر» از
- *   باندل کلاینت بود (مثلاً سرور 1.5.3 و باندل 1.5.4 — دقیقاً اتفاقی که در
- *   استقرار 1.5.4 افتاد چون option هنوز ساخته نشده بود)، کلاینت بی‌نهایت
- *   reload می‌شد و درخواست‌های نیمه‌کاره (verify-otp) قطع می‌شدند → پیام
- *   «ارتباط با سرور برقرار نشد» با اینترنت کاملاً سالم.
- *   - اکنون فقط «سرور جدیدتر» → reload (semver compare — utils/versionCompare)
- *   - گارد ضدحلقهٔ sessionStorage: برای هر نسخهٔ سرور حداکثر یک reload در
- *     ۹۰ ثانیه؛ حتی اگر منطق semver به هر دلیلی دور زده شود.
- *   - قبل از reload، registration.update() صدا زده می‌شود تا مرورگر در همان
- *     ناوبری sw.js جدید را بگیرد و precache تازه ساخته شود (یک سیکل به‌روزرسانی
- *     SW به‌جای دو سیکل).
+ *   چکر v1.5.4 با «!==» مقایسه می‌کرد؛ اگر نسخهٔ سرور «قدیمی‌تر» از باندل
+ *   کلاینت بود، کلاینت بی‌نهایت reload می‌شد. اکنون فقط «سرور جدیدتر» →
+ *   رویداد/بنر (semver compare — utils/versionCompare).
+ *
+ * ─── فیکس v1.5.6 (حادثهٔ CORS «ارتباط با سرور برقرار نشد») ─────────────────
+ *   - هدر «Pragma: no-cache» از این fetch حذف شد: Pragma در preflight CORS به
+ *     Access-Control-Request-Headers می‌رفت و در فهرست allow-headers افزونه
+ *     نبود → کل فچ‌های بین‌دامنه‌ای (شامل همین چکر نسخه!) با TypeError شکست
+ *     می‌خوردند؛ یعنی مکانیزم آپدیت هم عملاً مرده بود. (پست‌مورتام در CHANGELOG)
+ *   - reload خاموش → بنر مرئی با کلیک کاربر (خواستهٔ صریح کارفرما — UX نسخه‌های
+ *     اولیه: «نسخه جدید آماده است؛ بروزرسانی»).
  */
 
 import { useEffect, useRef } from 'react';
@@ -35,8 +38,8 @@ import { shouldForcePwaReload } from '../utils/versionCompare';
 const VERSION_CHECK_INTERVAL_MS = 2 * 60 * 1000; // ۲ دقیقه
 const VERSION_CHECK_TIMEOUT_MS = 8000; // ۸ ثانیه — نباید کاربر را معطل کند
 
-const RELOAD_GUARD_KEY = 'mrdastbaaf_version_reload';
-const RELOAD_GUARD_WINDOW_MS = 90_000; // ۹۰ ثانیه
+/** کلید sessionStorage برای «کاربر این نسخهٔ سرور را رد کرد» (بنر دیگر نیاید) */
+const DISMISS_KEY_PREFIX = 'mrdastbaaf_update_dismissed_';
 
 interface ServerVersionInfo {
   pwa_version: string;
@@ -50,25 +53,29 @@ interface ServerVersionInfo {
 // رویداد داخلی اپ — ویوها به آن گوش می‌دهند تا داده‌ها را refetch کنند
 export const CONTENT_CHANGED_EVENT = 'mrdastbaaf:content-changed';
 
-let lastContentHash: string | null = null;
-let isReloading = false;
+/** v1.5.6 — رویداد «نسخهٔ جدید روی سرور مستقر شده» → UpdateReadyBanner گوش می‌دهد */
+export const UPDATE_READY_EVENT = 'mrdastbaaf:update-ready';
 
-/** گارد ضدحلقه: آیا اخیراً (۹۰ثانیه) برای همین نسخهٔ سرور reload کرده‌ایم؟ */
-function wasRecentReloadFor(serverVersion: string): boolean {
+export interface UpdateReadyDetail {
+  serverVersion: string;
+}
+
+let lastContentHash: string | null = null;
+let lastEmittedVersion: string | null = null;
+
+/** آیا کاربر بنر این نسخهٔ سرور را بسته است؟ (تا آخرین سشن دیگر مزاحم نشود) */
+function wasDismissedByUser(serverVersion: string): boolean {
   try {
-    const raw = sessionStorage.getItem(RELOAD_GUARD_KEY);
-    if (!raw) return false;
-    const parsed = JSON.parse(raw) as { v?: string; t?: number };
-    return parsed.v === serverVersion && typeof parsed.t === 'number'
-      && Date.now() - parsed.t < RELOAD_GUARD_WINDOW_MS;
+    return sessionStorage.getItem(DISMISS_KEY_PREFIX + serverVersion) === '1';
   } catch {
     return false;
   }
 }
 
-function markReloadFor(serverVersion: string): void {
+/** علامت‌گذاری «این نسخه رد شد» — توسط خود بنر صدا زده می‌شود */
+export function dismissUpdateBanner(serverVersion: string): void {
   try {
-    sessionStorage.setItem(RELOAD_GUARD_KEY, JSON.stringify({ v: serverVersion, t: Date.now() }));
+    sessionStorage.setItem(DISMISS_KEY_PREFIX + serverVersion, '1');
   } catch {
     /* حالت private مرورگر — بی‌اهمیت */
   }
@@ -95,6 +102,15 @@ async function kickServiceWorkerUpdate(): Promise<void> {
   }
 }
 
+/**
+ * v1.5.6 — اجرای بروزرسانی پس از کلیک کاربر روی «بروزرسانی»:
+ * SW را update می‌کند و با URL کش‌باست‌شده reload می‌کند (در همان هش فعلی).
+ */
+export async function triggerPwaUpdate(): Promise<void> {
+  await kickServiceWorkerUpdate();
+  window.location.href = `/?_=${Date.now()}#${window.location.hash}`;
+}
+
 export function useVersionChecker(localPwaVersion: string): void {
   const versionRef = useRef(localPwaVersion);
   versionRef.current = localPwaVersion;
@@ -105,7 +121,7 @@ export function useVersionChecker(localPwaVersion: string): void {
     let cancelled = false;
 
     const checkVersion = async () => {
-      if (cancelled || isReloading) return;
+      if (cancelled) return;
 
       try {
         // cache-busting: ?_=timestamp — LiteSpeed نتواند کش کند
@@ -119,7 +135,7 @@ export function useVersionChecker(localPwaVersion: string): void {
           headers: {
             Accept: 'application/json',
             'Cache-Control': 'no-cache',
-            Pragma: 'no-cache',
+            // v1.5.6: Pragma حذف شد — ریشهٔ حادثهٔ CORS؛ جزئیات بالای فایل
           },
           signal: controller.signal,
         });
@@ -131,20 +147,21 @@ export function useVersionChecker(localPwaVersion: string): void {
 
         if (cancelled) return;
 
-        // ۱) بررسی نسخهٔ PWA — فقط وقتی «سرور جدیدتر» است reload کن (فیکس v1.5.5)
+        // ۱) بررسی نسخهٔ PWA — فقط وقتی «سرور جدیدتر» است بنر بده (فیکس v1.5.5)
         const serverVersion = data.pwa_version?.trim();
         const localVersion = versionRef.current.trim();
         if (
           serverVersion
           && shouldForcePwaReload(serverVersion, localVersion)
-          && !wasRecentReloadFor(serverVersion)
+          && lastEmittedVersion !== serverVersion
+          && !wasDismissedByUser(serverVersion)
         ) {
-          // نسخهٔ جدید روی سرور است — force reload
-          // cache-busting URL تا SW نتواند از کش سرو کند
-          isReloading = true;
-          markReloadFor(serverVersion);
-          void kickServiceWorkerUpdate();
-          window.location.href = `/?_=${Date.now()}#${window.location.hash}`;
+          lastEmittedVersion = serverVersion;
+          window.dispatchEvent(
+            new CustomEvent<UpdateReadyDetail>(UPDATE_READY_EVENT, {
+              detail: { serverVersion },
+            })
+          );
           return;
         }
 

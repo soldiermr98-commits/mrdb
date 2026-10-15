@@ -2,7 +2,7 @@
 
 پلتفرم مدرن، واکنش‌گرا (موبایل‌محور)، راست‌چین (RTL) و پیش‌رونده (PWA) برای وب‌سایت آموزشی **مستر دستباف** ([mrdastbaaf.com](https://mrdastbaaf.com)).
 
-**نسخه فعلی: وب‌اپ `1.5.5` · افزونهٔ وردپرس `1.7.4`** — اتصال تجاری Real-API (v1.1.0) + سخت‌سازی پیش‌لایو (v1.2.0) + موج ویژگی‌های تجاری ۲ (v1.3.0 تا کنون) + آپدیت خودکار کلاینت‌ها (v1.5.5/1.7.4)
+**نسخه فعلی: وب‌اپ `1.5.6` · افزونهٔ وردپرس `1.7.5`** — اتصال تجاری Real-API (v1.1.0) + سخت‌سازی پیش‌لایو (v1.2.0) + موج ویژگی‌های تجاری ۲ (v1.3.0 تا کنون) + آپدیت خودکار کلاینت‌ها با UX «نسخهٔ جدید آماده است» (v1.5.6/1.7.5)
 
 ---
 
@@ -19,11 +19,19 @@
 | **موج تجاری ۲** — ثبت‌نام با نام، «دوره‌های من»، کیفیت چندگانهٔ ویدیو، مدت جلسات، خرید تک‌دوره‌ای زیبال، محصولات ویژه، خرید درون‌اپ محصول فیزیکی با سفارش ووکامرس | ✅ تکمیل (وب‌اپ 1.3.0–1.5.0 / افزونه 1.4.0–1.6.0) |
 | **ضدکش و آپدیت خودکار** — کش‌باستینگ GET، چکر نسخه، روش رسمی LiteSpeed API (1.7.2–1.7.3) | ✅ تکمیل (وب‌اپ 1.5.3–1.5.4 / افزونه 1.7.0–1.7.3) |
 | **فیکس حلقهٔ reload + آپدیت خودکار رسمی کاربران نصب‌کرده** — مقایسهٔ semver، گارد ضدحلقه، فیلد «نسخهٔ مستقر PWA» در پیشخوان، پاک‌سازی خودکار گزینهٔ تکراری | ✅ تکمیل (وب‌اپ 1.5.5 / افزونه 1.7.4) |
-| استقرار روی هاست | ✅ زنده — PWA روی `app.mrdastbaaf.com` (باندل 1.5.4 مستقر؛ 1.5.5 آمادهٔ استقرار در مرکز دانلود) و افزونهٔ فعال روی سایت |
+| **فیکس حادثهٔ CORS «Pragma» + بنر مرئی «نسخهٔ جدید آماده است»** — ریشهٔ قطعی «ارتباط با سرور برقرار نشد» / خالی‌شدن دوره‌ها، پلن‌ها، پیامک و پرداخت در مرورگر؛ + بازگشت UX بروزرسانی کلیکی | ✅ تکمیل (وب‌اپ 1.5.6 / افزونه 1.7.5) |
+| استقرار روی هاست | ✅ زنده — PWA روی `app.mrdastbaaf.com` (باندل 1.5.5 مستقر؛ 1.5.6 آمادهٔ استقرار در مرکز دانلود) و افزونهٔ فعال روی سایت (1.7.4 نصب؛ 1.7.5 آماده) |
 | تست Staging طبق چک‌لیست | ⏳ در انتظار اجرا ([docs/STAGING_TEST_CHECKLIST.md](docs/STAGING_TEST_CHECKLIST.md)) |
 
 **مجموع اصلاحات تا v1.2.0: ۷۷ باگ رفع‌شده + ۹ فیچر توسعه‌ای + ۲۱ هاردنینگ پیش‌لایو** (موج‌های بعدی: [CHANGELOG.md](CHANGELOG.md)).
 جزئیات کامل: [CHANGELOG.md](CHANGELOG.md)، بخش‌های ۱۰ تا ۱۴ سند [FullDoc.MD](FullDoc.MD) و سند راستی‌آزمایی [docs/PRE_LIVE_HARDENING.md](docs/PRE_LIVE_HARDENING.md).
+
+### ✨ خلاصه v1.5.6 / افزونه 1.7.5 — فیکس حادثهٔ CORS «Pragma» + بازگشت UX «نسخهٔ جدید آماده است»
+
+- **[CRITICAL FIX] ریشهٔ قطعی «ارتباط با سرور برقرار نشد» / خالی‌شدن همه‌چیز در مرورگر:** PWA از v1.5.4 هدر `Pragma: no-cache` می‌فرستاد؛ Pragma جزو CORS-safelisted نیست و در فهرست allow-headers افزونه نبود → مرورگر «تمام» درخواست‌های API (دوره‌ها، پلن‌ها، OTP، پرداخت) را رد می‌کرد در حالی که سرور کاملاً سالم بود. فیکس دوطرفه: حذف Pragma از کلاینت + مجازشدن Pragma (و هدرهای آینده) در افزونه
+- **[FEATURE] بنر مرئی «نسخهٔ جدید آماده است» با دکمهٔ بروزرسانی** (`UpdateReadyBanner`) — همان UX سادهٔ نسخه‌های اولیه به خواست کارفرما؛ reload خاموش v1.5.5 حذف شد
+- **[FIX] چکر نسخه هم قربانی همین باگ CORS بود** → از این پس مکانیزم push نسخه (فیلد پیشخوان) واقعاً به کلاینت‌ها می‌رسد
+- پست‌مورتام کامل + جدول بازتولید: [CHANGELOG.md](CHANGELOG.md)
 
 ### ✨ خلاصه v1.5.5 / افزونه 1.7.4 — آپدیت خودکار کاربران نصب‌کرده + فیکس حلقهٔ reload
 
@@ -78,9 +86,9 @@
 | `src/views/` | ۷ ویوی اصلی (Home، Catalogue، CourseDetail، Membership، UserDashboard، AdminDashboard، Editorial) |
 | `src/services/` | ۷ سرویس اصلی (auth، course، membership، payment، transfer، admin، videoSecurity) + ۵ ماژول زیرساختی (`apiClient`، `progressService`، `orderStore`، `storageGuard`، `zibalCallback`) |
 | `src/components/` | کامپوننت‌ها (player، payment، common و…) |
-| `wordpress-plugin/mrdastbaaf-bridge/` | افزونه اختصاصی وردپرس — نسخه `1.7.4` (نسخه دیتابیس: `1.4.0`) |
+| `wordpress-plugin/mrdastbaaf-bridge/` | افزونه اختصاصی وردپرس — نسخه `1.7.5` (نسخه دیتابیس: `1.4.0`) |
 | `wordpress-plugin/mrdastbaaf-bridge/tests/php/` | هارنس `test-tier-math.php` — اجرای مستقیم روی سرور: `php tests/php/test-tier-math.php` |
-| `tests/web/` | ۶ سوییته Vitest (کال‌بک زیبال، apiClient، قراردادهای Real، مقایسهٔ نسخه و…) — ۵۳ تست |
+| `tests/web/` | ۶ سوییته Vitest (کال‌بک زیبال، apiClient، قراردادهای Real، مقایسهٔ نسخه و…) — ۵۴ تست |
 | `docs/` | `PWA_UPDATE_MECHANISM.md` (آپدیت خودکار کلاینت‌ها) · `PRE_LIVE_HARDENING.md` (راستی‌آزمایی ۲۱ یافته) · `STAGING_TEST_CHECKLIST.md` · `PRODUCTION_INTEGRATION_PLAN.md` · `SELF-BUILD-GUIDE.md` (راهنمای بیلد شخصی) |
 | `FullDoc.MD` | **مستند جامع فنی** (۱۴ بخش — بخش ۱۴: گزارش موج سخت‌سازی و ویژگی‌های تجاری ۲) |
 | `CHANGELOG.md` | سابقه نسخه‌ها |
@@ -106,7 +114,7 @@ VITE_API_BASE_URL=https://mrdastbaaf.com/wp-json/mrdastbaaf/v1 npm run build
 
 ---
 
-## 🧩 افزونه وردپرس (Mr. Dastbaaf Bridge v1.7.4)
+## 🧩 افزونه وردپرس (Mr. Dastbaaf Bridge v1.7.5)
 
 - مسیر: `wordpress-plugin/mrdastbaaf-bridge/` — راهنمای کامل: [wordpress-plugin/README.md](wordpress-plugin/README.md)
 - جداول (۷): `plans`، `user_memberships`، `orders`، `manual_transfers`، `lessons`، `membership_grants` (دفتر ایدمپوتنت)، `audit_log` — آپگرید خودکار اسکیما با فعال‌سازی افزونه
