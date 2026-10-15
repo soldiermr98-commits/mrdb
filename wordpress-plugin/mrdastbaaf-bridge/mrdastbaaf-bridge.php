@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.7.5
+ * Version: 1.7.6
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.7.5');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.7.6');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -114,7 +114,7 @@ define('MRDASTBAAF_API_NAMESPACE', 'mrdastbaaf/v1');
  * سرور هنوز «1.5.3» اعلام می‌کرد و کلاینت‌های 1.5.4 (با چکر !== آن زمان)
  * وارد حلقهٔ reload می‌شدند — قطع verify-otp با پیام «ارتباط با سرور برقرار نشد».
  */
-define('MRDASTBAAF_PWA_VERSION_DEFAULT', '1.5.5');
+define('MRDASTBAAF_PWA_VERSION_DEFAULT', '1.5.6');
 
 /**
  * v1.7.4: خواندن متمرکز نسخهٔ مستقر PWA — تنها نقطهٔ خواندن گزینه.
@@ -780,11 +780,24 @@ add_action('plugins_loaded', 'mrdastbaaf_bridge_maybe_upgrade_db', 20);
 add_action('mrdastbaaf_reconciliation_tick', array('MrDastbaaf_Payment_Controller', 'run_reconciliation'));
 
 /**
+ * v1.7.6: اجرای صف ارسال OTP پس‌زمینه (WP-Cron) — حادثهٔ تایم‌اوت ورود پیامکی.
+ * اندازه‌گیری زندهٔ پروداکشن (۲۰۲۶/۱۰/۱۶): مسیر همگامِ «تولید کد + ارسال» تا
+ * ۴۶-۶۲ ثانیه و پاسخ ۲۰۰ با بدنهٔ خالی؛ وب‌اپ با سقف ۲۰ ثانیه‌ای پیام
+ * «زمان انتظار پاسخ سرور به پایان رسید» می‌داد (در حالی که ملی‌پیامک از شبکهٔ
+ * دیگر ۱.۳ ثانیه‌ای پاسخ می‌دهد). از این نسخه ارسال پیامک هرگز در درخواست REST
+ * اجرا نمی‌شود؛ به WP-Cron واگذار می‌شود (spawn_cron شروع فوری) و نتیجه با
+ * زمان‌سنجی مراحل (هوک ثالث / ملی‌پیامک) در mrdastbaaf_sms_last_log ثبت می‌شود
+ * تا ریشهٔ کندی از پیشخوان قابل تشخیص باشد. جزئیات در class-sms-service.php.
+ */
+add_action('mrdastbaaf_otp_async_send', array('MrDastbaaf_Sms_Service', 'handle_async_send'), 10, 2);
+
+/**
  * v1.2.0: پاک‌سازی زمان‌بندی کرون هنگام غیرفعال‌سازی افزونه (رویداد جدید +
  * رویداد روزانهٔ قدیمی، برای پاک‌سازی کامل مهاجرت‌های ناتمام)
  */
 function mrdastbaaf_bridge_deactivate() {
     wp_clear_scheduled_hook('mrdastbaaf_reconciliation_tick');
     wp_clear_scheduled_hook('mrdastbaaf_daily_reconciliation');
+    wp_clear_scheduled_hook('mrdastbaaf_otp_async_send');
 }
 register_deactivation_hook(__FILE__, 'mrdastbaaf_bridge_deactivate');
