@@ -52,9 +52,14 @@ Options -Indexes -MultiViews +FollowSymLinks
 # ---------------------------------------------------------------------------
 # ۴) فایل‌های hash‌شده (assets/) — کش نامحدود امن است
 #    نام فایل شامل hash است، هر تغییری URL جدید می‌سازد. پس max-age=1year.
+#    v1.5.3 — FIX: الگوی قبلی "\.(js|css|...)$" با sw.js و workbox-*.js هم
+#    مچ می‌شد و Cache-Control: immutable را overwrite می‌کرد! نتیجه: مرورگر
+#    sw.js را برای ۱ سال کش می‌کرد و هیچ‌وقت نسخهٔ جدید را نمی‌دید.
+#    راه‌حل: negative lookahead — فایل‌های .js که با sw. یا workbox- شروع
+#    نمی‌شوند، immutable می‌شوند (sw.js و workbox-*.js در الگوی بالا handled شده‌اند).
 # ---------------------------------------------------------------------------
 <IfModule mod_headers.c>
-  <FilesMatch "\.(js|css|woff2|png|jpg|jpeg|gif|svg|ico)$">
+  <FilesMatch "^(?!sw\.|workbox-).+\.(js|css|woff2|png|jpg|jpeg|gif|svg|ico)$">
     Header set Cache-Control "public, max-age=31536000, immutable"
   </FilesMatch>
 </IfModule>
