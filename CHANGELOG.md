@@ -5,6 +5,78 @@
 
 ---
 
+## [1.5.4 / Plugin 1.7.2] — فاجعهٔ کش حل شد: cache-busting + version checker + content_hash
+
+> ریشهٔ مشکل: تست زنده نشان داد LiteSpeed Cache روی هاست اشتراکی cPanel هدرهای `Cache-Control: no-store, no-cache, must-revalidate` ما را **نادیده می‌گیرد** و پاسخ‌های REST را کش می‌کند (header: `x-litespeed-cache: hit`). این یعنی وقتی کارفرما قیمت را عوض می‌کند، کاربر همچنان قیمت قدیمی را می‌بیند!
+
+### وب‌اپ — نسخه 1.5.4
+
+- **[CRITICAL FIX] Cache-busting برای همهٔ GET درخواست‌ها:** هر درخواست GET به API الان شامل `?_=timestamp` است. این یعنی هر درخواست URL منحصربه‌فرد دارد و LiteSpeed نمی‌تواند آن را کش کند. POST نیازی به این ندارد (LiteSpeed POST را به‌طور پیش‌فرض کش نمی‌کند).
+- **[CRITICAL FIX] هدر `Cache-Control: no-cache` در درخواست کلاینت:** بعضی CDN/WAF ها به این احترام می‌گذارند (هرچند LiteSpeed معمولاً نادیده می‌گیرد — ولی با cache-busting query، دور زده می‌شود).
+- **[FEATURE] بررسی خودکار نسخه و محتوا (useVersionChecker hook):** هر ۲ دقیقه `GET /version` را صدا می‌زند (با cache-busting):
+  - اگه `pwa_version` عوض شده باشد → **force reload** (حتی اگر SW قدیمی چسبیده باشد)
+  - اگه `content_hash` عوض شده باشد (کارفرما چیزی در پیشخوان ذخیره کرده) → رویداد `content-changed` emit می‌شود → همه ویوها داده‌ها را refetch می‌کنند (بدون reload کامل صفحه)
+  - وقتی کاربر به tab برمی‌گردد (visibilitychange) → فوراً چک می‌کند
+  - بی‌صدا و سبک — هیچ اسپینر/پیامی به کاربر نشان داده نمی‌شود
+
+- **[FIX] useOnlineRefetch بهبود یافت:** حالا به دو رویداد جدا گوش می‌دهد:
+  - `ONLINE_REFETCH_EVENT` (فقط وقتی loadError فعال است — رفتار v1.3.0 دست‌نخورده)
+  - `CONTENT_CHANGED_EVENT` (همیشه فعال — برای تغییرات محتوای پیشخوان)
+
+### افزونهٔ وردپرس — نسخه 1.7.2
+
+- **[FEATURE] اندپوینت `GET /version`:** سبک، عمومی، بدون احراز هویت. برمی‌گرداند:
+  - `pwa_version` (از option `mrdastbaaf_pwa_version` — کارفرما می‌تواند بدون بیلد پلاگین، آن را در پیشخوان عوض کند و همه کلاینت‌ها reload شوند)
+  - `plugin_version`, `db_version`, `server_time`, `timestamp`
+  - `content_hash` — هر بار که کارفرما چیزی در پیشخوان ذخیره می‌کند، این هش عوض می‌شود
+- **[FEATURE] content_hash automatic bumping:** هوک‌های `save_post`, `updated_option`, `added_option` — هر بار که پست/محصول/گزینهٔ `mrdastbaaf_*` ذخیره می‌شود، `content_hash` جدید تولید می‌شود.
+- **[FEATURE] هدرهای ضدکش قوی‌تر برای LiteSpeed:** فیلتر `disable_litespeed_cache_for_namespace` در ابتدای هر درخواست REST افزونه، `X-LiteSpeed-Cache-Control: no-cache` + `Cache-Control: no-store` را ست می‌کند.
+- **[FIX] ثابت `MRDASTBAAF_BRIDGE_VERSION` همگام شد:** قبلاً `1.6.0` بود ولی هدر `1.7.1` — حالا هر دو `1.7.2`.
+
+### اسکیمای دیتابیس — بدون تغییر
+
+DB Version ثابت `1.4.0` — هیچ migration لازم نیست.
+
+### استقرار
+
+۱. **PWA v1.5.4** را در `app.mrdastbaaf.com` استقرار دهید.
+۲. **افزونه v1.7.2** را نصب کنید.
+۳. به کاربران بگویید یک بار `app.mrdastbaaf.com/#/debug` را باز کنند و «پاک‌سازی کامل و بارگذاری مجدد» را بزنند (برای دریافت SW جدید).
+۴. از این به بعد، هر تغییری در پیشخوان (قیمت، محتوا، درس‌ها) ظرف ۲ دقیقه به همه کاربران می‌رسد — بدون نیاز به reload دستی.
+
+---
+
+## [Plugin 1.7.1] — بهینه‌سازی سرعت استریم پروکسی (PWA بدون تغییر)
+
+### افزونهٔ وردپرس — نسخه 1.7.1
+
+- **[PERFORMANCE] بهینه‌سازی سرعت پروکسی:** شش bottleneck اصلی روی هاست اشتراکی cPanel برطرف شد:
+  ۱. غیرفعال‌کردن `zlib.output_compression` — مهم‌ترین bottleneck. PHP سعی می‌کرد خروجی را gzip کند، ولی برای stream این یعنی buffer کامل هر chunk.
+  ۲. غیرفعال‌کردن `output_buffering` — به‌طور پیش‌فرض ۴۰۹۶ بایت جمع می‌کرد.
+  ۳. افزایش `memory_limit` به ۵۱۲M — برای ویدیوهای بزرگ.
+  ۴. افزایش `max_execution_time` به ۰ (نامحدود) — برای ویدیوهای طولانی.
+  ۵. استفاده از `stream_copy_to_stream` به جای `cURL WRITEFUNCTION` با `echo` — سریع‌ترین روش PHP برای stream.
+  ۶. ارسال Referer درست به CDN (`site_url('/')`) — تا BitNinja/WAF رد نکند.
+  ۷. هدر `Content-Encoding: none` — جلوگیری از gzip دوبل.
+
+- **[FALLBACK]** اگه `fopen` با stream context کار نکرد (به‌خاطر تنظیمات `allow_url_fopen` غیرفعال)، به‌صورت خودکار به cURL WRITEFUNCTION برمی‌گردد.
+
+### مستندات
+
+- **docs/STREAM_PROXY_DECISION.md (جدید):** راهنمای تصمیم‌گیری بین پروکسی و مستقیم. شامل:
+  - مقایسه واقع‌بینانه (سرعت، بار سرور، URL در DevTools)
+  - سه سناریو: مستقیم + Hotlink / پروکسی / ترکیبی
+  - دستورالعمل تست عملکرد
+  - جمع‌بندی صادقانه: «URL نمی‌شود از DevTools پنهان کرد، ولی پروکسی URL واقعی CDN را پنهان می‌کند»
+
+### حقیقت صادقانه
+
+**URL ویدیو همیشه در DevTools قابل دیدن است — این حقیقت اساسی وب است.** حتی Netflix و YouTube هم URL را در DevTools می‌بینند. آن‌ها از DRM (Widevine/FairPlay) استفاده می‌کنند که دانلود را غیرممکن می‌کند، ولی URL همچنان قابل دیدن است.
+
+هدف پروکسی: URL واقعی `dll.mrdastbaaf.com` را پنهان کند و به‌جای آن URL کوتاه‌عمر (۶۰ ثانیه) و کپسوله بفرستد. اگه کسی این URL پروکسی را کپی کند، بعد از ۱ دقیقه بی‌اثر می‌شود و نمی‌تواند بفهمد منبع واقعی کجاست.
+
+---
+
 ## [1.5.3 / Plugin 1.7.0] — فیکس بحرانی SW caching + استریم پروکسی (URL ویدیو پنهان)
 
 ### وب‌اپ — نسخه 1.5.3

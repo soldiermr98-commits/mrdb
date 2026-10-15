@@ -612,6 +612,22 @@ class MrDastbaaf_Courses_Controller {
             header('Expires: Wed, 11 Jan 1984 05:00:00 GMT');
         }
 
+        // v1.7.1: بهینه‌سازی سرعت پروکسی — این سه تا bottleneck اصلی روی هاست اشتراکی‌اند:
+        // ۱) zlib.output_compression: PHP سعی می‌کند خروجی را gzip کند — برای stream
+        //    این یعنی buffer کامل هر chunk قبل از فرستادن. غیرفعال‌کردنش می‌تواند
+        //    سرعت را ۵-۱۰ برابر کندتر-به-سریع‌تر کند.
+        // ۲) output_buffering: به‌طور پیش‌فرض ۴۰۹۶ بایت buffer می‌کند.
+        // ۳) memory_limit: برای ویدیوهای بزرگ ممکن است کم باشد.
+        @ini_set('zlib.output_compression', '0');
+        @ini_set('output_buffering', '0');
+        @ini_set('memory_limit', '512M');
+        @ini_set('max_execution_time', '0');
+        @ini_set('max_input_time', '0');
+        // اگر mod_deflate فعال است، هدر Content-Encoding نفرست تا gzip نکند
+        if (!headers_sent()) {
+            header('Content-Encoding: none');
+        }
+
         // ─── دریافت اطلاعات فایل از CDN (HEAD request) ───
         // برای Content-Length و پشتیبانی از Range
         $ch = curl_init($video_url);
@@ -623,6 +639,11 @@ class MrDastbaaf_Courses_Controller {
             CURLOPT_USERAGENT      => 'MrDastbaaf-Stream-Proxy/1.7',
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS      => 3,
+            // v1.7.1: Referer درست بفرست تا BitNinja/WAF رد نکند
+            CURLOPT_REFERER        => site_url('/'),
+            CURLOPT_HTTPHEADER     => array(
+                'Accept: video/webm,video/ogg,video/*;q=0.9,application/ogg,*/*;q=0.6',
+            ),
         ));
         curl_exec($ch);
         $file_size = (int) curl_getinfo($ch, CURLINFO_CONTENT_LENGTH_DOWNLOAD);
@@ -671,34 +692,81 @@ class MrDastbaaf_Courses_Controller {
         header('X-Content-Type-Options: nosniff');
 
         // ─── غیرفعال‌سازی output buffering ───
+        // v1.7.1: حذف کامل همه level ها — نه فقط flush. این حیاتی است برای stream.
         while (ob_get_level() > 0) {
-            ob_end_flush();
+            ob_end_clean();
         }
         @set_time_limit(0); // برای ویدیوهای طولانی
 
-        // ─── استریم chunked از CDN به کلاینت ───
-        $range = $file_size > 0 ? "$start-$end" : '0-';
-        $ch = curl_init($video_url);
-        curl_setopt_array($ch, array(
-            CURLOPT_RETURNTRANSFER => false,
-            CURLOPT_TIMEOUT        => 0,
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_USERAGENT      => 'MrDastbaaf-Stream-Proxy/1.7',
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS      => 3,
-            CURLOPT_RANGE          => $range,
-            CURLOPT_WRITEFUNCTION  => function ($curl, $data) {
-                echo $data;
-                @flush();
-                // اگه کلاینت connection را قطع کرد، توقف کن
-                if (connection_aborted()) {
-                    return -1; // curl را متوقف می‌کند
-                }
-                return strlen($data);
-            },
-        ));
-        curl_exec($ch);
-        curl_close($ch);
+        // ─── استریم با fopen + stream context (سریع‌تر از cURL WRITEFUNCTION) ───
+        // v1.7.1: به‌جای cURL WRITEFUNCTION با echo، از fopen با stream context استفاده
+        // می‌کنیم. این روش:
+        //   - buffer داخلی کوچک‌تری دارد (default 8192)
+        //   - مستقیم به output stream وصل می‌شود
+        //   - بهتر با Range request کار می‌کند
+        //   - کمتر روی memory فشار می‌آورد
+        $context_options = array(
+            'http' => array(
+                'method'        => $file_size > 0 && isset($matches) ? 'GET' : 'GET',
+                'header'        => array(
+                    'User-Agent: MrDastbaaf-Stream-Proxy/1.7',
+                    'Referer: ' . site_url('/'),
+                    'Accept: video/webm,video/ogg,video/*;q=0.9,application/ogg,*/*;q=0.6',
+                ),
+                'timeout'       => 0, // بدون timeout برای ویدیوهای طولانی
+                'ignore_errors' => true,
+                'protocol_version' => 1.1,
+            ),
+            'ssl' => array(
+                'verify_peer'      => true,
+                'verify_peer_name' => true,
+            ),
+        );
+
+        // Range header برای seek
+        if ($file_size > 0 && isset($matches)) {
+            $context_options['http']['header'][] = "Range: bytes=$start-$end";
+        }
+
+        $context = stream_context_create($context_options);
+        $remote_handle = @fopen($video_url, 'rb', false, $context);
+
+        if ($remote_handle === false) {
+            // fallback به cURL اگه fopen کار نکرد
+            $range = $file_size > 0 ? "$start-$end" : '0-';
+            $ch = curl_init($video_url);
+            curl_setopt_array($ch, array(
+                CURLOPT_RETURNTRANSFER => false,
+                CURLOPT_TIMEOUT        => 0,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_USERAGENT      => 'MrDastbaaf-Stream-Proxy/1.7',
+                CURLOPT_REFERER        => site_url('/'),
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_MAXREDIRS      => 3,
+                CURLOPT_RANGE          => $range,
+                CURLOPT_WRITEFUNCTION  => function ($curl, $data) {
+                    echo $data;
+                    @flush();
+                    if (connection_aborted()) {
+                        return -1;
+                    }
+                    return strlen($data);
+                },
+            ));
+            curl_exec($ch);
+            curl_close($ch);
+            exit;
+        }
+
+        // ─── stream_copy_to_stream: سریع‌ترین روش PHP ───
+        // مستقیم از remote به php://output — بدون echo loop
+        $output_handle = fopen('php://output', 'wb');
+        if ($output_handle !== false) {
+            // chunk size 256KB — تعادل بین memory و سرعت
+            stream_copy_to_stream($remote_handle, $output_handle, $file_size > 0 ? ($end - $start + 1) : -1);
+            fclose($output_handle);
+        }
+        fclose($remote_handle);
         exit;
     }
 

@@ -39,6 +39,12 @@ function createStorageShim() {
 
 let storage: ReturnType<typeof createStorageShim>;
 const fetchMock = vi.fn();
+
+// v1.5.4: helper برای چک URL بدون در نظر گرفتن cache-busting query (?_=timestamp)
+function urlWithoutQuery(url: string): string {
+  return url.split('?')[0];
+}
+
 const calls: Array<{ url: string; method: string; headers: Record<string, string>; body: string | undefined }> = [];
 
 function jsonResponse(body: unknown, status = 200) {
@@ -62,23 +68,23 @@ beforeEach(() => {
       headers: init.headers,
       body: init.body,
     });
-    if (String(url).endsWith('/auth/verify-otp')) {
+    if (urlWithoutQuery(String(url)).endsWith('/auth/verify-otp')) {
       return jsonResponse({
         success: true,
         token: '42.secret',
         user: { id: '42', name: 'کاربر آزمایشی', phone: '09123456789', role: 'student' },
       });
     }
-    if (String(url).endsWith('/me/progress')) {
+    if (urlWithoutQuery(String(url)).endsWith('/me/progress')) {
       if ((init.method ?? 'GET') === 'PUT') {
         return jsonResponse({ completedLessonIds: [], bookmarkedLessonIds: [] });
       }
       return jsonResponse({ completedLessonIds: ['srv-1', 'local-1', 'srv-2'], bookmarkedLessonIds: [] });
     }
-    if (String(url).endsWith('/auth/logout')) {
+    if (urlWithoutQuery(String(url)).endsWith('/auth/logout')) {
       return jsonResponse({ success: true, message: 'خروج انجام شد' });
     }
-    if (String(url).endsWith('/me/orders')) {
+    if (urlWithoutQuery(String(url)).endsWith('/me/orders')) {
       return jsonResponse({
         orders: [
           {
@@ -104,11 +110,11 @@ beforeEach(() => {
         ],
       });
     }
-    if (String(url).endsWith('/auth/request-otp')) {
+    if (urlWithoutQuery(String(url)).endsWith('/auth/request-otp')) {
       // v1.3.0: پرچم اختیاری isRegistered (افزونهٔ ۱.۴.۰)
       return jsonResponse({ success: true, message: 'کد ارسال شد', expires_in_seconds: 120, isRegistered: false });
     }
-    if (String(url).endsWith('/my/courses')) {
+    if (urlWithoutQuery(String(url)).endsWith('/my/courses')) {
       // v1.3.0: قرارداد GET /my/courses — { success, courses[](owned:true), count }
       return jsonResponse({
         success: true,
@@ -166,11 +172,11 @@ describe('Real-API v1.2.0 contracts', () => {
     // fire-and-forget سینک پیشرفت: کمی صبر تا GET /me/progress برسد و merge شود.
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    const verifyCall = calls.find((c) => c.url.endsWith('/auth/verify-otp'));
+    const verifyCall = calls.find((c) => urlWithoutQuery(c.url).endsWith('/auth/verify-otp'));
     expect(verifyCall).toBeDefined();
     expect(JSON.parse(verifyCall?.body ?? '{}')).toEqual({ phone: '09123456789', otp_code: '12345' });
 
-    const progressCall = calls.find((c) => c.url.endsWith('/me/progress'));
+    const progressCall = calls.find((c) => urlWithoutQuery(c.url).endsWith('/me/progress'));
     expect(progressCall).toBeDefined();
     expect(progressCall?.headers.Authorization).toBe('Bearer 42.secret');
 
@@ -216,7 +222,7 @@ describe('Real-API v1.2.0 contracts', () => {
 
     await auth.authService.logout();
 
-    const logoutCall = calls.find((c) => c.url.endsWith('/auth/logout'));
+    const logoutCall = calls.find((c) => urlWithoutQuery(c.url).endsWith('/auth/logout'));
     expect(logoutCall).toBeDefined();
     expect(logoutCall?.method).toBe('POST');
     expect(logoutCall?.headers.Authorization).toBe('Bearer tok-logout');
@@ -234,7 +240,7 @@ describe('Real-API v1.2.0 contracts', () => {
 
     const orders = await payment.paymentService.fetchOrders();
 
-    const ordersCall = calls.find((c) => c.url.endsWith('/me/orders'));
+    const ordersCall = calls.find((c) => urlWithoutQuery(c.url).endsWith('/me/orders'));
     expect(ordersCall).toBeDefined();
     expect(ordersCall?.headers.Authorization).toBe('Bearer 42.secret');
 
@@ -284,7 +290,7 @@ describe('Real-API v1.2.0 contracts', () => {
       lastName: 'احمدی',
     });
 
-    const call = calls.find((c) => c.url.endsWith('/auth/verify-otp'));
+    const call = calls.find((c) => urlWithoutQuery(c.url).endsWith('/auth/verify-otp'));
     expect(call).toBeDefined();
     expect(JSON.parse(call?.body ?? '{}')).toEqual({
       phone: '09123456789',
@@ -301,7 +307,7 @@ describe('Real-API v1.2.0 contracts', () => {
 
     const courses = await course.courseService.fetchMyCourses();
 
-    const call = calls.find((c) => c.url.endsWith('/my/courses'));
+    const call = calls.find((c) => urlWithoutQuery(c.url).endsWith('/my/courses'));
     expect(call).toBeDefined();
     expect(call?.headers.Authorization).toBe('Bearer 42.secret');
 
@@ -331,26 +337,26 @@ describe('Real-API v1.4.0 owned-flag auth + direct course checkout contracts', (
         headers: init.headers,
         body: init.body,
       });
-      if (String(url).endsWith('/courses')) {
+      if (urlWithoutQuery(String(url)).endsWith('/courses')) {
         return jsonResponse([
           { id: 'c-verneh', title: 'دوره ورنی', productId: 42, owned: false, priceToman: 420000 },
         ]);
       }
-      if (String(url).endsWith('/courses/by-id/42')) {
+      if (urlWithoutQuery(String(url)).endsWith('/courses/by-id/42')) {
         return jsonResponse({ id: 'c-verneh', title: 'دوره ورنی', productId: 42, owned: true });
       }
       return jsonResponse({ success: true });
     });
 
     const courses = await course.courseService.getCourses();
-    const listCall = calls.find((c) => c.url.endsWith('/courses'));
+    const listCall = calls.find((c) => urlWithoutQuery(c.url).endsWith('/courses'));
     expect(listCall).toBeDefined();
     // FIX «خطای قفل»: لیست دوره‌ها با توکن می‌رود (سرور owned هر آیتم را می‌فهمد)
     expect(listCall?.headers.Authorization).toBe('Bearer 42.secret');
     expect(courses[0]).toMatchObject({ id: 'c-verneh', productId: 42 });
 
     const detail = await course.courseService.getCourseById('c-verneh');
-    const byIdCall = calls.find((c) => c.url.endsWith('/courses/by-id/42'));
+    const byIdCall = calls.find((c) => urlWithoutQuery(c.url).endsWith('/courses/by-id/42'));
     expect(byIdCall).toBeDefined();
     expect(byIdCall?.headers.Authorization).toBe('Bearer 42.secret');
     expect(detail?.owned).toBe(true);
@@ -400,7 +406,7 @@ describe('Real-API v1.4.0 owned-flag auth + direct course checkout contracts', (
     expect(user).not.toBeNull();
     const res = await payment.paymentService.initiateCourseZibalPayment(user!, courseObj);
 
-    const call = calls.find((c) => c.url.endsWith('/payment/zibal/initiate'));
+    const call = calls.find((c) => urlWithoutQuery(c.url).endsWith('/payment/zibal/initiate'));
     expect(call).toBeDefined();
     expect(call?.method).toBe('POST');
     // قرارداد فریز افزونهٔ 1.5.0: بدنهٔ snake_case با product_id (به‌جای plan_id)

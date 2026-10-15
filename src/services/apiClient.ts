@@ -263,8 +263,24 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
       ? options.timeoutMs
       : API_TIMEOUT_MS;
 
-  const url = `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  // v1.5.4: Cache-busting برای همهٔ درخواست‌های GET — ریشهٔ «کاربر قیمت قدیمی می‌بیند».
+  // LiteSpeed Cache روی هاست اشتراکی هدرهای no-cache ما را نادیده می‌گیرد و پاسخ را
+  // کش می‌کند. با اضافه‌کردن ?_=timestamp به URL، هر درخواست URL منحصربه‌فرد می‌شود
+  // و LiteSpeed نمی‌تواند آن را کش کند. POST نیازی به این ندارد (LiteSpeed POST را
+  // به‌طور پیش‌فرض کش نمی‌کند).
+  let finalPath = path.startsWith('/') ? path : `/${path}`;
+  if (method === 'GET' && !finalPath.includes('/version')) {
+    const sep = finalPath.includes('?') ? '&' : '?';
+    finalPath = `${finalPath}${sep}_=${Date.now()}`;
+  }
+
+  const url = `${API_BASE}${finalPath}`;
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    // v1.5.4: هدر Cache-Control در درخواست — بعضی CDN/WAF ها به این احترام می‌گذارند
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+  };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (auth) {
     const token = getStoredAuthToken();

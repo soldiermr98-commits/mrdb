@@ -20,6 +20,9 @@ import { isRealApiMode } from './services/apiClient';
 import { detectZibalCallback, clearZibalCallbackParams } from './services/zibalCallback';
 import { mutateOrder, orderStore } from './services/orderStore';
 import { ONLINE_REFETCH_EVENT } from './hooks/useOnlineRefetch';
+// v1.5.4: بررسی خودکار نسخه و محتوا — هر ۲ دقیقه چک می‌کند
+import { useVersionChecker } from './hooks/useVersionChecker';
+import { PWA_VERSION } from './version';
 
 // Common Components
 import { Header } from './components/common/Header';
@@ -605,6 +608,13 @@ export default function App() {
     window.addEventListener('online', handleOnline);
     return () => window.removeEventListener('online', handleOnline);
   }, []);
+
+  // v1.5.4: بررسی خودکار نسخهٔ PWA و content_hash سرور — هر ۲ دقیقه چک می‌کند.
+  // اگه نسخهٔ PWA روی سرور عوض شده باشد → force reload (حتی اگر SW قدیمی چسبیده).
+  // اگه content_hash عوض شده باشد (کارفرما چیزی در پیشخوان ذخیره کرده) →
+  // رویداد content-changed emit می‌شود تا ویوها (از طریق useOnlineRefetch)
+  // داده‌ها را refetch کنند — بدون reload کامل صفحه.
+  useVersionChecker(PWA_VERSION);
 
   // DEV-4/3-b: parent-owned completion handler — persists through the
   // whitelisted updater AND refreshes App state (setUser) so the dashboard /
