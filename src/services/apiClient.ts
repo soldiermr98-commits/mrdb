@@ -279,7 +279,14 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
     Accept: 'application/json',
     // v1.5.4: هدر Cache-Control در درخواست — بعضی CDN/WAF ها به این احترام می‌گذارند
     'Cache-Control': 'no-cache',
-    Pragma: 'no-cache',
+    // v1.5.6 — حذف «Pragma: no-cache» (پست‌مورتام حادثهٔ 2026-10-15):
+    //   Pragma هدر CORS-safelisted نیست و در preflight مرورگر به
+    //   Access-Control-Request-Headers می‌رفت؛ فهرست allow-headers افزونه Pragma را
+    //   نداشت → مرورگر «تمام» درخواست‌های API را با TypeError: Failed to fetch رد
+    //   می‌کرد (دوره‌ها/پلن‌ها/OTP/پرداخت — در حالی که سرور کاملاً سالم بود و curl
+    //   جواب می‌گرفت). کش‌باستینگِ ?_=timestamp عملاً همان کار Pragma را می‌کند؛
+    //   Cache-Control هم در فهرست مجاز افزونه هست. Pragma دیگر ضرورتی ندارد و
+    //   هرگز نباید به درخواست‌های بین‌دامنه‌ای برگردد.
   };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (auth) {

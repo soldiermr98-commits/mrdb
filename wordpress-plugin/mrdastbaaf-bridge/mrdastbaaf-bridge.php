@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.7.4
+ * Version: 1.7.5
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.7.4');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.7.5');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -574,7 +574,38 @@ class MrDastbaaf_Bridge_Plugin {
                  * لازم است نه امن (Allow-Credentials + Allow-Origin صریح = سطح
                  * حملهٔ CSRF/CORS بزرگ‌تر بدون هیچ کاربردی اینجا).
                  */
-                header('Access-Control-Allow-Headers: Authorization, X-WP-Nonce, Content-Type, Cache-Control, X-Requested-With');
+                /**
+                 * v1.7.5 — فیکس حادثهٔ CORS «ارتباط با سرور برقرار نشد» (2026-10-15):
+                 * PWA از v1.5.4 هدر «Pragma: no-cache» می‌فرستاد؛ Pragma جزو
+                 * CORS-safelisted headers نیست → در preflight به
+                 * Access-Control-Request-Headers می‌رفت، اما در این فهرست مجاز نبود
+                 * → مرورگر «تمام» درخواست‌های API را با TypeError: Failed to fetch
+                 * رد می‌کرد (دوره‌ها/پلن‌ها/OTP/پرداخت) در حالی که سرور کاملاً سالم
+                 * بود. Pragma اکنون صریحاً مجاز است.
+                 *
+                 * آینده‌پسند: هر هدر دیگری که مرورگر در preflight درخواست کند و در
+                 * فهرست ثابت نباشد، به پاسخ اضافه می‌شود (فقط توکن‌های معتبر
+                 * [A-Za-z0-9-]) تا این کلاس از باگ‌ها هرگز تکرار نشود.
+                 */
+                $allowed_request_headers = 'Authorization, X-WP-Nonce, Content-Type, Cache-Control, Pragma, X-Requested-With';
+                $requested_headers = isset($_SERVER['HTTP_ACCESS_CONTROL_REQUEST_HEADERS'])
+                    ? preg_replace('/[^A-Za-z0-9\-,_\s]/', '', (string) wp_unslash($_SERVER['HTTP_ACCESS_CONTROL_REQUEST_HEADERS']))
+                    : '';
+                if (is_string($requested_headers) && $requested_headers !== '') {
+                    $static_tokens = array_map('trim', explode(',', $allowed_request_headers));
+                    $requested_tokens = array_map('trim', explode(',', $requested_headers));
+                    foreach ($requested_tokens as $token) {
+                        if (
+                            $token !== ''
+                            && preg_match('/^[A-Za-z0-9\-]+$/', $token)
+                            && !in_array(strtolower($token), array_map('strtolower', $static_tokens), true)
+                        ) {
+                            $static_tokens[] = $token;
+                        }
+                    }
+                    $allowed_request_headers = implode(', ', $static_tokens);
+                }
+                header('Access-Control-Allow-Headers: ' . $allowed_request_headers);
                 // v1.2.0: کش پاسخ preflight مرورگر (۱۰ دقیقه) — حذف OPTIONSهای تکراری
                 header('Access-Control-Max-Age: 600');
                 header('Vary: Origin');
