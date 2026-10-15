@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.7.1
+ * Version: 1.7.2
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.6.0');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.7.2');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -180,6 +180,71 @@ class MrDastbaaf_Bridge_Plugin {
         // v1.3.5: رندر مخصوص وب‌اپ برای صفحات سایت (؟mrdapp=1) — قالب Canvas بدون
         // هدر/فوتر سایت؛ استایل صفحات المنتور در iframe اپ سالم می‌ماند.
         add_filter('template_include', array($this, 'maybe_render_app_page'), 20);
+
+        // v1.7.2: بستن کش LiteSpeed روی پاسخ‌های REST افزونه — اگه پاسخ قبلاً کش
+        // شده باشد، هدرهای no-cache ما نادیده گرفته می‌شوند. این فیلتر در ابتدای
+        // هر درخواست REST افزونه، یک هدر منحصربه‌فرد (nonce) به Vary اضافه می‌کند
+        // تا LiteSpeed نتواند پاسخ را کش کند.
+        add_action('rest_api_init', array($this, 'disable_litespeed_cache_for_namespace'), 1);
+
+        // v1.7.2: به‌روزرسانی content_hash هر بار که کارفرما چیزی در پیشخوان ذخیره می‌کند
+        // (پلن‌ها، درس‌ها، محصولات، محتوا). کلاینت هر ۲ دقیقه چک می‌کند و اگه هش عوض
+        // شده باشد، داده‌ها را دوباره بارگذاری می‌کند (بدون reload کامل صفحه).
+        add_action('save_post', array($this, 'bump_content_hash'), 10, 3);
+        add_action('updated_option', array($this, 'bump_content_hash_on_option_update'), 10, 3);
+        add_action('added_option', array($this, 'bump_content_hash_on_option_add'), 10, 2);
+    }
+
+    /**
+     * v1.7.2: غیرفعال‌کردن کش LiteSpeed برای namespace افزونه.
+     * LiteSpeed Cache هدرهای no-cache ما را نادیده می‌گیرد و پاسخ را کش می‌کند.
+     * این متد در ابتدای هر درخواست REST افزونه، هدرهای ضدکش قوی‌تر می‌فرستد.
+     */
+    public function disable_litespeed_cache_for_namespace() {
+        if (!self::is_mrdastbaaf_rest_request()) {
+            return;
+        }
+        if (!headers_sent()) {
+            header('X-LiteSpeed-Cache-Control: no-cache');
+            header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+            header('Pragma: no-cache');
+            header('Expires: Wed, 11 Jan 1984 05:00:00 GMT');
+        }
+    }
+
+    /**
+     * v1.7.2: به‌روزرسانی content_hash وقتی پست (محصول/دوره/صفحه) ذخیره می‌شود.
+     * این هش در پاسخ /version سرو می‌شود و کلاینت هر ۲ دقیقه چک می‌کند.
+     */
+    public function bump_content_hash($post_id, $post, $update) {
+        // فقط برای محصولات ووکامرس و صفحات منتشرشده
+        if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) {
+            return;
+        }
+        $this->regenerate_content_hash();
+    }
+
+    public function bump_content_hash_on_option_update($option_name, $old_value, $value) {
+        // فقط گزینه‌های مرتبط با افزونه
+        if (strpos($option_name, 'mrdastbaaf_') === 0) {
+            $this->regenerate_content_hash();
+        }
+    }
+
+    public function bump_content_hash_on_option_add($option_name, $value) {
+        if (strpos($option_name, 'mrdastbaaf_') === 0) {
+            $this->regenerate_content_hash();
+        }
+    }
+
+    /**
+     * v1.7.2: تولید هش جدید از محتوای فعلی (timestamp + random).
+     * کلاینت این هش را با هش قبلی مقایسه می‌کند — اگه متفاوت بود، داده‌ها را
+     * دوباره بارگذاری می‌کند.
+     */
+    private function regenerate_content_hash() {
+        $hash = wp_generate_password(12, false) . '_' . time();
+        update_option('mrdastbaaf_content_hash', $hash, false); // false = autoload غیرفعال (سبک)
     }
 
     /**
@@ -295,6 +360,15 @@ class MrDastbaaf_Bridge_Plugin {
         $courses_controller = new MrDastbaaf_Courses_Controller();
         $courses_controller->register_routes();
 
+        // v1.7.2: اندپوینت نسخه — کلاینت هر ۲ دقیقه چک می‌کند. اگه نسخهٔ PWA
+        // روی سرور عوض کرده باشد، کلاینت خودکار reload می‌شود (حتی اگر SW قدیمی
+        // چسبیده باشد). این ریشه‌ی «کاربر نسخهٔ قدیمی می‌بیند» است.
+        register_rest_route(MRDASTBAAF_API_NAMESPACE, '/version', array(
+            'methods' => 'GET',
+            'callback' => array($this, 'handle_get_version'),
+            'permission_callback' => '__return_true',
+        ));
+
         // v1.3.3: صفحات وب‌اپ
         $app_pages_controller = new MrDastbaaf_App_Pages_Controller();
         $app_pages_controller->register_routes();
@@ -315,6 +389,43 @@ class MrDastbaaf_Bridge_Plugin {
 
         $admin_controller = new MrDastbaaf_Admin_Controller();
         $admin_controller->register_routes();
+    }
+
+    /**
+     * v1.7.2: اندپوینت نسخه — سبک، عمومی، بدون احراز هویت.
+     *
+     * کلاینت هر ۲ دقیقه این اندپوینت را صدا می‌زند و نسخهٔ PWA را با نسخهٔ
+     * فعلی خودش مقایسه می‌کند. اگه متفاوت بود، یعنی نسخهٔ جدید روی سرور
+     * مستقر شده — کلاینت خودکار reload می‌شود (حتی اگر SW قدیمی چسبیده باشد).
+     *
+     * پاسخ: { pwa_version, plugin_version, db_version, server_time, build_hash }
+     *
+     * نکتهٔ کش: این اندپوینت با query string cache-busting فراخوانی می‌شود
+     * (?_=timestamp) تا LiteSpeed Cache نتواند آن را کش کند.
+     */
+    public function handle_get_version(WP_REST_Request $request) {
+        // هدرهای ضدکش قوی — هرچند LiteSpeed ممکن است نادیده بگیرد، اما کلاینت
+        // با cache-busting query param هم آن را دور می‌زند.
+        if (!headers_sent()) {
+            header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+            header('Pragma: no-cache');
+            header('Expires: Wed, 11 Jan 1984 05:00:00 GMT');
+            header('X-LiteSpeed-Cache-Control: no-cache');
+        }
+
+        return rest_ensure_response(array(
+            // pwa_version: نسخهٔ PWA که کلاینت باید داشته باشد (از option خوانده می‌شود
+            // تا کارفرما بتواند بدون بیلد پلاگین، نسخه را در پیشخوان عوض کند و همه
+            // کلاینت‌ها reload شوند).
+            'pwa_version'    => (string) get_option('mrdastbaaf_pwa_version', '1.5.3'),
+            'plugin_version' => MRDASTBAAF_BRIDGE_VERSION,
+            'db_version'     => MRDASTBAAF_DB_VERSION,
+            'server_time'    => current_time('mysql'),
+            'timestamp'      => time(),
+            // build_hash: هش تغییرات کارفرما در پیشخوان (محتوا/قیمت‌ها/...) — هر بار
+            // که چیزی ذخیره می‌شود، این هش عوض می‌شود و کلاینت reload می‌شود.
+            'content_hash'   => (string) get_option('mrdastbaaf_content_hash', ''),
+        ));
     }
 
     /**
