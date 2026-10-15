@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.7.2
+ * Version: 1.7.3
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.7.2');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.7.3');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -187,6 +187,14 @@ class MrDastbaaf_Bridge_Plugin {
         // تا LiteSpeed نتواند پاسخ را کش کند.
         add_action('rest_api_init', array($this, 'disable_litespeed_cache_for_namespace'), 1);
 
+        // v1.7.3: روش رسمی LiteSpeed Cache — مستقیم به پلاگین می‌گوید پاسخ را کش
+        // نکند. این قوی‌تر از header() است چون:
+        //   ۱) rest_post_dispatch در زمان درست اجرا می‌شود (بعد از پردازش، قبل از ارسال)
+        //   ۲) litespeed_control_set_nocode API رسمی پلاگین LiteSpeed Cache است
+        //   ۳) $result->header() متد رسمی WP_REST_Response است (نه header() خام)
+        // تشکر از همکار (مشورت فنی) — این راه‌حل دقیق‌تر از روش قبلی است.
+        add_filter('rest_post_dispatch', array($this, 'force_litespeed_nocache_for_namespace'), 99, 3);
+
         // v1.7.2: به‌روزرسانی content_hash هر بار که کارفرما چیزی در پیشخوان ذخیره می‌کند
         // (پلن‌ها، درس‌ها، محصولات، محتوا). کلاینت هر ۲ دقیقه چک می‌کند و اگه هش عوض
         // شده باشد، داده‌ها را دوباره بارگذاری می‌کند (بدون reload کامل صفحه).
@@ -210,6 +218,59 @@ class MrDastbaaf_Bridge_Plugin {
             header('Pragma: no-cache');
             header('Expires: Wed, 11 Jan 1984 05:00:00 GMT');
         }
+    }
+
+    /**
+     * v1.7.3: روش رسمی LiteSpeed Cache برای جلوگیری از کش پاسخ‌های REST.
+     *
+     * این متد در filter 'rest_post_dispatch' اجرا می‌شود — بعد از پردازش کامل
+     * درخواست REST، ولی قبل از ارسال به کلاینت. این زمان درست برای ست‌کردن
+     * هدرهاست (نه در rest_api_init که زود است).
+     *
+     * دو کار انجام می‌دهد:
+     *   ۱) do_action('litespeed_control_set_nocache', ...) — API رسمی پلاگین
+     *      LiteSpeed Cache. مستقیم به پلاگین می‌گوید این پاسخ را کش نکند.
+     *      این قوی‌ترین روش است چون پلاگین LiteSpeed Cache قبل از هر هدر،
+     *      این flag را بررسی می‌کند.
+     *   ۲) $result->header() — متد رسمی WP_REST_Response برای اضافه‌کردن هدر.
+     *      این هدرها به‌درستی در زمان ارسال فرستاده می‌شوند (نه header() خام).
+     *
+     * نکته: اگه پلاگین LiteSpeed Cache فعال نباشد، do_action یک no-op است
+     * (هیچ خطایی نمی‌دهد) — پس این کد روی همهٔ هاست‌ها امن است.
+     *
+     * @param WP_HTTP_Response $result پاسخ REST
+     * @param WP_REST_Server $server سرور REST
+     * @param WP_REST_Request $request درخواست REST
+     * @return WP_HTTP_Response پاسخ تغییریافته
+     */
+    public function force_litespeed_nocache_for_namespace($result, $server, $request) {
+        $route = $request->get_route();
+
+        // فقط برای namespace افزونه — بقیهٔ REST سایت دست‌نخورده می‌مانند
+        if (strpos($route, '/mrdastbaaf/v1') !== 0) {
+            return $result;
+        }
+
+        // ۱) API رسمی LiteSpeed Cache — مستقیم به پلاگین بگو کش نکن
+        // (اگه پلاگین فعال نباشد، این no-op است — هیچ ضرری ندارد)
+        do_action('litespeed_control_set_nocache', 'mrdastbaaf REST API');
+
+        // اگه پلاگین LSCPS فعال نیست ولی هدر X-LiteSpeed-Cache از سرور می‌آید
+        // (LiteSpeed Web Server خودش)، این هدر مستقیم به سرور می‌گوید.
+        // این برای سرورهایی که LiteSpeed Web Server دارند ولی پلاگین فعال نیست.
+        if (!headers_sent()) {
+            header('X-LiteSpeed-Cache-Control: no-cache');
+        }
+
+        // ۲) هدرهای رسمی از طریق WP_REST_Response (روش درست وردپرس)
+        if (is_object($result) && method_exists($result, 'header')) {
+            $result->header('X-LiteSpeed-Cache-Control', 'no-cache');
+            $result->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+            $result->header('Pragma', 'no-cache');
+            $result->header('Expires', 'Wed, 11 Jan 1984 05:00:00 GMT');
+        }
+
+        return $result;
     }
 
     /**
