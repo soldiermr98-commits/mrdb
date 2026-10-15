@@ -2,7 +2,7 @@
 
 پلتفرم مدرن، واکنش‌گرا (موبایل‌محور)، راست‌چین (RTL) و پیش‌رونده (PWA) برای وب‌سایت آموزشی **مستر دستباف** ([mrdastbaaf.com](https://mrdastbaaf.com)).
 
-**نسخه فعلی: وب‌اپ `1.5.0` · افزونهٔ وردپرس `1.6.0`** — اتصال تجاری Real-API (v1.1.0) + سخت‌سازی پیش‌لایو (v1.2.0) + موج ویژگی‌های تجاری ۲ (v1.3.0 تا کنون)
+**نسخه فعلی: وب‌اپ `1.5.5` · افزونهٔ وردپرس `1.7.4`** — اتصال تجاری Real-API (v1.1.0) + سخت‌سازی پیش‌لایو (v1.2.0) + موج ویژگی‌های تجاری ۲ (v1.3.0 تا کنون) + آپدیت خودکار کلاینت‌ها (v1.5.5/1.7.4)
 
 ---
 
@@ -17,11 +17,20 @@
 | **اتصال تجاری** — حالت Real-API: دوره‌های ووکامرسی، درگاه زیبال واقعی، OTP ملی‌پیامک، پنل پیشخوان، پخش ویدیوی واقعی | ✅ تکمیل (v1.1.0) |
 | **سخت‌سازی پیش‌لایو** — ۲۱ یافتهٔ امنیتی/مالی/داده‌ای (Bearer، دفتر اشتراک ایدمپوتنت، ریکنسیلیشن ۱۰دقیقه‌ای، منطق تیر…) | ✅ تکمیل (v1.2.0) |
 | **موج تجاری ۲** — ثبت‌نام با نام، «دوره‌های من»، کیفیت چندگانهٔ ویدیو، مدت جلسات، خرید تک‌دوره‌ای زیبال، محصولات ویژه، خرید درون‌اپ محصول فیزیکی با سفارش ووکامرس | ✅ تکمیل (وب‌اپ 1.3.0–1.5.0 / افزونه 1.4.0–1.6.0) |
-| استقرار روی هاست | ✅ زنده — PWA روی `app.mrdastbaaf.com` (باندل 1.5.0) و افزونهٔ فعال روی سایت |
+| **ضدکش و آپدیت خودکار** — کش‌باستینگ GET، چکر نسخه، روش رسمی LiteSpeed API (1.7.2–1.7.3) | ✅ تکمیل (وب‌اپ 1.5.3–1.5.4 / افزونه 1.7.0–1.7.3) |
+| **فیکس حلقهٔ reload + آپدیت خودکار رسمی کاربران نصب‌کرده** — مقایسهٔ semver، گارد ضدحلقه، فیلد «نسخهٔ مستقر PWA» در پیشخوان، پاک‌سازی خودکار گزینهٔ تکراری | ✅ تکمیل (وب‌اپ 1.5.5 / افزونه 1.7.4) |
+| استقرار روی هاست | ✅ زنده — PWA روی `app.mrdastbaaf.com` (باندل 1.5.4 مستقر؛ 1.5.5 آمادهٔ استقرار در مرکز دانلود) و افزونهٔ فعال روی سایت |
 | تست Staging طبق چک‌لیست | ⏳ در انتظار اجرا ([docs/STAGING_TEST_CHECKLIST.md](docs/STAGING_TEST_CHECKLIST.md)) |
 
 **مجموع اصلاحات تا v1.2.0: ۷۷ باگ رفع‌شده + ۹ فیچر توسعه‌ای + ۲۱ هاردنینگ پیش‌لایو** (موج‌های بعدی: [CHANGELOG.md](CHANGELOG.md)).
 جزئیات کامل: [CHANGELOG.md](CHANGELOG.md)، بخش‌های ۱۰ تا ۱۴ سند [FullDoc.MD](FullDoc.MD) و سند راستی‌آزمایی [docs/PRE_LIVE_HARDENING.md](docs/PRE_LIVE_HARDENING.md).
+
+### ✨ خلاصه v1.5.5 / افزونه 1.7.4 — آپدیت خودکار کاربران نصب‌کرده + فیکس حلقهٔ reload
+
+- **[CRITICAL FIX] حلقهٔ reload چکر نسخه:** ریشهٔ خطای «ارتباط با سرور برقرار نشد» در ورود پیامکی با اینترنت سالم — سرورِ قدیمی‌تر (fallback کهنهٔ 1.5.3) با مقایسهٔ !== باعث reload بی‌نهایت و قطع verify-otp می‌شد؛ اکنون فقط «سرور جدیدتر» reload می‌سازد (semver + گارد sessionStorage + همگام‌سازی SW پیش از reload)
+- **[FEATURE] فیلد «نسخهٔ مستقر PWA» در پیشخوان:** پس از استقرار باندل جدید، فقط همین عدد را تغییر دهید و ذخیره کنید — همهٔ کلاینت‌ها (حتی اپ‌های نصب‌شده) تا ۲ دقیقه خودکار آپدیت می‌شوند؛ دیگر هیچ SQL دستی لازم نیست
+- **[FIX] پاک‌سازی خودکار ردیف تکراری** `mrdastbaaf_pwa_version` / `mrdastbaaf_content_hash` در روتین ارتقای افزونه (اثر SQL دستی INSERT به‌جای UPDATE)
+- راهنمای کامل مکانیزم: [docs/PWA_UPDATE_MECHANISM.md](docs/PWA_UPDATE_MECHANISM.md)
 
 ### ✨ خلاصه موج تجاری ۲ (وب‌اپ 1.3.0 → 1.5.0 / افزونه 1.4.0 → 1.6.0)
 
@@ -69,10 +78,10 @@
 | `src/views/` | ۷ ویوی اصلی (Home، Catalogue، CourseDetail، Membership، UserDashboard، AdminDashboard، Editorial) |
 | `src/services/` | ۷ سرویس اصلی (auth، course، membership، payment، transfer، admin، videoSecurity) + ۵ ماژول زیرساختی (`apiClient`، `progressService`، `orderStore`، `storageGuard`، `zibalCallback`) |
 | `src/components/` | کامپوننت‌ها (player، payment، common و…) |
-| `wordpress-plugin/mrdastbaaf-bridge/` | افزونه اختصاصی وردپرس — نسخه `1.6.0` (نسخه دیتابیس: `1.4.0`) |
+| `wordpress-plugin/mrdastbaaf-bridge/` | افزونه اختصاصی وردپرس — نسخه `1.7.4` (نسخه دیتابیس: `1.4.0`) |
 | `wordpress-plugin/mrdastbaaf-bridge/tests/php/` | هارنس `test-tier-math.php` — اجرای مستقیم روی سرور: `php tests/php/test-tier-math.php` |
-| `tests/web/` | ۳ سوییته Vitest (کال‌بک زیبال، apiClient، قراردادهای Real) |
-| `docs/` | `PRE_LIVE_HARDENING.md` (راستی‌آزمایی ۲۱ یافته) · `STAGING_TEST_CHECKLIST.md` · `PRODUCTION_INTEGRATION_PLAN.md` · `SELF-BUILD-GUIDE.md` (راهنمای بیلد شخصی) |
+| `tests/web/` | ۶ سوییته Vitest (کال‌بک زیبال، apiClient، قراردادهای Real، مقایسهٔ نسخه و…) — ۵۳ تست |
+| `docs/` | `PWA_UPDATE_MECHANISM.md` (آپدیت خودکار کلاینت‌ها) · `PRE_LIVE_HARDENING.md` (راستی‌آزمایی ۲۱ یافته) · `STAGING_TEST_CHECKLIST.md` · `PRODUCTION_INTEGRATION_PLAN.md` · `SELF-BUILD-GUIDE.md` (راهنمای بیلد شخصی) |
 | `FullDoc.MD` | **مستند جامع فنی** (۱۴ بخش — بخش ۱۴: گزارش موج سخت‌سازی و ویژگی‌های تجاری ۲) |
 | `CHANGELOG.md` | سابقه نسخه‌ها |
 
@@ -84,7 +93,7 @@
 npm install          # نصب وابستگی‌ها
 npm run dev          # سرور توسعه (حالت دمو — بدون نیاز به env)
 npm run lint         # tsc --noEmit
-npm test             # vitest run (۲۳ تست)
+npm test             # vitest run (۵۳ تست)
 ```
 
 **بیلد پروداکشن** نیازمند آدرس API واقعی است (گارد بیلد v1.2.0):
@@ -97,7 +106,7 @@ VITE_API_BASE_URL=https://mrdastbaaf.com/wp-json/mrdastbaaf/v1 npm run build
 
 ---
 
-## 🧩 افزونه وردپرس (Mr. Dastbaaf Bridge v1.6.0)
+## 🧩 افزونه وردپرس (Mr. Dastbaaf Bridge v1.7.4)
 
 - مسیر: `wordpress-plugin/mrdastbaaf-bridge/` — راهنمای کامل: [wordpress-plugin/README.md](wordpress-plugin/README.md)
 - جداول (۷): `plans`، `user_memberships`، `orders`، `manual_transfers`، `lessons`، `membership_grants` (دفتر ایدمپوتنت)، `audit_log` — آپگرید خودکار اسکیما با فعال‌سازی افزونه
@@ -110,6 +119,12 @@ VITE_API_BASE_URL=https://mrdastbaaf.com/wp-json/mrdastbaaf/v1 npm run build
      */10 * * * * curl -s "https://mrdastbaaf.com/wp-json/mrdastbaaf/v1/cron/reconcile?token=…"
      ```
   5. ثبت درس‌ها و ویدیوهای هر دوره در «درس‌ها و ویدیوها» (فقط HTTPS و فقط هاست‌های مجاز؛ اختیاری: مدت دقیقه + نشانی‌های کیفیت ۴۸۰p/۷۲۰p/۱۰۸۰p)
+
+---
+
+## 🔄 آپدیت خودکار PWA — خلاصه برای کارفرما
+
+پس از استقرار هر باندل جدید روی `app.mrdastbaaf.com`، فقط در پیشخوان ← تنظیمات ← «نسخهٔ مستقر PWA» همان عدد جدید را ذخیره کنید — همهٔ کاربران (حتی اپ‌های نصب‌شده روی گوشی) حداکثر تا ۲ دقیقه بعد خودکار به نسخهٔ جدید می‌روند. زنجیرهٔ کامل، جدول وضعیت کلاینت‌های قدیمی و رفع اشکال: [docs/PWA_UPDATE_MECHANISM.md](docs/PWA_UPDATE_MECHANISM.md)
 
 ---
 

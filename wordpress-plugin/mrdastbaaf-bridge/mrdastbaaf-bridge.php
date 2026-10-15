@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.7.3
+ * Version: 1.7.4
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.7.3');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.7.4');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -103,6 +103,32 @@ define('MRDASTBAAF_DB_VERSION', '1.4.0');
 define('MRDASTBAAF_BRIDGE_PATH', plugin_dir_path(__FILE__));
 define('MRDASTBAAF_BRIDGE_URL', plugin_dir_url(__FILE__));
 define('MRDASTBAAF_API_NAMESPACE', 'mrdastbaaf/v1');
+
+/**
+ * v1.7.4: نسخهٔ پیش‌فرض PWA — فقط برای «نخستین seed» گزینهٔ mrdastbaaf_pwa_version
+ * استفاده می‌شود (نصب تازه‌ای که هنوز باندلی مستقر نکرده). پس از seed، منبع حقیقت
+ * همیشه «پیشخوان ← تنظیمات ← نسخهٔ مستقر PWA» است و این ثابت دیگر نقشی ندارد.
+ *
+ * ریشهٔ باگ: نسخه‌های ≤1.7.3 به‌جای ثابت متمرکز، مقدار hard-code '1.5.3' را
+ * به‌عنوان fallback get_option می‌دادند؛ نتیجه: بعد از استقرار باندل 1.5.4،
+ * سرور هنوز «1.5.3» اعلام می‌کرد و کلاینت‌های 1.5.4 (با چکر !== آن زمان)
+ * وارد حلقهٔ reload می‌شدند — قطع verify-otp با پیام «ارتباط با سرور برقرار نشد».
+ */
+define('MRDASTBAAF_PWA_VERSION_DEFAULT', '1.5.5');
+
+/**
+ * v1.7.4: خواندن متمرکز نسخهٔ مستقر PWA — تنها نقطهٔ خواندن گزینه.
+ * مقدار گزینه توسط فیلد «نسخهٔ مستقر PWA» در پیشخوان مدیریت می‌شود و پس از
+ * هر استقرار باندل جدید باید به همان عدد تغییر کند تا کلاینت‌های 1.5.4+
+ * (با چکر فیکس‌شده) حداکثر تا ۲ دقیقه بعد خودکار reload شوند.
+ */
+function mrdastbaaf_get_deployed_pwa_version() {
+    $version = trim((string) get_option('mrdastbaaf_pwa_version', ''));
+    if ('' === $version || !preg_match('/^\d+(\.\d+)*$/', $version)) {
+        return MRDASTBAAF_PWA_VERSION_DEFAULT;
+    }
+    return $version;
+}
 
 // بارگذاری کلاس‌های ماژولار (v1.1.0: سرویس پیامک پیش از کنترلر احراز هویت)
 require_once MRDASTBAAF_BRIDGE_PATH . 'includes/class-database.php';
@@ -475,10 +501,10 @@ class MrDastbaaf_Bridge_Plugin {
         }
 
         return rest_ensure_response(array(
-            // pwa_version: نسخهٔ PWA که کلاینت باید داشته باشد (از option خوانده می‌شود
-            // تا کارفرما بتواند بدون بیلد پلاگین، نسخه را در پیشخوان عوض کند و همه
-            // کلاینت‌ها reload شوند).
-            'pwa_version'    => (string) get_option('mrdastbaaf_pwa_version', '1.5.3'),
+            // pwa_version: نسخهٔ PWA که کلاینت باید داشته باشد — v1.7.4: از helper
+            // متمرکز خوانده می‌شود (گزینهٔ قابل‌ویرایش در پیشخوان + پیش‌فرض ثابت
+            // متمرکز) تا fallback کهنهٔ '1.5.3' دیگر هیچ‌وقت برگردانده نشود.
+            'pwa_version'    => (string) mrdastbaaf_get_deployed_pwa_version(),
             'plugin_version' => MRDASTBAAF_BRIDGE_VERSION,
             'db_version'     => MRDASTBAAF_DB_VERSION,
             'server_time'    => current_time('mysql'),
@@ -647,6 +673,69 @@ function mrdastbaaf_bridge_maybe_upgrade_db() {
     // تولید می‌شود؛ هرگز بازتاب داده نمی‌شود و فقط مقدار ثابت hash_equals مقایسه می‌کند.
     if ('' === (string) get_option('mrdastbaaf_cron_token', '')) {
         update_option('mrdastbaaf_cron_token', wp_generate_password(32, false, false), false);
+    }
+
+    // ─── v1.7.4: نرمال‌سازی گزینهٔ «نسخهٔ مستقر PWA» ──────────────────────────
+    // ۱) seed نصب تازه: اگر گزینه وجود ندارد، با پیش‌فرض ثابت متمرکز ساخته شود
+    //    (get_option با fallback دیگر در مسیر خواندن استفاده نمی‌شود تا هیچ‌وقت
+    //    مقدار کهنه مثل 1.5.3 برگردانده نشود).
+    // ۲) پاک‌سازی ردیف تکراری: اگر با SQL دستی (INSERT به‌جای UPDATE) ردیف
+    //    دومی برای همین option_name ساخته شده باشد، get_option بسته به ترتیب
+    //    خواندن ممکن است مقدار قدیمی را برگرداند و updated_option هم رفتار
+    //    غیرقطعی داشته باشد — فقط قدیمی‌ترین ردیف نگه داشته می‌شود.
+    //
+    // این روتین فقط «یک بار» پس از آپلود افزونهٔ 1.7.4 اجرا می‌شود (فلگ
+    // mrdastbaaf_options_norm_174 با autoload=yes → خواندنش از alloptions
+    // کش است و هیچ کوئری اضافه‌ای در درخواست‌های عادی نمی‌سازد).
+    if ('yes' !== get_option('mrdastbaaf_options_norm_174', 'no')) {
+        mrdastbaaf_bridge_normalize_pwa_version_option();
+        update_option('mrdastbaaf_options_norm_174', 'yes');
+    }
+}
+
+/**
+ * v1.7.4 — seed + dedupe گزینهٔ mrdastbaaf_pwa_version (و هش محتوا).
+ * فقط یک بار پس از نصب/ارتقای 1.7.4 اجرا می‌شود (فلگ در maybe_upgrade_db).
+ */
+function mrdastbaaf_bridge_normalize_pwa_version_option() {
+    global $wpdb;
+
+    if (false === get_option('mrdastbaaf_pwa_version', false)) {
+        add_option('mrdastbaaf_pwa_version', MRDASTBAAF_PWA_VERSION_DEFAULT, '', 'yes');
+    }
+
+    $table = $wpdb->options;
+    // شناسه‌های همهٔ ردیف‌های هم‌نام — قدیمی‌ترین (کوچک‌ترین option_id) مرجع است
+    $pwa_ids = $wpdb->get_col(
+        $wpdb->prepare(
+            "SELECT option_id FROM {$table} WHERE option_name = %s ORDER BY option_id ASC",
+            'mrdastbaaf_pwa_version'
+        )
+    );
+    if (count($pwa_ids) > 1) {
+        array_shift($pwa_ids);
+        foreach ($pwa_ids as $extra_id) {
+            $wpdb->delete($table, array('option_id' => (int) $extra_id), array('%d'));
+        }
+        // مقدار معتبر ردیف باقی‌مانده را تضمین کن (اگر خالی/نامعتبر بود، پیش‌فرض)
+        $current = trim((string) get_option('mrdastbaaf_pwa_version', ''));
+        if ('' === $current || !preg_match('/^\d+(\.\d+)*$/', $current)) {
+            update_option('mrdastbaaf_pwa_version', MRDASTBAAF_PWA_VERSION_DEFAULT);
+        }
+    }
+
+    // هش محتوا هم ممکن است با SQL دستی تکرار شده باشد — همان پاک‌سازی
+    $hash_ids = $wpdb->get_col(
+        $wpdb->prepare(
+            "SELECT option_id FROM {$table} WHERE option_name = %s ORDER BY option_id ASC",
+            'mrdastbaaf_content_hash'
+        )
+    );
+    if (count($hash_ids) > 1) {
+        array_shift($hash_ids);
+        foreach ($hash_ids as $extra_id) {
+            $wpdb->delete($table, array('option_id' => (int) $extra_id), array('%d'));
+        }
     }
 }
 add_action('plugins_loaded', 'mrdastbaaf_bridge_maybe_upgrade_db', 20);
