@@ -14,12 +14,12 @@
  * تاریخچهٔ سفارش واقعی از GET /me/orders (fetchOrders) خوانده می‌شود.
  */
 
-import { Course, MembershipPlan, OrderStatus, PaymentGatewayType, PaymentOrder, UserProfile } from '../types';
+import { Course, MembershipPlan, OrderStatus, PaymentGatewayType, PaymentOrder, ShopProduct, ShopShippingInfo, UserProfile } from '../types';
 import { ApiError, apiFetch, isRealApiMode } from './apiClient';
 import { authService } from './authService';
 import { membershipService, planDurationToDays, planFromSnapshot } from './membershipService';
 import { mutateOrder, orderStore } from './orderStore';
-import { formatJalali } from '../utils/format';
+import { formatJalali, toEnglishDigits } from '../utils/format';
 
 /**
  * BUG-36: collision-safe mock track id — same base36 time + counter + random
@@ -312,6 +312,52 @@ export const paymentService = {
     };
 
     return { order: gatewayOrder, zibalTrackId: trackId, gatewayUrl: paymentUrl };
+  },
+
+  /**
+   * v1.5.0 — خرید درون‌اپ محصول فیزیکی (قرارداد فریز افزونهٔ 1.6.0):
+   * POST /payment/zibal/initiate {product_id, kind:'shop', full_name, phone,
+   * address, postal_code} — پاسخ دقیقاً همان {orderId, orderNumber, trackId,
+   * paymentUrl} است. پس از تایید پرداخت، سرور سفارش ووکامرسِ واقعی
+   * (processing) با نشانی کامل می‌سازد → ایمیل «سفارش جدید» ادمین + استوک.
+   * خطاهای فارسی سرور (404 محصول / 400 نشانی ناقص) از apiFetch پاس داده می‌شوند.
+   *
+   * سفارش محلی ساخته نمی‌شود (دفتر مالی واقعی سرور است) — فقط gatewayUrl برمی‌گردد.
+   * حالت دمو: پرتاب خطای فارسی روشن — خرید آنلاین فقط در حالت Real معنا دارد
+   * (هم‌الگوی خرید تک‌دوره‌ای).
+   */
+  async initiateShopProductPayment(
+    user: UserProfile,
+    product: ShopProduct,
+    shipping: ShopShippingInfo
+  ): Promise<{ gatewayUrl: string }> {
+    if (!isRealApiMode) {
+      throw new Error('خرید آنلاین محصولات در حالت دمو فعال نیست');
+    }
+
+    const productId = typeof product.id === 'number' && Number.isFinite(product.id) && product.id > 0
+      ? Math.round(product.id)
+      : null;
+    if (!productId) {
+      throw new Error('این محصول قابل خرید مستقیم نیست؛ لطفاً با پشتیبانی تماس بگیرید.');
+    }
+
+    const res = await apiFetch<ZibalInitiateResponse>('/payment/zibal/initiate', {
+      method: 'POST',
+      auth: true,
+      // قرارداد فریز افزونهٔ 1.6.0: بدنهٔ snake_case با کلیدهای kind/full_name/…
+      body: {
+        product_id: productId,
+        kind: 'shop',
+        full_name: shipping.fullName.trim(),
+        phone: toEnglishDigits(shipping.phone).trim(),
+        address: shipping.address.trim(),
+        postal_code: toEnglishDigits(shipping.postalCode).trim(),
+      },
+    });
+
+    const { paymentUrl } = parseZibalInitiateResponse(res);
+    return { gatewayUrl: paymentUrl };
   },
 
   /**

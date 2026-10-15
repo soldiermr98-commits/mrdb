@@ -38,6 +38,11 @@ interface HomeViewProps {
   appUi?: AppUiConfig | null;
   /** v1.3.0: برای حالت خالی سکشن «محصولات دست‌ساز» — راهنمای پیشخوان فقط برای مدیر */
   currentUser?: UserProfile | null;
+  /**
+   * v1.5.0: خرید درون‌اپ محصول فیزیکی — بازکردن مودال اطلاعات ارسال/پرداخت
+   * (App مودال را مدیریت می‌کند؛ قرارداد افزونهٔ 1.6.0). غایب = دکمهٔ خرید رندر نمی‌شود.
+   */
+  onBuyProduct?: (product: ShopProduct) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,12 +75,20 @@ export function safeExternalUrl(raw: unknown): string | null {
   }
 }
 
+/** v1.5.0: کلاس چیپ «انتخاب دسته‌بندی» محصولات ویژه — فعال/غیرفعال */
+function shopChipClass(active: boolean): string {
+  return active
+    ? 'shrink-0 px-3.5 py-1.5 rounded-full text-[11px] font-semibold border transition whitespace-nowrap bg-amber-800 border-amber-800 text-white shadow-xs'
+    : 'shrink-0 px-3.5 py-1.5 rounded-full text-[11px] font-semibold border transition whitespace-nowrap bg-white border-stone-200 text-stone-600 hover:border-amber-700 hover:text-amber-900';
+}
+
 export const HomeView: React.FC<HomeViewProps> = ({
   onNavigate,
   onOpenLessonPreview,
   onSelectPlan,
   appUi,
   currentUser,
+  onBuyProduct,
 }) => {
   const [sections, setSections] = useState<HomepageSectionConfig[]>(INITIAL_HOMEPAGE_SECTIONS);
   // BUG-53: the full course list feeds the featuredCourses derivation
@@ -89,6 +102,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const [shopCategories, setShopCategories] = useState<ShopCategory[]>([]);
   const [featuredProducts, setFeaturedProducts] = useState<ShopProduct[]>([]);
   const [isShopLoading, setIsShopLoading] = useState(true);
+  // v1.5.0: «انتخاب دسته‌بندی» — چیپ فعال کاروسل محصولات ویژه را فیلتر می‌کند
+  const [selectedShopCat, setSelectedShopCat] = useState<string>('all');
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
 
   useEffect(() => {
@@ -459,11 +474,37 @@ export const HomeView: React.FC<HomeViewProps> = ({
         }
 
         // 4.5 — v1.3.0: «محصولات دست‌ساز» (GET /shop/products — افزونهٔ ۱.۴.۰)
-        // عنوان/زیرنویس از appUi (سرو‌پذیر از پیشخوان)؛ خالی بودن فروشگاه برای
-        // کاربر عادی یعنی سکشن اصلاً رندر نمی‌شود و فقط مدیر راهنمای پیشخوان می‌بیند.
+        // v1.5.0 (خواستهٔ کارفرما): گریدِ «همهٔ محصولات» حذف شد — فقط «محصولات
+        // ویژه» می‌ماند با «انتخاب دسته‌بندی» (چیپ‌های فیلتر) و «خرید درون‌اپ»
+        // (افزونهٔ ۱.۶.۰: سفارش واقعی ووکامرس + اطلاع ادمین). کاروسل افقی
+        // scroll-snap از ۱.۴.۰ عیناً حفظ شده و الان فیلترپذیر است.
+        // خالی بودن فروشگاه برای کاربر عادی یعنی سکشن اصلاً رندر نمی‌شود و فقط
+        // مدیر راهنمای پیشخوان می‌بیند.
         if (sec.key === 'physical_products') {
-          const isShopEmpty = !isShopLoading && shopCategories.length === 0;
+          const isShopEmpty = !isShopLoading && featuredProducts.length === 0;
           if (isShopEmpty && currentUser?.role !== 'admin') return null;
+
+          // چیپ‌های دسته‌بندی از ضرب featured × categories پاسخِ همین سرور ساخته
+          // می‌شوند (بدون تغییر قرارداد API): محصول چنددسته‌ای زیر همهٔ دسته‌هایش
+          // می‌آید؛ محصول بی‌دسته فقط زیر «همه» دیده می‌شود.
+          const catNamesByProduct = new Map<number, string[]>();
+          shopCategories.forEach((cat) => {
+            cat.products.forEach((p) => {
+              const names = catNamesByProduct.get(p.id) ?? [];
+              if (!names.includes(cat.name)) names.push(cat.name);
+              catNamesByProduct.set(p.id, names);
+            });
+          });
+          const shopCatNames: string[] = [];
+          featuredProducts.forEach((p) => {
+            (catNamesByProduct.get(p.id) ?? []).forEach((n) => {
+              if (!shopCatNames.includes(n)) shopCatNames.push(n);
+            });
+          });
+          const visibleFeatured =
+            selectedShopCat === 'all'
+              ? featuredProducts
+              : featuredProducts.filter((p) => (catNamesByProduct.get(p.id) ?? []).includes(selectedShopCat));
 
           return (
             <section key={sec.id} className="max-w-5xl mx-auto px-4">
@@ -477,13 +518,16 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
               {isShopLoading ? (
                 // skeleton هم‌سبک بقیهٔ سکشن‌ها
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                <div className="flex gap-3 overflow-hidden">
                   {[0, 1, 2, 3].map((i) => (
-                    <div key={i} className="bg-white rounded-2xl border border-stone-200/90 overflow-hidden shadow-xs">
+                    <div
+                      key={i}
+                      className="w-40 sm:w-48 shrink-0 bg-white rounded-2xl border border-stone-200/90 overflow-hidden shadow-xs"
+                    >
                       <div className="aspect-square bg-stone-200 animate-pulse" />
                       <div className="p-3 space-y-2">
                         <div className="h-3 w-3/4 bg-stone-200 rounded animate-pulse" />
-                        <div className="h-3 w-1/3 bg-stone-100 rounded animate-pulse" />
+                        <div className="h-6 w-full bg-stone-100 rounded-xl animate-pulse" />
                       </div>
                     </div>
                   ))}
@@ -493,117 +537,95 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 <div className="bg-white rounded-2xl p-8 text-center border border-amber-200 text-amber-900 space-y-2 max-w-xl mx-auto">
                   <ShoppingBag className="w-8 h-8 text-amber-400 mx-auto" />
                   <p className="text-xs leading-relaxed">
-                    محصولات فیزیکی از پیشخوان ← مستر دستباف ← محصولات فیزیکی انتخاب می‌شوند.
+                    محصولات ویژه از پیشخوان ← مستر دستباف ← محصولات فیزیکی انتخاب می‌شوند (تیک ستون «ویژه» برای نمایش در اپ الزامی است).
                   </p>
                 </div>
               ) : (
-                <div className="space-y-8">
-                  {/* v1.4.0 — «محصولات ویژه»: کاروسل افقی scroll-snap بالای دسته‌ها.
-                      کل کارت یک <a> امن (safeExternalUrl) است — هم‌شکل کارت محصول
-                      دسته‌ها اما بدون دکمهٔ داخلی. RTL طبیعی اسکرول می‌شود. */}
-                  {featuredProducts.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-bold text-stone-900 mb-3 flex items-center gap-1.5">
-                        <Sparkles className="w-4 h-4 text-amber-700" />
-                        <span>محصولات ویژه</span>
-                      </h3>
-                      <div className="flex gap-3 overflow-x-auto pb-2 snap-x snap-mandatory [-ms-overflow-style:none] [scrollbar-width:thin]">
-                        {featuredProducts.map((p) => {
-                          // همان گارد امنیتی configData این فایل — فقط http/https/mailto/tel
-                          const safeProductUrl = safeExternalUrl(p.url);
-                          if (!safeProductUrl) return null;
-                          const safeImageUrl = safeExternalUrl(p.imageUrl);
-                          return (
-                            <a
-                              key={p.id}
-                              href={safeProductUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="w-40 sm:w-48 shrink-0 snap-start bg-white rounded-2xl border border-stone-200/90 overflow-hidden shadow-xs hover:shadow-md transition flex flex-col"
-                            >
-                              {safeImageUrl ? (
-                                <img
-                                  src={safeImageUrl}
-                                  alt={p.title}
-                                  loading="lazy"
-                                  className="aspect-square w-full object-cover bg-stone-100"
-                                />
-                              ) : (
-                                // کاشی حرف‌اول — دمو و محصولات بدون تصویر (بدون هیچ تصویر بیرونی)
-                                <div className="aspect-square w-full bg-gradient-to-br from-amber-100 to-amber-200 flex items-center justify-center">
-                                  <span className="text-2xl font-black text-amber-800">
-                                    {p.title.slice(0, 1)}
-                                  </span>
-                                </div>
-                              )}
+                <div>
+                  {/* v1.5.0: «انتخاب دسته‌بندی» — چیپ‌های فیلتر کاروسل */}
+                  {shopCatNames.length > 0 && (
+                    <div className="flex gap-2 overflow-x-auto pb-2 mb-4 [-ms-overflow-style:none] [scrollbar-width:none]">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedShopCat('all')}
+                        className={shopChipClass(selectedShopCat === 'all')}
+                      >
+                        همه
+                      </button>
+                      {shopCatNames.map((name) => (
+                        <button
+                          key={name}
+                          type="button"
+                          onClick={() => setSelectedShopCat(name)}
+                          className={shopChipClass(selectedShopCat === name)}
+                        >
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
 
-                              <div className="p-3 flex-1 flex flex-col justify-between gap-2.5">
-                                <h4 className="text-xs font-bold text-stone-900 leading-snug line-clamp-2">
-                                  {p.title}
-                                </h4>
+                  {/* کاروسل افقی scroll-snap — فقط محصولات ویژه */}
+                  {visibleFeatured.length === 0 ? (
+                    <div className="bg-white rounded-2xl p-6 text-center border border-stone-200 text-stone-500 text-xs">
+                      محصولی در این دسته‌بندی نیست.
+                    </div>
+                  ) : (
+                    <div className="flex gap-3 overflow-x-auto pb-2 snap-x snap-mandatory [-ms-overflow-style:none] [scrollbar-width:thin]">
+                      {visibleFeatured.map((p) => {
+                        // همان گارد امنیتی configData این فایل — فقط http/https/mailto/tel
+                        const safeProductUrl = safeExternalUrl(p.url);
+                        const safeImageUrl = safeExternalUrl(p.imageUrl);
+                        return (
+                          <div
+                            key={p.id}
+                            className="w-40 sm:w-48 shrink-0 snap-start bg-white rounded-2xl border border-stone-200/90 overflow-hidden shadow-xs hover:shadow-md transition flex flex-col"
+                          >
+                            {safeImageUrl ? (
+                              <img
+                                src={safeImageUrl}
+                                alt={p.title}
+                                loading="lazy"
+                                className="aspect-square w-full object-cover bg-stone-100"
+                              />
+                            ) : (
+                              // کاشی حرف‌اول — دمو و محصولات بدون تصویر (بدون هیچ تصویر بیرونی)
+                              <div className="aspect-square w-full bg-gradient-to-br from-amber-100 to-amber-200 flex items-center justify-center">
+                                <span className="text-2xl font-black text-amber-800">
+                                  {p.title.slice(0, 1)}
+                                </span>
+                              </div>
+                            )}
+
+                            <div className="p-3 flex-1 flex flex-col justify-between gap-2.5">
+                              <h4 className="text-xs font-bold text-stone-900 leading-snug line-clamp-2">
+                                {p.title}
+                              </h4>
+                              <div className="space-y-2">
                                 <p className="text-[11px] text-stone-500">
                                   <span className="font-black text-amber-900 font-mono">
                                     {p.price.toLocaleString('fa-IR')}
                                   </span>{' '}
                                   تومان
                                 </p>
-                              </div>
-                            </a>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {shopCategories.map((cat) => (
-                    <div key={cat.id}>
-                      <h3 className="text-sm font-bold text-stone-900 mb-3 flex items-center gap-2">
-                        <span className="w-1 h-4 rounded-full bg-amber-700" />
-                        {cat.name}
-                      </h3>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                        {cat.products.map((p) => {
-                          // همان گارد امنیتی configData این فایل — فقط http/https/mailto/tel
-                          const safeProductUrl = safeExternalUrl(p.url);
-                          const safeImageUrl = safeExternalUrl(p.imageUrl);
-                          return (
-                            <div
-                              key={p.id}
-                              className="bg-white rounded-2xl border border-stone-200/90 overflow-hidden shadow-xs hover:shadow-md transition flex flex-col"
-                            >
-                              {safeImageUrl ? (
-                                <img
-                                  src={safeImageUrl}
-                                  alt={p.title}
-                                  loading="lazy"
-                                  className="aspect-square w-full object-cover bg-stone-100"
-                                />
-                              ) : (
-                                // کاشی حرف‌اول — دمو و محصولات بدون تصویر (بدون هیچ تصویر بیرونی)
-                                <div className="aspect-square w-full bg-gradient-to-br from-amber-100 to-amber-200 flex items-center justify-center">
-                                  <span className="text-2xl font-black text-amber-800">
-                                    {p.title.slice(0, 1)}
-                                  </span>
-                                </div>
-                              )}
-
-                              <div className="p-3 flex-1 flex flex-col justify-between gap-2.5">
-                                <h4 className="text-xs font-bold text-stone-900 leading-snug line-clamp-2">
-                                  {p.title}
-                                </h4>
-                                <div className="space-y-2">
-                                  <p className="text-[11px] text-stone-500">
-                                    <span className="font-black text-amber-900 font-mono">
-                                      {p.price.toLocaleString('fa-IR')}
-                                    </span>{' '}
-                                    تومان
-                                  </p>
+                                <div className="flex flex-col gap-1.5">
+                                  {/* v1.5.0: خرید درون‌اپ — سفارش واقعی ووکامرس (افزونهٔ ۱.۶.۰) */}
+                                  {onBuyProduct && (
+                                    <button
+                                      type="button"
+                                      onClick={() => onBuyProduct(p)}
+                                      className="w-full bg-amber-800 hover:bg-amber-900 text-white text-[11px] font-semibold px-3 py-2 rounded-xl transition flex items-center justify-center gap-1.5"
+                                    >
+                                      <ShoppingBag className="w-3 h-3" />
+                                      <span>خرید از اپ</span>
+                                    </button>
+                                  )}
                                   {safeProductUrl && (
                                     <a
                                       href={safeProductUrl}
                                       target="_blank"
                                       rel="noopener noreferrer"
-                                      className="w-full bg-stone-900 hover:bg-amber-900 text-white text-[11px] font-semibold px-3 py-2 rounded-xl transition flex items-center justify-center gap-1.5"
+                                      className="w-full border border-stone-300 hover:border-amber-800 hover:text-amber-900 text-stone-600 text-[11px] font-semibold px-3 py-2 rounded-xl transition flex items-center justify-center gap-1.5"
                                     >
                                       <ExternalLink className="w-3 h-3" />
                                       <span>مشاهده در سایت</span>
@@ -612,11 +634,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
                                 </div>
                               </div>
                             </div>
-                          );
-                        })}
-                      </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  ))}
+                  )}
                 </div>
               )}
             </section>

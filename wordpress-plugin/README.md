@@ -151,7 +151,7 @@ SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
 - `GET /app-pages/{id}/content` (محتوای HTML یک صفحهٔ وب‌اپ با گیت سطح دسترسی سمت سرور — NEW در ۱.۳.۳؛ url از ۱.۳.۵)
 - `GET /memberships/my-status` (وضعیت اشتراک کاربر جاری — از ۱.۲.۰، نیازمند ورود)
 - `GET /memberships/plans` (لیست پلن‌های عضویت)
-- `POST /payment/zibal/initiate` (ایجاد تراکنش زیبال در سرور — کال‌بک هش‌محور از ۱.۱.۰؛ از ۱.۵.۰ با پارامتر اختیاری `product_id` برای خرید تک‌دوره‌ای: سفارش افزونه `plan_id="course-{id}"` می‌گیرد و در تایید، سفارش ووکامرس `processing` ساخته می‌شود)
+- `POST /payment/zibal/initiate` (ایجاد تراکنش زیبال در سرور — کال‌بک هش‌محور از ۱.۱.۰؛ از ۱.۵.۰ با پارامتر اختیاری `product_id` برای خرید تک‌دوره‌ای: سفارش افزونه `plan_id="course-{id}"` می‌گیرد و در تایید، سفارش ووکامرس `processing` ساخته می‌شود؛ از ۱.۶.۰ با `kind:'shop'` + فیلدهای `full_name/phone/address/postal_code` برای خرید درون‌اپ محصول فیزیکی: سفارش افزونه `plan_id="shop-{id}"` می‌گیرد و در تایید، سفارش ووکامرس `processing` با نشانی کامل billing+shipping ساخته می‌شود — ایمیل «سفارش جدید» ادمین)
 - `POST /payment/zibal/verify` (تایید دوطرفه سرور-به-سرور زیبال — از نسخه ۱.۰.۱ نیازمند پارامتر `cb_token` امضاشده است)
 - `POST /payment/manual-transfer/submit` (ثبت فیش کارت‌به‌کارت در وضعیت معلق)
 - `GET /admin/analytics` (آمار تجمیعی مالی - نیازمند لاگین ادمین)

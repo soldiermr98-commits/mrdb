@@ -10,7 +10,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
-import { Course, CourseCategory, Lesson, MembershipPlan, PaymentGatewayType, PaymentOrder, UserProfile, AppPage, AppUiConfig } from './types';
+import { Course, CourseCategory, Lesson, MembershipPlan, PaymentGatewayType, PaymentOrder, ShopProduct, ShopShippingInfo, UserProfile, AppPage, AppUiConfig } from './types';
 import { authService } from './services/authService';
 import { courseService } from './services/courseService';
 import { appPagesService } from './services/appPagesService';
@@ -32,6 +32,7 @@ import { PWAUpdatePrompt } from './components/common/PWAUpdatePrompt';
 import { PhoneLoginModal } from './components/auth/PhoneLoginModal';
 import { LessonPlayerModal } from './components/player/LessonPlayerModal';
 import { CheckoutModal } from './components/payment/CheckoutModal';
+import { ShopCheckoutModal } from './components/payment/ShopCheckoutModal';
 import { ZibalSimulatorModal } from './components/payment/ZibalSimulatorModal';
 import { ManualTransferModal } from './components/payment/ManualTransferModal';
 
@@ -153,6 +154,8 @@ export default function App() {
   const [selectedPlanForCheckout, setSelectedPlanForCheckout] = useState<MembershipPlan | null>(null);
   // v1.4.0: خرید مستقیم دوره — دورهٔ انتخابی برای مودال پرداخت (هم‌الگوی پلن؛ BUG-46 resume)
   const [selectedCourseForCheckout, setSelectedCourseForCheckout] = useState<Course | null>(null);
+  // v1.5.0: خرید درون‌اپ محصول فیزیکی — مودال اطلاعات ارسال/پرداخت (افزونهٔ 1.6.0)
+  const [shopCheckoutProduct, setShopCheckoutProduct] = useState<ShopProduct | null>(null);
 
   const [isZibalModalOpen, setIsZibalModalOpen] = useState(false);
   const [currentZibalOrder, setCurrentZibalOrder] = useState<PaymentOrder | null>(null);
@@ -385,6 +388,30 @@ export default function App() {
       } catch (e: any) {
         showToast(e.message || 'خطا در اتصال به درگاه زیبال', 'error');
       }
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // v1.5.0 — خرید درون‌اپ محصول فیزیکی (قرارداد افزونهٔ 1.6.0): initiate با
+  // {product_id, kind:'shop', …} سپس خروج واقعی به درگاه زیبال. گاردها آینهٔ
+  // handleBuyCourse است؛ خطاهای فارسی سرور (نشانی ناقص/محصول غیرفعال) مستقیم
+  // toast می‌شوند و مودال باز می‌ماند تا کاربر اصلاح کند. پس از تایید پرداخت،
+  // سرور سفارش ووکامرس واقعی (processing) با نشانی کامل می‌سازد → اطلاع ادمین.
+  // ---------------------------------------------------------------------------
+  const handleBuyShopProduct = async (_gateway: PaymentGatewayType, product: ShopProduct, shipping: ShopShippingInfo) => {
+    if (!currentUser) {
+      setIsLoginModalOpen(true);
+      return;
+    }
+    try {
+      const { gatewayUrl } = await paymentService.initiateShopProductPayment(currentUser, product, shipping);
+      if (isRealApiMode) {
+        window.location.href = gatewayUrl;
+        return;
+      }
+      showToast('خرید آنلاین محصولات در حالت دمو فعال نیست', 'info');
+    } catch (e: any) {
+      showToast(e.message || 'خطا در اتصال به درگاه زیبال', 'error');
     }
   };
 
@@ -646,6 +673,7 @@ export default function App() {
             onSelectPlan={handleSelectPlan}
             appUi={appUi}
             currentUser={currentUser}
+            onBuyProduct={(product) => setShopCheckoutProduct(product)}
           />
         )}
 
@@ -753,7 +781,7 @@ export default function App() {
 
           <div className="pt-4 border-t border-stone-800/80 flex flex-col sm:flex-row items-center justify-between gap-2 text-[10px] text-stone-500">
             <p>© تمام حقوق مادی و معنوی آموزش‌ها متعلق به مجموعه مستر دستباف است.</p>
-            <p>وب‌اپ نسخهٔ 1.4.0</p>
+            <p>وب‌اپ نسخهٔ 1.5.0</p>
           </div>
         </div>
       </footer>
@@ -822,6 +850,16 @@ export default function App() {
         onOpenLogin={() => setIsLoginModalOpen(true)}
         course={selectedCourseForCheckout}
         onBuyCourse={handleBuyCourse}
+      />
+
+      {/* 2.5 — v1.5.0: خرید درون‌اپ محصول فیزیکی (افزونهٔ 1.6.0) */}
+      <ShopCheckoutModal
+        isOpen={!!shopCheckoutProduct}
+        product={shopCheckoutProduct}
+        onClose={() => setShopCheckoutProduct(null)}
+        currentUser={currentUser}
+        onOpenLogin={() => setIsLoginModalOpen(true)}
+        onPay={(product, shipping) => handleBuyShopProduct('zibal', product, shipping)}
       />
 
       {/* 3. Zibal Gateway Simulator */}
