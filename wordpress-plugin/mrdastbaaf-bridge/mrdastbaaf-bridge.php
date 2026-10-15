@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.7.6
+ * Version: 1.7.7
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.7.6');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.7.7');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -781,13 +781,12 @@ add_action('mrdastbaaf_reconciliation_tick', array('MrDastbaaf_Payment_Controlle
 
 /**
  * v1.7.6: اجرای صف ارسال OTP پس‌زمینه (WP-Cron) — حادثهٔ تایم‌اوت ورود پیامکی.
- * اندازه‌گیری زندهٔ پروداکشن (۲۰۲۶/۱۰/۱۶): مسیر همگامِ «تولید کد + ارسال» تا
- * ۴۶-۶۲ ثانیه و پاسخ ۲۰۰ با بدنهٔ خالی؛ وب‌اپ با سقف ۲۰ ثانیه‌ای پیام
- * «زمان انتظار پاسخ سرور به پایان رسید» می‌داد (در حالی که ملی‌پیامک از شبکهٔ
- * دیگر ۱.۳ ثانیه‌ای پاسخ می‌دهد). از این نسخه ارسال پیامک هرگز در درخواست REST
- * اجرا نمی‌شود؛ به WP-Cron واگذار می‌شود (spawn_cron شروع فوری) و نتیجه با
- * زمان‌سنجی مراحل (هوک ثالث / ملی‌پیامک) در mrdastbaaf_sms_last_log ثبت می‌شود
- * تا ریشهٔ کندی از پیشخوان قابل تشخیص باشد. جزئیات در class-sms-service.php.
+ * v1.7.7: این هوک حالا نقش «تور ایمنی» دارد — ارسال اصلی به shutdown بعد از
+ * تحویل پاسخ منتقل شد (register_shutdown_function + fastcgi_finish_request؛
+ * جزئیات در class-sms-service.php). اگر ارسال shutdown شکست بخورد، کنترلر یک
+ * رویداد +۹۰ ثانیه‌ای روی همین هوک زمان‌بندی می‌کند؛ مارکر «ارسال‌شده» از ارسال
+ * تکراری جلوگیری می‌کند. زمان‌سنجی مراحل (هوک ثالث / ملی‌پیامک) در
+ * mrdastbaaf_sms_last_log ثبت می‌شود تا ریشهٔ هر تأخیر از پیشخوان دیده شود.
  */
 add_action('mrdastbaaf_otp_async_send', array('MrDastbaaf_Sms_Service', 'handle_async_send'), 10, 2);
 

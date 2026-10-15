@@ -13,10 +13,22 @@
  *  درخواست REST تا ۴۶-۶۲ ثانیه طول می‌کشد (در حالی که ملی‌پیامک از شبکهٔ دیگر
  *  ۱.۳ ثانیه‌ای پاسخ می‌دهد) و در نهایت پاسخ HTTP 200 با بدنهٔ خالی برمی‌گردد؛
  *  وب‌اپ با سقف ۲۰ ثانیه‌ای خود پیام «زمان انتظار پاسخ سرور به پایان رسید» می‌داد.
- *  فیکس: ارسال پیامک هرگز در درخواست REST اجرا نمی‌شود — با
+ *  فیکس ۱.۷.۶: ارسال پیامک هرگز در درخواست REST اجرا نمی‌شود — با
  *  wp_schedule_single_event به صف WP-Cron می‌رود (spawn_cron برای شروع فوری) و
  *  نتیجه در لاگ پیشخوان با زمان‌سنجی هر مرحله ثبت می‌شود تا ریشهٔ کندی (هوک ثالث /
  *  سرویس‌دهنده / شبکهٔ خروجی هاست) از پیشخوان قابل تشخیص باشد.
+ *
+ * v1.7.7 (تکمیل فیکس — پروب‌های زندهٔ پس از نصب ۱.۷.۶):
+ *  پروب‌های پروداکشن بعد از نصب ۱.۷.۶ نشان داد مسیر معتبر هنوز تا ۷۴.۶ ثانیه
+ *  معلق می‌ماند (HTTP 200 با ۰ بایت)، در حالی که transient نرخ در «همان درخواست
+ *  معلق» نوشته شده بود (پروب B: 429 در ۲.۳s) و verify-otp با bcrypt هم ۲.۱s
+ *  پاسخ می‌داد؛ یعنی تعلیق دقیقاً بعد از نوشتن‌ها و داخل schedule_async_send /
+ *  fallback همگام بود (زمان‌بندی کرون، loopback یا هوک ثالث — از بیرون تفکیک‌ناپذیر).
+ *  فیکس نهایی: مسیر پاسخ REST از ۱.۷.۷ هیچ عملیات زمان‌بندی/شبکه‌ای/هوکی ندارد؛
+ *  ارسال با register_shutdown_function به «بعد از تحویل پاسخ» می‌رود — ابتدا
+ *  fastcgi_finish_request (کلاینت پاسخ را کامل می‌گیرد) و بعد هوک ثالث +
+ *  ملی‌پیامک. تور ایمنی: اگر ارسال shutdown شکست بخورد، یک رویداد WP-Cron در +۹۰
+ *  ثانیه زمان‌بندی می‌شود؛ مارکر «ارسال‌شده» از ارسال تکراری جلوگیری می‌کند.
  *
  * نکتهٔ امنیتی: رمز سرویس پیامک در پاسخ‌ها/لاگ‌ها هرگز بازتاب داده نمی‌شود و
  * شمارهٔ موبایل در لاگ فقط به شکل ماسک‌شده نوشته می‌شود.
@@ -27,6 +39,111 @@ if (!defined('ABSPATH')) {
 }
 
 class MrDastbaaf_Sms_Service {
+
+    /**
+     * v1.7.7: صف ارسال‌های در انتظار shutdown — پر شده در درخواست REST، خالی‌شده
+     * بعد از تحویل پاسخ (run_shutdown_sends). هر درخواست PHP یک پروسهٔ مستقل است؛
+     * پس static بین درخواست‌ها نشت نمی‌کند.
+     *
+     * @var array<int, array{0: string, 1: string}>
+     */
+    private static $pending_shutdown_sends = array();
+
+    /** آیا shutdown handler قبلاً ثبت شده است؟ (هر درخواست فقط یک‌بار) */
+    private static $shutdown_registered = false;
+
+    /**
+     * v1.7.7: آیا سرویس پیامک آمادهٔ ارسال است؟ (فقط خواندن آپشن‌ها — بدون شبکه)
+     * در مسیر پاسخ REST استفاده می‌شود تا smsWarning دقیق بدون هیچ تماس سنگین
+     * به کلاینت برسد.
+     *
+     * @return bool
+     */
+    public static function is_ready() {
+        if ('melipayamak' !== get_option('mrdastbaaf_sms_provider', 'none')) {
+            return false;
+        }
+        if ('' === trim((string) get_option('mrdastbaaf_sms_username', ''))) {
+            return false;
+        }
+        if ('' === (string) get_option('mrdastbaaf_sms_password', '')) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * v1.7.7: واگذاری ارسال به shutdown — پس از اینکه پاسخ REST به کلاینت تحویل شد.
+     *
+     * این متد در مسیر پاسخ فقط داده را در صف static می‌گذارد و handler را ثبت
+     * می‌کند (هر دو چند millisecond)؛ هیچ شبکه/کرون/هوکی اجرا نمی‌کند.
+     *
+     * @param string $phone شمارهٔ نرمال‌شده
+     * @param string $code  کد ۶ رقمی
+     * @return void
+     */
+    public static function queue_shutdown_send($phone, $code) {
+        self::$pending_shutdown_sends[] = array((string) $phone, (string) $code);
+        if (!self::$shutdown_registered) {
+            self::$shutdown_registered = true;
+            register_shutdown_function(array(__CLASS__, 'run_shutdown_sends'));
+        }
+    }
+
+    /**
+     * v1.7.7: اجرای صف — بعد از پایان اسکریپت (پاسخ REST تحویل شده یا در آستانهٔ
+     * تحویل است). اول پاسخ را قطعی تحویل می‌دهیم (finish_request) و بعد هر ارسال
+     * را با همان منطق کامل (هوک ثالث + ملی‌پیامک) انجام می‌دهیم؛ اگر ارسال شکست
+     * بخورد، تور ایمنی WP-Cron در +۹۰ ثانیه یک تلاش دوم زمان‌بندی می‌شود.
+     *
+     * @return void
+     */
+    public static function run_shutdown_sends() {
+        if (empty(self::$pending_shutdown_sends)) {
+            return;
+        }
+
+        // ۱) تحویل قطعی پاسخ به کلاینت — هر خطایی پس از این نقطه به کاربر نمی‌رسد.
+        if (function_exists('litespeed_finish_request')) {
+            litespeed_finish_request();
+        } elseif (function_exists('fastcgi_finish_request')) {
+            fastcgi_finish_request();
+        }
+
+        // ۲) ارسال‌های صف‌شده — خارج از چرخهٔ پاسخ، با سقف زمانی خودشان (۱۵s ملی‌پیامک).
+        foreach (self::$pending_shutdown_sends as $send) {
+            list($phone, $code) = $send;
+            try {
+                $result = self::send_otp($phone, $code, 'full');
+                if (true === $result) {
+                    // مارکر ضد ارسال تکراری (تور ایمنی کرون آن را می‌بیند)
+                    set_transient('mrdastbaaf_otp_sent_' . md5($phone . '|' . $code), 1, 5 * MINUTE_IN_SECONDS);
+                } else {
+                    self::schedule_retry_event($phone, $code);
+                }
+            } catch (Throwable $e) {
+                // هیچ خطای پس‌زمینه‌ای نباید به هیچ‌چیز آسیب بزند
+            }
+        }
+        self::$pending_shutdown_sends = array();
+    }
+
+    /**
+     * v1.7.7: تور ایمنی — زمان‌بندی یک تلاش دوم WP-Cron (فقط وقتی ارسال اول شکست
+     * خورد). نوشتن آپشن کرون اینجا انجام می‌شود، یعنی بعد از تحویل پاسخ.
+     *
+     * @param string $phone شمارهٔ نرمال‌شده
+     * @param string $code  کد ۶ رقمی
+     * @return void
+     */
+    private static function schedule_retry_event($phone, $code) {
+        $hook = 'mrdastbaaf_otp_async_send';
+        $args = array((string) $phone, (string) $code);
+        if (wp_next_scheduled($hook, $args)) {
+            return;
+        }
+        wp_schedule_single_event(time() + 90, $hook, $args);
+    }
 
     /**
      * ارسال کد تایید یک‌بارمصرف (OTP) با الگوی پترن BaseServiceNumber.
@@ -129,16 +246,13 @@ class MrDastbaaf_Sms_Service {
 
     /**
      * v1.7.6: صف‌کردن ارسال OTP در WP-Cron + شروع فوری cron.
-     *
-     * پاسخ REST هرگز منتظر سرویس‌دهنده پیامک نمی‌ماند؛ این متد فقط زمان‌بندی می‌کند
-     * (چند millisecond) و spawn_cron درخواست loopback غیربلاک‌کننده می‌زند تا ارسال
-     * چندثانیه‌ای انجام شود نه دقیقه‌ای. اگر سرویس پیامک اصلاً تنظیم/تکمیل نباشد
-     * false برمی‌گرداند تا کنترلر با تلاش همگامِ سبک، هشدار دقیق فارسی را به کلاینت
-     * بدهد (آن مسیر هیچ تماس شبکه‌ای ندارد و همیشه سریع است).
+     * v1.7.7: دیگر در مسیر پاسخ REST فراخوانی نمی‌شود (پروب‌های زنده نشان داد همین
+     * نقطه می‌تواند پاسخ را تا ۷۴s نگه دارد)؛ برای سازگاری حفظ شده و فقط از
+     * پس‌زمینه/کدهای ثالث قابل استفاده است. مسیر اصلی اکنون queue_shutdown_send است.
      *
      * @param string $phone شمارهٔ نرمال‌شده
      * @param string $code کد ۶ رقمی
-     * @return bool true = به صف رفت / false = صف نشد (fallback همگام در کنترلر)
+     * @return bool true = به صف رفت / false = صف نشد
      */
     public static function schedule_async_send($phone, $code) {
         // اگر سرویس/اعتبارنامه آماده نیست، صف نکن — کنترلر با ارسال همگامِ سبک
@@ -188,6 +302,11 @@ class MrDastbaaf_Sms_Service {
         $phone = (string) $phone;
         if (get_transient('mrdastbaaf_otp_val_' . md5($phone)) === false) {
             self::write_log('رد شد — کد OTP ' . substr($phone, 0, 4) . '***' . substr($phone, -4) . ' منقضی یا مصرف شده بود؛ ارسال پس‌زمینه لغو شد.');
+            return;
+        }
+        // v1.7.7: اگر ارسال shutdown موفق بوده، تلاش دوم لازم نیست (ضد پیامک تکراری)
+        if (get_transient('mrdastbaaf_otp_sent_' . md5($phone . '|' . (string) $code))) {
+            self::write_log('رد شد — این کد قبلاً با موفقیت ارسال شده بود؛ تلاش دوم تور ایمنی لغو شد.');
             return;
         }
         self::send_otp($phone, (string) $code, 'full');
