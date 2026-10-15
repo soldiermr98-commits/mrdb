@@ -44,6 +44,8 @@ import { MembershipView } from './views/MembershipView';
 import { UserDashboardView } from './views/UserDashboardView';
 import { AdminDashboardView } from './views/AdminDashboardView';
 import { EditorialPageView } from './views/EditorialPageView';
+// v1.5.1: صفحهٔ عیب‌یابی #/debug — عمومی، بدون نیاز به لاگین
+import { DebugView } from './views/DebugView';
 
 // BUG-52: typed navigation params instead of `any`
 interface AppViewParams {
@@ -83,6 +85,8 @@ const serializeRoute = (view: string, params: AppViewParams): string => {
       return params.slug ? `#/page/${encodeURIComponent(params.slug)}` : '#/editorial';
     case 'app_page':
       return params.pageId ? `#/app-page/${encodeURIComponent(params.pageId)}` : '#/';
+    case 'debug':
+      return '#/debug';
     default:
       return '#/';
   }
@@ -118,6 +122,9 @@ const parseRoute = (hash: string): { view: string; params: AppViewParams } => {
       return segments[1]
         ? { view: 'app_page', params: { pageId: decodeURIComponent(segments[1]) } }
         : { view: 'home', params: {} };
+    case 'debug':
+      // v1.5.1: صفحهٔ عیب‌یابی — عمومی، بدون گارد
+      return { view: 'debug', params: {} };
     default:
       // DEV-2: empty/unknown hash → home.
       return { view: 'home', params: {} };
@@ -734,6 +741,11 @@ export default function App() {
             pageId={viewParams.pageId || ''}
             onNavigate={handleNavigate}
           />
+        )}
+
+        {/* v1.5.1: صفحهٔ عیب‌یابی — عمومی، بدون گارد */}
+        {activeView === 'debug' && (
+          <DebugView onNavigate={handleNavigate} />
         )}
       </main>
 

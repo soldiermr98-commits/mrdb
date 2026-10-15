@@ -1,0 +1,100 @@
+# ===========================================================================
+# مستر دستباف PWA — پیکربندی هاست Apache/LiteSpeed (cPanel اشتراکی)
+# ---------------------------------------------------------------------------
+# این فایل به‌صورت خودکار در ZIP بیلد PWA (v1.5.1+) قرار می‌گیرد.
+# کافیست محتویات ZIP را در ریشهٔ app.mrdastbaaf.com استخراج کنید — این
+# .htaccess هم کنار index.html و sw.js قرار می‌گیرد و خودش فعال می‌شود.
+#
+# اگر هاست شما Nginx (بدون Apache) است، به docs/APP_HOSTING_HTACCESS.sample
+# در ریپو مراجعه کنید — معادل directive ها برای Nginx آنجا آمده است.
+#
+# هدف اصلی: جلوگیری از کش شدن /sw.js و /manifest.webmanifest توسط هاست.
+# بدون این، کاربران نسخه‌های قدیمی PWA را هفته‌ها می‌بینند (ریشهٔ «خطای
+# اتصال» در داشبورد) چون Service Worker قدیمی از کش هاست سرو می‌شود.
+# ===========================================================================
+
+# امنیت: جلوگیری از نمایش فهرست دایرکتوری + دنبال‌کردن symlinks (cPanel)
+Options -Indexes -MultiViews +FollowSymLinks
+
+# ---------------------------------------------------------------------------
+# ۱) Service Worker — مهم‌ترین بخش! هرگز کش نشود.
+#    /sw.js و /workbox-*.js کوچک‌اند و باید همیشه از سرور خوانده شوند.
+# ---------------------------------------------------------------------------
+<IfModule mod_headers.c>
+  <FilesMatch "^(sw|workbox-[^/]+)\.js$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+    Header set Service-Worker-Allowed "/"
+    Header set Pragma "no-cache"
+    Header set Expires "Wed, 11 Jan 1984 05:00:00 GMT"
+  </FilesMatch>
+</IfModule>
+
+# ---------------------------------------------------------------------------
+# ۲) Manifest — هرگز کش نشود (تا تغییرات آیکون/نام فوراً اعمال شود)
+# ---------------------------------------------------------------------------
+<IfModule mod_headers.c>
+  <FilesMatch "manifest\.webmanifest$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+  </FilesMatch>
+</IfModule>
+
+# ---------------------------------------------------------------------------
+# ۳) index.html — همیشه از سرور خوانده شود (entry point)
+#    اگر کش شود، کاربر برای همیشه HTML قدیمی می‌بیند که به فایل‌های قدیمی
+#    JS/CSS اشاره می‌کند.
+# ---------------------------------------------------------------------------
+<IfModule mod_headers.c>
+  <FilesMatch "^index\.html$">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+</IfModule>
+
+# ---------------------------------------------------------------------------
+# ۴) فایل‌های hash‌شده (assets/) — کش نامحدود امن است
+#    نام فایل شامل hash است، هر تغییری URL جدید می‌سازد. پس max-age=1year.
+# ---------------------------------------------------------------------------
+<IfModule mod_headers.c>
+  <FilesMatch "\.(js|css|woff2|png|jpg|jpeg|gif|svg|ico)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+</IfModule>
+
+# ---------------------------------------------------------------------------
+# ۵) فشرده‌سازی — اختیاری (LiteSpeed خودش فشرده می‌کند، ولی صدمه‌ای ندارد)
+#    فقط روی Apache واقعی (mod_deflate) اثر می‌کند.
+# ---------------------------------------------------------------------------
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE application/javascript text/javascript application/json text/css text/html
+</IfModule>
+
+# ---------------------------------------------------------------------------
+# ۶) MIME type صحیح برای manifest.webmanifest (برخی هاست‌ها این را نمی‌دانند)
+# ---------------------------------------------------------------------------
+<IfModule mod_mime.c>
+  AddType application/manifest+json .webmanifest
+</IfModule>
+
+# ---------------------------------------------------------------------------
+# ۷) CORS — اجازهٔ دسترسی cross-origin به manifest و SW (برای PWA نصب‌شده)
+# ---------------------------------------------------------------------------
+<IfModule mod_headers.c>
+  <FilesMatch "(manifest\.webmanifest|sw\.js)$">
+    Header set Access-Control-Allow-Origin "*"
+  </FilesMatch>
+</IfModule>
+
+# ---------------------------------------------------------------------------
+# ۸) امنیت: مخفی‌کردن .htaccess خودش و فایل‌های مخفی
+# ---------------------------------------------------------------------------
+<FilesMatch "^\.">
+  Require all denied
+</FilesMatch>
+
+# ---------------------------------------------------------------------------
+# ۹) fallback: روت‌های hash-based PWA (مثل /#/dashboard) نیازی به rewrite ندارند
+#    چون fragment (#) به سرور ارسال نمی‌شود. ولی برای اطمینان از اینکه
+#    ریشهٔ / همیشه index.html را برمی‌گرداند (نه 403 در صورت نبود index):
+# ---------------------------------------------------------------------------
+<IfModule mod_dir.c>
+  DirectoryIndex index.html
+</IfModule>

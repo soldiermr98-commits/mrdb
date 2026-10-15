@@ -36,10 +36,25 @@ export default defineConfig(({ command, mode }) => {
       react(),
       tailwindcss(),
       VitePWA({
-        // DEV-7: prompt mode — a new waiting service worker no longer activates
-        // silently; PWAUpdatePrompt (virtual:pwa-register/react) surfaces the
-        // update and only reloads when the user confirms.
-        registerType: 'prompt',
+        // v1.5.1: autoUpdate — ریشه‌ی «چسبیدن SW قدیمی» که کاربر را در داشبورد
+        // با «خطای اتصال» گیر می‌انداخت. در حالت prompt، اگر کاربر کارت را X
+        // می‌زد یا اصلاً نمی‌دید، SW جدید هیچ‌وقت فعال نمی‌شود و کلاینت همچنان
+        // باندل قبلی را روی اندپوینت‌های جدید سرور می‌فرستاد.
+        // autoUpdate:
+        //   ۱) SKIP_WAITING را به waiting worker می‌فرستد
+        //   ۲) به محض controllerchange، کلاینت‌ها را reload می‌کند
+        //   ۳) PWAUpdatePrompt به‌جای دکمهٔ تأیید، یک نوار «در حال به‌روزرسانی…»
+        //      موقت نشان می‌دهد تا reload ناگهانی برای کاربر عجیب نباشد.
+        registerType: 'autoUpdate',
+        // v1.5.1: skipWaiting + clients.claim صریح — حتی اگر یک کلاینت قدیمی
+        // هنوز باز باشد، SW جدید در همان navig بعدی کنترل را می‌گیرد.
+        workbox: {
+          skipWaiting: true,
+          clientsClaim: true,
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          // v1.2.6: قانون کش فونت‌های گوگل حذف شد — وزیرمتن حالا لوکال باندل می‌شود
+          // (فونت در precache است؛ هیچ درخواستی به fonts.googleapis/gstatic نمی‌رود)
+        },
         // v1.2.7: نام فایل‌های آیکون دوباره عوض شد (mrd-appicon-*) — آیکون لانچر اندروید
         // (WebAPK) با آپدیت PWA تازه نمی‌شود؛ تغییر src در مانیفست، کروم را به re-mint
         // ترغیب می‌کند. آیکن maskable هم با safe-zone استاندارد (لوگو ۷۵٪ روی بک‌گراند توپر) بازسازی شد.
@@ -76,11 +91,6 @@ export default defineConfig(({ command, mode }) => {
               purpose: 'maskable',
             },
           ],
-        },
-        workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
-          // v1.2.6: قانون کش فونت‌های گوگل حذف شد — وزیرمتن حالا لوکال باندل می‌شود
-          // (فونت در precache است؛ هیچ درخواستی به fonts.googleapis/gstatic نمی‌رود)
         },
         devOptions: {
           enabled: true,

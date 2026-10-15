@@ -1,0 +1,84 @@
+# ===========================================================================
+# Mr. Dastbaaf PWA — نمونهٔ پیکربندی هاست (مرجع کامل)
+# ---------------------------------------------------------------------------
+# از v1.5.1، فایل `.htaccess` به‌صورت خودکار در ZIP بیلد PWA قرار می‌گیرد
+# (داخل پوشهٔ `public/` سورس قرار دارد و Vite آن را به `dist/` کپی می‌کند).
+# یعنی وقتی محتویات `mrdastbaaf-pwa-build-v1.5.1.zip` را در ریشهٔ هاست
+# استخراج می‌کنید، این فایل هم کنار `index.html` و `sw.js` قرار می‌گیرد
+# و خودش فعال می‌شود — هیچ کار اضافه‌ای لازم نیست.
+#
+# این فایل (APP_HOSTING_HTACCESS.sample) فقط برای مرجع است:
+#   - توضیحات کامل هر بخش
+#   - معادل Nginx در صورتی که هاست شما Nginx (بدون Apache) باشد
+#   - برای دیباگ یا سفارشی‌سازی دستی
+#
+# محتوای این فایل دقیقاً همان `public/.htaccess` است که در ZIP بیلد قرار
+# می‌گیرد — فقط با توضیحات اضافه برای مرجع.
+# ===========================================================================
+
+# ===========================================================================
+# معادل Nginx (اگر هاست شما Nginx است بدون Apache):
+# ===========================================================================
+#
+#   # Service Worker — هرگز کش نشود (مهم‌ترین)
+#   location = /sw.js {
+#     add_header Cache-Control "no-cache, no-store, must-revalidate";
+#     add_header Service-Worker-Allowed "/";
+#     expires off;
+#   }
+#   location ~* /workbox-.*\.js$ {
+#     add_header Cache-Control "no-cache, no-store, must-revalidate";
+#     expires off;
+#   }
+#
+#   # Manifest — هرگز کش نشود
+#   location = /manifest.webmanifest {
+#     add_header Cache-Control "no-cache, no-store, must-revalidate";
+#     add_header Access-Control-Allow-Origin "*";
+#     expires off;
+#   }
+#
+#   # index.html — همیشه از سرور
+#   location = /index.html {
+#     add_header Cache-Control "no-cache, must-revalidate";
+#   }
+#
+#   # فایل‌های hash‌شده — کش ۱سالهٔ immutable
+#   location ~* \.(js|css|woff2|png|jpg|jpeg|gif|svg|ico)$ {
+#     add_header Cache-Control "public, max-age=31536000, immutable";
+#   }
+#
+#   # MIME type صحیح برای manifest
+#   types {
+#     application/manifest+json webmanifest;
+#   }
+#
+# ===========================================================================
+
+# ===========================================================================
+# توضیحات هر بخش (محتوای واقعی در public/.htaccess):
+# ===========================================================================
+#
+# 1) /sw.js و /workbox-*.js: Cache-Control: no-cache, no-store, must-revalidate
+#    + Service-Worker-Allowed: /
+#    ریشهٔ اصلی مشکل: اکثر هاست‌های اشتراکی cPanel به‌طور پیش‌فرض فایل‌های استاتیک
+#    را با max-age حداکثر کش می‌کنند. اگر /sw.js کش شود، مرورگر هفته‌ها نسخهٔ
+#    قدیمی را از کش می‌خواند.
+#
+# 2) /manifest.webmanifest: همان no-cache + CORS برای نصب PWA
+#
+# 3) /index.html: no-cache, must-revalidate (entry point — باید همیشه تازه باشد)
+#
+# 4) فایل‌های hash‌شده assets/*.{js,css,...}: public, max-age=31536000, immutable
+#    چون نام فایل شامل hash است، هر تغییری URL جدید می‌سازد.
+#
+# 5) فشرده‌سازی (mod_deflate): اختیاری، روی LiteSpeed اثر ندارد ولی صدمه‌ای هم
+#    نمی‌زند (LiteSpeed خودش gzip می‌کند).
+#
+# 6) MIME type صحیح برای .webmanifest (برخی هاست‌ها نمی‌دانند)
+#
+# 7) CORS روی manifest و SW (برای PWA نصب‌شده از دامنهٔ متفاوت)
+#
+# 8) مخفی‌کردن فایل‌های مخفی (شامل خود .htaccess)
+#
+# 9) DirectoryIndex index.html برای اطمینان
