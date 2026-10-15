@@ -144,6 +144,19 @@ class MrDastbaaf_Settings_Controller {
             'default' => false,
             'show_in_rest' => false,
         ));
+
+        // v1.7.4: «نسخهٔ مستقر PWA» — قلب مکانیزم آپدیت خودکار کلاینت‌ها.
+        // پس از استقرار باندل جدید روی app.mrdastbaaf.com، همین عدد باید به
+        // نسخهٔ جدید تغییر کند؛ کلاینت‌های 1.5.4+ (چکر نسخه) حداکثر تا ۲ دقیقه
+        // بعد خودکار reload می‌شوند — حتی اپ‌های نصب‌شده (standalone).
+        // ذخیرهٔ همین فیلد، خودکار content_hash را هم تازه می‌کند (bump_content_hash_on_option_update)
+        // یعنی داده‌ها (قیمت‌ها/محتوا) هم بلافاصله refetch می‌شوند.
+        register_setting(self::SETTINGS_GROUP, 'mrdastbaaf_pwa_version', array(
+            'type' => 'string',
+            'sanitize_callback' => array($this, 'sanitize_pwa_version'),
+            'default' => MRDASTBAAF_PWA_VERSION_DEFAULT,
+            'show_in_rest' => false,
+        ));
     }
 
     /**
@@ -211,6 +224,21 @@ class MrDastbaaf_Settings_Controller {
      * رمز پیامک — فقط وقتی ورودی غیرخالی است ذخیره می‌شود؛ ورودی خالی یعنی
      * «بدون تغییر» تا رمز ذخیره‌شده با ارسال فرم خالی از بین نرود.
      */
+    /**
+     * v1.7.4: sanitize نسخهٔ مستقر PWA — فقط فرمت x.y.z عددی معتبر پذیرفته
+     * می‌شود؛ ورودی نامعتبر → مقدار فعلی حفظ می‌شود (هیچ‌وقت گزینه با مقدار
+     * خراب overwrite نمی‌شود) و /version همچنان مقدار معتبر برمی‌گرداند.
+     */
+    public function sanitize_pwa_version($value) {
+        $value = trim((string) $value);
+        if (preg_match('/^\d+(\.\d+)*$/', $value)) {
+            return $value;
+        }
+        // نامعتبر → حفظ مقدار فعلی (یا پیش‌فرض اگر هنوز seed نشده)
+        $current = trim((string) get_option('mrdastbaaf_pwa_version', ''));
+        return ('' !== $current) ? $current : MRDASTBAAF_PWA_VERSION_DEFAULT;
+    }
+
     public function sanitize_sms_password($value) {
         $value = trim((string) $value);
         if ('' === $value) {
@@ -363,6 +391,44 @@ class MrDastbaaf_Settings_Controller {
                         </td>
                     </tr>
                 </table>
+                </div>
+
+                <?php // v1.7.4: کارت مدیریت نسخه و آپدیت خودکار PWA ?>
+                <div class="mrd-card">
+                    <h2 class="mrd-card__title">نسخه و به‌روزرسانی PWA</h2>
+                    <p class="description" style="margin-top:0;">
+                        مکانیزم آپدیت خودکار: کلاینت‌های نسخهٔ 1.5.4 به بالا هر ۲ دقیقه اندپوینت <code>GET /version</code> را چک می‌کنند (حتی اپ‌های نصب‌شده روی گوشی). اگر عدد زیر <strong>بزرگ‌تر</strong> از نسخهٔ باندل آن‌ها باشد، خودکار بارگذاری مجدد می‌شوند — بدون هیچ کاری از سمت کاربر.
+                    </p>
+                    <table class="form-table" role="presentation">
+                    <tr>
+                        <th scope="row">
+                            <label for="mrd-pwa-version">نسخهٔ مستقر PWA</label>
+                            <span class="mrd-badge mrd-badge--new">v1.7.4</span>
+                        </th>
+                        <td>
+                            <input type="text" id="mrd-pwa-version" name="mrdastbaaf_pwa_version" value="<?php echo esc_attr((string) get_option('mrdastbaaf_pwa_version', MRDASTBAAF_PWA_VERSION_DEFAULT)); ?>" class="regular-text code" dir="ltr" placeholder="1.5.5" autocomplete="off" />
+                            <p class="description">
+                                <strong>چک‌لیست انتشار نسخهٔ جدید:</strong>
+                                ۱) باندل جدید را روی <code dir="ltr">app.mrdastbaaf.com</code> مستقر کنید (ZIP مرکز دانلود)
+                                ۲) عدد همین فیلد را به نسخهٔ باندل جدید تغییر دهید (مثلاً <code dir="ltr">1.5.5</code>)
+                                ۳) ذخیره کنید — همین ذخیره، هش محتوا را هم تازه می‌کند و قیمت‌ها/محتوای همهٔ کلاینت‌ها refetch می‌شود.
+                                کاربران می‌توانند نسخهٔ باندل خودشان را در <code dir="ltr">app.mrdastbaaf.com/#/debug</code> ببینند.
+                                <em>فرمت مجاز: فقط عدد و نقطه (مثل 1.5.5) — مقدار نامعتبر نادیده گرفته می‌شود.</em>
+                            </p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">وضعیت فعلی</th>
+                        <td>
+                            <p class="description" style="margin:0;">
+                                نسخهٔ اعلام‌شده به کلاینت‌ها: <code dir="ltr"><?php echo esc_html(mrdastbaaf_get_deployed_pwa_version()); ?></code>
+                                &nbsp;·&nbsp; هش محتوا: <code dir="ltr"><?php echo esc_html((string) get_option('mrdastbaaf_content_hash', '—')); ?></code>
+                                <br>نکته: فقط وقتی نسخهٔ سرور «جدیدتر» از باندل کلاینت باشد reload رخ می‌دهد؛ عدد کوچک‌تر عمداً نادیده گرفته می‌شود (ضد حلقهٔ reload — فیکس v1.5.5).
+                                کاربرانی که هنوز روی باندل ≤1.5.3 چسبیده‌اند، یک‌بار صفحهٔ <code dir="ltr">#/debug</code> را باز کنند و «پاک‌سازی کامل و بارگذاری مجدد» را بزنند؛ از آن به بعد همهٔ آپدها خودکار است.
+                            </p>
+                        </td>
+                    </tr>
+                    </table>
                 </div>
 
                 <?php submit_button('ذخیره تنظیمات'); ?>
