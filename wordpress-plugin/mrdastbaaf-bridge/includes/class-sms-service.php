@@ -263,8 +263,9 @@ class MrDastbaaf_Sms_Service {
                 $mask  = substr($phone, 0, 4) . '***' . substr($phone, -4);
                 $age   = time() - (int) $entry['ts'];
 
-                // سقف پردازش در هر دیسپچ: ۳ ورودی (باقی برای دیسپچ بعدی)
-                if (count($result['results']) >= 3) {
+                // سقف پردازش در هر دیسپچ: ۲ ورودی (v1.7.9: با timeout ملی‌پیامک ۱۰s
+                // بدترین حالت ~۲۲ ثانیه زیر آستانهٔ کشته‌شدن فرایند این هاست)
+                if (count($result['results']) >= 2) {
                     $remaining[] = $entry;
                     continue;
                 }
@@ -287,6 +288,13 @@ class MrDastbaaf_Sms_Service {
 
                 $send_result = self::send_direct($phone, $code);
                 $result['processed'] = (int) $result['processed'] + 1;
+
+                // v1.7.9: پس از ارسال، کش شماره→کاربر گرم می‌شود تا verify-otp
+                // (مسیر پاسخ) هرگز منتظر فال‌بک متای کند نماند. عمداً «بعد از»
+                // ارسال است تا هر کندی احتمالی به ارسال پیامک آسیب نزند.
+                if (class_exists('MrDastbaaf_Auth_Controller')) {
+                    MrDastbaaf_Auth_Controller::find_user_by_phone_full($phone);
+                }
 
                 if (true === $send_result) {
                     set_transient('mrdastbaaf_otp_sent_' . md5($phone . '|' . $code), 1, 5 * MINUTE_IN_SECONDS);
@@ -450,9 +458,11 @@ class MrDastbaaf_Sms_Service {
         }
 
         $t_api = microtime(true);
+        // v1.7.9: timeout ۱۵→۱۰ — دیسپچ با ۲ ورودی هرگز از ~۲۲ ثانیه فراتر نمی‌رود
+        // (آستانهٔ کشته‌شدن فرایند این هاست ~۳۰-۶۰ ثانیه است)
         $response = wp_remote_post('https://rest.payamak-panel.com/api/SendSMS/BaseServiceNumber', array(
             'body'    => $request_body,
-            'timeout' => 15,
+            'timeout' => 10,
         ));
         $timing[] = 'ملی‌پیامک: ' . round(microtime(true) - $t_api, 2) . 's';
 

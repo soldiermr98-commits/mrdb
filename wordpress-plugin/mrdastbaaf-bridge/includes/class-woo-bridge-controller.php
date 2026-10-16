@@ -234,14 +234,20 @@ class MrDastbaaf_Woo_Bridge_Controller {
         }
 
         foreach ($candidates as $candidate) {
-            $found = get_users(array(
-                'meta_key'   => 'billing_phone',
-                'meta_value' => $candidate,
-                'number'     => 1,
-                'fields'     => 'all',
-            ));
-            if (!empty($found)) {
-                return $found[0];
+            // v1.7.9: فال‌بک متا با WP_User_query سنگین حذف شد — همان ریشهٔ تعلیق
+            // ۴۵-۶۰ ثانیه‌ای حادثهٔ تایم‌اوت OTP (روی این هاست فرایند کشته می‌شود و
+            // فعال‌سازی اشتراکِ سفارشِ پرداخت‌شده هرگز اجرا نمی‌شد). اکنون اول کش/
+            // user_login، سپس فال‌بک سبک get_var (LIMIT 1) با کش مثبت/منفی.
+            $user = MrDastbaaf_Auth_Controller::find_user_by_phone_fast($candidate);
+            if ($user) {
+                return $user;
+            }
+        }
+
+        foreach ($candidates as $candidate) {
+            $user = MrDastbaaf_Auth_Controller::find_user_by_phone_full($candidate);
+            if ($user) {
+                return $user;
             }
         }
 
