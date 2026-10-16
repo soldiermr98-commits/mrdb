@@ -88,11 +88,6 @@ class MrDastbaaf_Auth_Controller {
      * ارسال پیامک کد تایید به شماره موبایل هنرجو
      */
     public function handle_request_otp(WP_REST_Request $request) {
-        // v1.7.8: سنجش زمان مسیر پاسخ — اگر گذشت زمان از ۵ ثانیه بیشتر شد، هشدار
-        // در لاگ پیشخوان ثبت می‌شود تا ریشهٔ کندی (دیتابیس/آبجکت‌کش هاست) از
-        // پیشخوان قابل تشخیص باشد (ارسال پیامک در این مسیر نقشی ندارد).
-        $otp_path_t0 = microtime(true);
-
         $phone = sanitize_text_field($request->get_param('phone'));
         $phone = preg_replace('/^(\+98|0098)/', '0', trim($phone));
 
@@ -100,75 +95,47 @@ class MrDastbaaf_Auth_Controller {
             return new WP_Error('invalid_phone', 'شماره موبایل وارد شده معتبر نیست.', array('status' => 400));
         }
 
-        // اعمال محدودیت نرخ درخواست (Rate Limit: 1 پیامک در ۲ دقیقه)
-        $rate_key = 'mrdastbaaf_otp_rate_' . md5($phone);
-        if (get_transient($rate_key)) {
+        /**
+         * v1.7.11 — فیکس معماری نهایی تایم‌اوت OTP (پروب زندهٔ ۱۶ اکتبر روی 1.7.10):
+         * request-otp معتبر ۴۱.۲s/۴۲.۴s معلق می‌ماند (HTTP 200 با ۰ بایت) در حالی که:
+         *  - ردیف لاگِ «قبل از تریگر» ۱.۷.۱۰ هرگز نوشته نشد + باکس خروجی خالی ماند؛
+         *  - تکرار همان شماره 429 در ۱.۵s گرفت (خواندن‌ها سبک‌اند)؛
+         *  - شمارهٔ «تازه» هم معلق ماند (ردیف‌های per-phone مقصر نیستند)؛
+         *  - پروب نوشتن «ردیف تازه» در /auth/health فقط ۹۰-۱۷۷ms طول می‌کشد.
+         * نتیجه: تعلیق روی به‌روزرسانی «ردیف‌های اشتراکی» ثابت wp_options است
+         * (شمارندهٔ سراسری، سهمیهٔ IP، transient باکس، فلگ autoload، لاگ) که هر
+         * درخواستی به همان چند ردیف می‌نویسد؛ فرایندهای کشته‌شده/زامبی روی آن‌ها
+         * صف قفل می‌سازند و LiteSpeed فرایند معلق ~۴۱-۴۶ ثانیه‌ای را می‌کشد.
+         *
+         * اکنون مسیر پاسخ «صفر نوشتن اشتراکی» دارد:
+         *  - سهمیه‌های ضد-سوءاستفاده = COUNT ایندکس‌شده روی جدول درخواست‌ها
+         *    (فقط خواندن؛ نرخ ۲ دقیقه، ۵/ساعت، ۱۵/روز per-phone و ۱۰/ساعت per-IP)؛
+         *  - تنها نوشتن = INSERT ردیف تازه (AUTO_INCREMENT — صفر رقابت ردیفی)؛
+         *  - شمارندهٔ سراسری ساعتی (از v1.2.0 فقط لاگ‌رون بود) حذف شد؛
+         *  - ارسال در فرایند جدا (معماری ۱.۷.۸) از جدول می‌خواند.
+         */
+
+        // سهمیهٔ ۱: قفل ۲ دقیقه‌ای بین دو کد برای یک شماره (نرخ فوری)
+        if (MrDastbaaf_Sms_Service::count_recent_requests('phone', $phone, 2 * MINUTE_IN_SECONDS) >= 1) {
             return new WP_Error('rate_limited', 'لطفاً ۲ دقیقه صبر کرده و مجدداً تلاش فرمایید.', array('status' => 429));
         }
 
-        // ABUSE FIX (v1.2.0): سقف‌های ساعتی/روزانه مستقل per-phone — قفل ۲ دقیقه‌ای
-        // تنها جلوی اسپم فوری را می‌گیرد؛ مهاجم می‌توانست هر ۲ دقیقه یک پیامک بفرستد
-        // (۳۰ پیامک در ساعت به یک شماره). اکنون سقف ۵ در ساعت و ۱۵ در روز برای هر شماره.
-        // NOTE (نژاد ثبت‌شده): check-then-increment با transient اتمی نیست؛ در رقابت
-        // میلی‌ثانیه‌ای ممکن است ۱-۲ پیامک اضافه عبور کند — برای rate-limit قابل قبول
-        // است و در نصب‌های با Redis/Memcached می‌توان به wp_cache_incr اتمی مهاجرت کرد.
-        $phone_md5 = md5($phone);
-        $ph_hourly_key = 'mrdastbaaf_otp_ph_h_' . $phone_md5;
-        $ph_daily_key = 'mrdastbaaf_otp_ph_d_' . $phone_md5;
-        $ph_hourly_count = (int) get_transient($ph_hourly_key);
-        if ($ph_hourly_count >= 5) {
+        // سهمیهٔ ۲ و ۳: سقف ۵ در ساعت و ۱۵ در روز برای هر شماره (ABUSE FIX v1.2.0)
+        if (MrDastbaaf_Sms_Service::count_recent_requests('phone', $phone, HOUR_IN_SECONDS) >= 5) {
             return new WP_Error('rate_limited', 'تعداد کدهای ارسالی به این شماره در یک ساعت بیش از حد مجاز است؛ کمی بعد دوباره تلاش کنید.', array('status' => 429));
         }
-        $ph_daily_count = (int) get_transient($ph_daily_key);
-        if ($ph_daily_count >= 15) {
+        if (MrDastbaaf_Sms_Service::count_recent_requests('phone', $phone, DAY_IN_SECONDS) >= 15) {
             return new WP_Error('rate_limited', 'تعداد کدهای ارسالی به این شماره در یک روز بیش از حد مجاز است؛ فردا دوباره تلاش کنید.', array('status' => 429));
         }
 
-        // ABUSE FIX (BUG-29): سقف ساعتی بر اساس IP واقعی — مهاجم با شماره‌های مختلف
-        // نمی‌تواند یک IP را برای ارسال انبوه پیامک مصرف کند (۱۰ درخواست در ساعت).
-        // v1.2.0: IP از هلپر get_client_ip() خوانده می‌شود تا پشت reverse-proxy
-        // (با هدر اعتمادشدهٔ تنظیم‌شده در پنل) همه یک IP مشترک نداشته باشند.
+        // سهمیهٔ ۴: سقف ۱۰ درخواست در ساعت بر اساس IP واقعی (ABUSE FIX BUG-29)
         $ip = self::get_client_ip();
-        $ip_key = '';
-        $ip_count = 0;
-        if ($ip !== '') {
-            $ip_key = 'mrdastbaaf_otp_ip_' . md5($ip);
-            $ip_count = (int) get_transient($ip_key);
-            if ($ip_count >= 10) {
-                return new WP_Error('rate_limited', 'تعداد درخواست‌ها بیش از حد مجاز است؛ کمی بعد دوباره تلاش کنید.', array('status' => 429));
-            }
+        if ('' !== $ip && MrDastbaaf_Sms_Service::count_recent_requests('ip_md5', md5($ip), HOUR_IN_SECONDS) >= 10) {
+            return new WP_Error('rate_limited', 'تعداد درخواست‌ها بیش از حد مجاز است؛ کمی بعد دوباره تلاش کنید.', array('status' => 429));
         }
 
-        /**
-         * ABUSE FIX (v1.2.0 — تصمیم ثبت‌شده): شمارنده سراسری ساعتی دیگر بلاک نمی‌کند
-         * و فقط LOG-ONLY است. دلیل: در حملهٔ توزیع‌شدهٔ چند-IP، سقف سراسری ۲۰۰/ساعت
-         * کل سرویس ورود را از کار می‌انداخت (DoS از طرف مهاجم). محدودیت‌های per-phone
-         * (۵/ساعت، ۱۵/روز) و per-IP (۱۰/ساعت) همچنان بلاک‌کننده می‌مانند؛ تا افزودن
-         * کپچا، سقف سراسری نباید سرویس را خاموش کند.
-         */
-        $global_count = (int) get_option('mrdastbaaf_otp_hourly_count', 0);
-        $global_window_started = (int) get_option('mrdastbaaf_otp_hourly_started', 0);
-        if ($global_window_started === 0 || (time() - $global_window_started) >= HOUR_IN_SECONDS) {
-            $global_count = 0;
-            $global_window_started = time();
-        }
-        if ($global_count >= 200) {
-            error_log('MrDastbaaf: global OTP hourly cap reached — possible distributed abuse');
-        }
-
-        /**
-         * v1.7.9 — ریشهٔ واقعی حادثهٔ تایم‌اوت OTP (پروب‌های زندهٔ ۱۶ اکتبر):
-         * فال‌بک get_users روی متای billing_phone (WP_User_Query با JOIN + DISTINCT
-         * + ORDER BY روی متای بدون ایندکس) روی این هاست ۴۵-۶۰ ثانیه معلق می‌ماند و
-         * LiteSpeed فرایند را پیش از «اولین نوشتن» (حتی قفل rate-limit) می‌کشد —
-         * اثبات: درخواست تکراری همان شماره هرگز 429 نگرفت و پاسخ ۲۰۰ با ۰ بایت بود.
-         * مسیر پاسخ اکنون فقط جست‌وجوی سریع (user_login + کش transient) را انجام
-         * می‌دهد؛ فال‌بک متا فقط در verify-otp (کش سرد، با کوئری سبک get_var) و
-         * در پس‌زمینه (دیسپچ، بعد از ارسال) اجرا می‌شود.
-         */
-        $t_find = microtime(true);
+        // جست‌وجوی سریع شماره→کاربر (user_login + کش transient — بدون فال‌بک متا)
         $existing_user = self::find_user_by_phone_fast($phone);
-        $find_elapsed = round(microtime(true) - $t_find, 2);
         $role_guard = self::guard_student_role($existing_user);
         if (is_wp_error($role_guard)) {
             return $role_guard;
@@ -177,74 +144,40 @@ class MrDastbaaf_Auth_Controller {
         // تولید کد ۶ رقمی (v1.2.0 — یافتهٔ ۲-۱۱: کد ۵ رقمی فضای جست‌وجوی کوچک‌تری داشت)
         $otp_code = wp_rand(100000, 999999);
 
-        // ذخیره هش کد برای ۲ دقیقه
-        $storage_key = 'mrdastbaaf_otp_val_' . md5($phone);
-        set_transient($storage_key, wp_hash_password((string)$otp_code), 120);
-        set_transient($rate_key, true, 120);
-
-        // ABUSE FIX (v1.2.0): ثبت مصرف سهمیه‌های per-phone و per-IP پیش از ارسال پیامک
-        set_transient($ph_hourly_key, $ph_hourly_count + 1, HOUR_IN_SECONDS);
-        set_transient($ph_daily_key, $ph_daily_count + 1, DAY_IN_SECONDS);
-        if ($ip_key !== '') {
-            set_transient($ip_key, $ip_count + 1, HOUR_IN_SECONDS);
+        // v1.7.11: تنها نوشتنِ مسیر پاسخ — INSERT ردیف تازه در جدول درخواست‌ها
+        // (کدِ خام برای دیسپچ ارسال + هش bcrypt برای verify). اگر این INSERT هم
+        // به هر دلیل شکست بخورد، پاسخ ۵۰۰ ساختارمند برمی‌گردد (نه تایم‌اوت خام).
+        global $wpdb;
+        $request_id = MrDastbaaf_Sms_Service::enqueue_request(
+            $phone,
+            (string) $otp_code,
+            wp_hash_password((string) $otp_code),
+            ('' !== $ip ? md5($ip) : '')
+        );
+        if (false === $request_id) {
+            error_log('MrDastbaaf: OTP request INSERT failed — ' . $wpdb->last_error);
+            return new WP_Error('otp_storage_failed', 'ثبت درخواست کد تایید ممکن نشد؛ لطفاً چند لحظه بعد دوباره تلاش کنید.', array('status' => 500));
         }
-        update_option('mrdastbaaf_otp_hourly_count', $global_count + 1, false);
-        update_option('mrdastbaaf_otp_hourly_started', $global_window_started, false);
 
-        /**
-         * v1.7.8: مسیر پاسخ REST فقط primitives است — پروب‌های زندهٔ پروداکشن
-         * (۴.۱s/۵۵.۳s با ۰ بایت پس از ۱.۷.۷) ثابت کرد روی این هاست «هر» کاری
-         * کندتر از چند ثانیه در فرایند درخواست = قطع سرور + پاسخ خالی + گم‌شدن
-         * لاگ است؛ حتی register_shutdown_function هم بی‌اثر بود. اکنون:
-         *  - ثبت در «باکس خروجی» (transient + فلگ autoload) — دو نوشتن سریع؛
-         *  - تریگر فوری دیسپچ با loopback غیربلاک‌کنندهٔ سقف‌دار ۲ ثانیه (فرایند
-         *    PHP جدید ارسال را انجام می‌دهد؛ شکستش هم به پاسخ آسیب نمی‌زند)؛
-         *  - خودترمیمی: init هر درخواست بعدی سایت باکسِ غیرخالی را دوباره تریگر می‌کند.
-         * نتیجه با زمان‌سنجی مراحل در mrdastbaaf_sms_last_log ثبت می‌شود.
-         */
         $response = array(
             'success' => true,
             'message' => 'کد تایید پیامکی ارسال گردید. اگر تا ۲ دقیقه پیامکی دریافت نشد، دوباره تلاش کنید.',
-            'expires_in_seconds' => 120,
+            'expires_in_seconds' => MrDastbaaf_Sms_Service::CODE_TTL_SECONDS,
             // v1.4.0: «قبلاً ثبت‌نام کرده» — اگر برای این شماره حساب هنرجوی موجودی
             // باشد true است تا کلاینت برچسب «ورود» را به‌جای «ثبت‌نام» نشان دهد
             // (camelCase مانند smsWarning؛ گارد نقش‌ها بالاتر خطای ۴۰۳ می‌دهد).
             'isRegistered' => !empty($existing_user),
         );
 
-        $queue_elapsed = '0';
         if (MrDastbaaf_Sms_Service::is_ready() || has_action('mrdastbaaf_send_otp_sms')) {
-            // ثبت در باکس خروجی (دو نوشتن سریع) + تریگر فوری loopback سقف‌دار
-            $t_queue = microtime(true);
-            MrDastbaaf_Sms_Service::queue_outbox_send($phone, $otp_code);
-            $queue_elapsed = round(microtime(true) - $t_queue, 2);
-
-            /**
-             * v1.7.10: ردیف زمان‌سنجی «همیشه-روشن» اکنون «قبل از» تریگر دیسپچ
-             * نوشته می‌شود (در ۱.۷.۹ بعد از آن بود). پروب زندهٔ ۱۶ اکتبر: تریگر
-             * loopback ~۴۷ ثانیه معلق ماند و فرایند پیش از نوشتن لاگ کشته شد =
-             * لاگ یخ‌زدهٔ پیشخوان که کارفرما دید. با این ترتیب، هر تلاش ورود —
-             * در هر شرایطی — ردیف تازه‌ای در لاگ می‌گذارد و اگر تریگر/ارسال
-             * بعدش گم شود، خودِ فاصلهٔ زمانی ردیف‌ها مکان تعلیق را نشان می‌دهد.
-             */
-            $otp_path_elapsed = round(microtime(true) - $otp_path_t0, 2);
-            $request_phone_masked = substr($phone, 0, 4) . '***' . substr($phone, -4);
-            MrDastbaaf_Sms_Service::write_admin_log(
-                'اطلاع — درخواست کد برای ' . $request_phone_masked . ' در ' . $otp_path_elapsed . 's تکمیل شد'
-                . ' (جست‌وجوی شماره: ' . $find_elapsed . 's، باکس خروجی: ' . $queue_elapsed . 's)؛ ارسال در فرایند جدا ادامه دارد.'
-            );
-
+            // v1.7.11: ردیف لاگ پیشخوان از این مسیر حذف شد (نوشتن اشتراکی ممنوع) —
+            // دیسپچ نتیجهٔ هر ارسال را با زمان‌سنجی کامل ثبت می‌کند. تریگر loopback
+            // غیربلاک‌کنندهٔ سقف‌دار ۲ ثانیه (گارد ۱.۷.۱۰) فرایند جدای ارسال را می‌سازد
+            // و شکستش با کرون sweep ۵دقیقه‌ای جبران می‌شود.
             MrDastbaaf_Sms_Service::trigger_dispatch(true);
         } else {
             // سرویس تنظیم نشده و افزونهٔ ثالثی هم روی هوک نیست — هشدار فوری بدون هیچ تماس شبکه‌ای
             $response['smsWarning'] = 'سرویس پیامک هنوز تنظیم نشده است؛ کد تایید شما در سامانه معتبر است اما پیامکی ارسال نشد.';
-
-            $otp_path_elapsed = round(microtime(true) - $otp_path_t0, 2);
-            $request_phone_masked = substr($phone, 0, 4) . '***' . substr($phone, -4);
-            MrDastbaaf_Sms_Service::write_admin_log(
-                'اطلاع — درخواست کد برای ' . $request_phone_masked . ' در ' . $otp_path_elapsed . 's تکمیل شد'
-                . ' (جست‌وجوی شماره: ' . $find_elapsed . 's)؛ اما سرویس پیامک تنظیم نشده است.'
-            );
         }
 
         return rest_ensure_response($response);
@@ -330,8 +263,8 @@ class MrDastbaaf_Auth_Controller {
             $melipayamak_outbound = array('ok' => false, 'errno' => (int) $mel_errno, 'error' => (string) $mel_err, 'ms' => $mel_ms);
         }
 
-        // ۵) وضعیت باکس خروجی / قفل دیسپچ / لاگ پیامک
-        $outbox = get_transient(MrDastbaaf_Sms_Service::OUTBOX_TRANSIENT);
+        // ۵) وضعیت صف OTP (جدول درخواست‌ها — اسکیما ۱.۵.۰) / قفل دیسپچ / لاگ پیامک
+        $otp_stats = MrDastbaaf_Sms_Service::otp_table_stats();
 
         $payload = array(
             'plugin_version'   => defined('MRDASTBAAF_BRIDGE_VERSION') ? MRDASTBAAF_BRIDGE_VERSION : 'unknown',
@@ -339,10 +272,7 @@ class MrDastbaaf_Auth_Controller {
             'db_read_ms'       => $db_read_ms,
             'db_write_ms'      => $db_write_ms,
             'object_cache'     => wp_using_ext_object_cache() ? 'external' : 'db-transients',
-            'outbox'           => array(
-                'pending_flag' => MrDastbaaf_Sms_Service::has_pending_outbox(),
-                'entries'      => is_array($outbox) ? count($outbox) : 0,
-            ),
+            'otp_requests'     => $otp_stats,
             'dispatch_lock'    => (bool) get_transient(MrDastbaaf_Sms_Service::DISPATCH_LOCK_TRANSIENT),
             'sms'              => array(
                 'provider' => (string) get_option('mrdastbaaf_sms_provider', 'none'),
@@ -372,7 +302,7 @@ class MrDastbaaf_Auth_Controller {
         $otp_code = sanitize_text_field($request->get_param('otp_code'));
 
         $phone = preg_replace('/^(\+98|0098)/', '0', trim($phone));
-        $storage_key = 'mrdastbaaf_otp_val_' . md5($phone);
+        $storage_key = 'mrdastbaaf_otp_val_' . md5($phone); // فقط برای کدهای در جریان پیش از ارتقای ۱.۷.۱۱
 
         // SECURITY FIX (BUG-02): brute-force protection.
         // The old endpoint had NO attempt limit: a 6-digit code (900,000 combinations)
@@ -386,7 +316,32 @@ class MrDastbaaf_Auth_Controller {
             return new WP_Error('otp_locked', 'تعداد تلاش‌های نامعتبر بیش از حد مجاز بود. لطفاً کد تایید جدید درخواست کنید.', array('status' => 429));
         }
 
-        $hashed_code = get_transient($storage_key);
+        /**
+         * v1.7.11: منبع کد = جدول درخواست‌های OTP (آخرین ردیف «قابل استفاده» این
+         * شماره: pending/sending/sent — کد تا ۱۲۰ ثانیه بعد از ارسال هم معتبر است؛
+         * همان معناشناسی transient قدیمی). فال‌بک: transient قدیمی فقط برای کدهایی
+         * که پیش از ارتقا صادر شده بودند. وضعیت used/expired/failed پذیرفته
+         * نمی‌شود — کد یک‌بارمصرف می‌ماند.
+         */
+        $hashed_code = null;
+        $otp_row_id = 0;
+        $otp_row = MrDastbaaf_Sms_Service::get_latest_verifiable_request($phone);
+        if (is_array($otp_row)) {
+            $otp_age = max(0, time() - (int) strtotime($otp_row['created_at']));
+            if ($otp_age <= MrDastbaaf_Sms_Service::CODE_TTL_SECONDS) {
+                $hashed_code = (string) $otp_row['code_hash'];
+                $otp_row_id = (int) $otp_row['id'];
+            } else {
+                // کد منقضی — بستن ردیف (نوشتن per-row بی‌رقابت) تا دیسپچ ارسالش نکند
+                MrDastbaaf_Sms_Service::mark_request_status($otp_row['id'], 'expired');
+            }
+        }
+        if (null === $hashed_code) {
+            $legacy_hash = get_transient($storage_key);
+            if (is_string($legacy_hash) && '' !== $legacy_hash) {
+                $hashed_code = $legacy_hash;
+            }
+        }
 
         if (!$hashed_code || !wp_check_password($otp_code, $hashed_code)) {
             // SECURITY FIX (BUG-28): افزایش «اتمی» شمارنده — الگوی قبلی check-then-set
@@ -399,7 +354,10 @@ class MrDastbaaf_Auth_Controller {
             return new WP_Error('invalid_otp', 'کد تایید وارد شده نامعتبر یا منقضی شده است.' . ($remaining > 0 ? ' تلاش باقی‌مانده: ' . $remaining : ''), array('status' => 400));
         }
 
-        // کد مصرف شد؛ بودجه تلاش‌ها نیز پاک می‌شود
+        // کد مصرف شد؛ ردیف جدول بسته + بودجه تلاش‌ها نیز پاک می‌شود
+        if ($otp_row_id > 0) {
+            MrDastbaaf_Sms_Service::mark_request_status($otp_row_id, 'used');
+        }
         delete_transient($storage_key);
         delete_transient($attempts_key);
         wp_cache_delete($attempts_key, 'mrdastbaaf_otp'); // BUG-28: پاک‌سازی شمارنده در آبجکت‌کش
