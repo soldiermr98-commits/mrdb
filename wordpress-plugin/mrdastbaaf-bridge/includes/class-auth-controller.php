@@ -134,8 +134,14 @@ class MrDastbaaf_Auth_Controller {
             return new WP_Error('rate_limited', 'تعداد درخواست‌ها بیش از حد مجاز است؛ کمی بعد دوباره تلاش کنید.', array('status' => 429));
         }
 
-        // جست‌وجوی سریع شماره→کاربر (user_login + کش transient — بدون فال‌بک متا)
-        $existing_user = self::find_user_by_phone_fast($phone);
+        // v1.7.13: جست‌وجوی شماره→کاربر برای پرچم isRegistered — زنجیرهٔ کامل
+        // (کش/user_login سپس فال‌بک سبک چندفرمی). قبلاً فقط find_user_by_phone_fast
+        // بود و حساب‌هایی که login‌شان شماره نبود (ساخت ووکامرسی) یا billing_phone‌شان
+        // فرم دیگری داشت، «عضو نیست» classify می‌شدند — گزارش کارفرما: پیام
+        // «این شماره عضو مستر دستباف نیست» برای شمارهٔ دارای دورهٔ خریداری‌شده.
+        // فال‌بک متا فقط در کش سرد اجرا می‌شود (کوئری سبک ایندکس‌شده + کش ۱۲س/۱۰د)
+        // و با معماری «صفر نوشتن اشتراکی» ۱.۷.۱۱ تضادی ندارد (کش‌ها per-phone هستند).
+        $existing_user = self::find_user_by_phone_full($phone);
         $role_guard = self::guard_student_role($existing_user);
         if (is_wp_error($role_guard)) {
             return $role_guard;
@@ -548,10 +554,71 @@ class MrDastbaaf_Auth_Controller {
     }
 
     /**
-     * v1.7.9: جست‌وجوی کامل شماره → کاربر — فقط کش سرد در verify-otp و پس‌زمینه
-     * (دیسپچ، بعد از ارسال). به‌جای WP_User_query سنگین (JOIN + DISTINCT + ORDER BY
-     * روی متای بدون ایندکس — ریشهٔ تعلیق ۴۵-۶۰ ثانیه‌ای)، کوئری سبک get_var با
-     * LIMIT 1 اجرا می‌شود و نتیجه (مثبت/منفی) کش می‌شود.
+     * v1.7.13: همهٔ فرم‌های ممکن یک شمارهٔ موبایل ایران — هستهٔ مشترک تطبیق
+     * شماره در لوکاپ کاربر (auth) و سفارش‌های مهمان (courses/woo-bridge).
+     *
+     * گزارش کارفرما (۱.۷.۱۲): شماره‌ای که عضو بود و دوره خریده بود در request-otp
+     * «عضو نیست» شناخته می‌شد — حسابش خارج از مسیر OTP ساخته شده بود و شماره‌اش
+     * نه user_login بود و نه billing_phone آن دقیقاً به شکل 09xxxxxxxxx ذخیره شده بود.
+     *
+     * خروجی برای هر ورودی شناسایی‌شده، ۵ فرم است:
+     *  09xxxxxxxxx ، 9xxxxxxxxx ، 989xxxxxxxxx ، +989xxxxxxxxx ، 00989xxxxxxxxx
+     * ارقام فارسی/عربی تبدیل می‌شوند؛ فاصله/خط‌تیره/پرانتز حذف می‌شود؛ ورودی
+     * ناشناخته (ثابت/سیمکارت غیرایرانی) عیناً (+ فرم +دار) برمی‌گردد.
+     *
+     * @param string $raw شمارهٔ خام با هر فرمتی
+     * @return string[] فرم‌های یکتا برای تطبیق
+     */
+    public static function phone_variants($raw) {
+        $raw = trim((string) $raw);
+        if ('' === $raw) {
+            return array();
+        }
+
+        // ارقام فارسی/عربی → ASCII (کاربر/ادمین ممکن است با کیبورد فارسی وارد کرده باشد)
+        $raw = str_replace(
+            array('۰','۱','۲','۳','۴','۵','۶','۷','۸','۹','٠','١','٢','٣','٤','٥','٦','٧','٨','٩'),
+            array('0','1','2','3','4','5','6','7','8','9','0','1','2','3','4','5','6','7','8','9'),
+            $raw
+        );
+
+        $has_plus = (0 === strpos($raw, '+'));
+        $digits = preg_replace('/\D+/', '', $raw);
+        if (null === $digits || '' === $digits) {
+            return array();
+        }
+
+        $variants = array();
+        if (preg_match('/^(?:0|98|0098)?(9\d{9})$/', $digits, $m)) {
+            $core = $m[1]; // 9xxxxxxxxx — هستهٔ ۱۰ رقمی بدون صفر/پیشوند
+            $variants[] = '0' . $core;
+            $variants[] = $core;
+            $variants[] = '98' . $core;
+            $variants[] = '+98' . $core;
+            $variants[] = '0098' . $core;
+        } else {
+            // فرم ناشناخته — عیناً (و در صورت وجود +، فرم +دارش)
+            $variants[] = $digits;
+            if ($has_plus) {
+                $variants[] = '+' . $digits;
+            }
+        }
+
+        return array_values(array_unique(array_filter($variants)));
+    }
+
+    /**
+     * v1.7.9: جست‌وجوی کامل شماره → کاربر — کش سرد در request-otp/verify-otp و
+     * پس‌زمینه (دیسپچ، بعد از ارسال). به‌جای WP_User_query سنگین (JOIN + DISTINCT
+     * + ORDER BY روی متای بدون ایندکس — ریشهٔ تعلیق ۴۵-۶۰ ثانیه‌ای)، کوئری‌های
+     * سبک (لوکاپ ایندکس‌شدهٔ user_login و get_var روی ردیف‌های billing_phone)
+     * اجرا می‌شود و نتیجه (مثبت/منفی) کش می‌شود.
+     *
+     * v1.7.13: تطبیق «چندفرمی» — به‌ترتیب:
+     *  ۱) user_login در همهٔ فرم‌های phone_variants (لوکاپ ایندکس‌شده، بی‌هزینه)؛
+     *  ۲) یک کوئری سبک billing_phone با IN (همهٔ فرم‌ها) به‌جای تطبیق تک‌فرمی؛
+     *  ۳) فال‌بک LIKE روی هستهٔ ۱۰ رقمی برای فرم‌های «کثیف» (فاصله/خط‌تیره) —
+     *     فقط روی ردیف‌های meta_key='billing_phone' (زیرمجموعهٔ کوچک و ایندکس‌شده).
      *
      * کش منفی فقط ۱۰ دقیقه است تا حساب ووکامرسی تازه‌ساخت‌شده با همان شماره
      * حداکثر ۱۰ دقیقه بعد در مسیر OTP قابل یافتن باشد.
@@ -567,10 +634,51 @@ class MrDastbaaf_Auth_Controller {
 
         global $wpdb;
         $t_meta = microtime(true);
-        $uid = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT user_id FROM {$wpdb->usermeta} WHERE meta_key = 'billing_phone' AND meta_value = %s LIMIT 1",
-            $phone
-        ));
+        $user = false;
+
+        $variants = self::phone_variants($phone);
+        if (empty($variants)) {
+            $variants = array((string) $phone);
+        }
+
+        // ۱) user_login در همهٔ فرم‌ها — حساب‌هایی که login‌شان شماره است اما
+        // با فرم دیگری ذخیره شده (912.../98912.../+98912...)
+        foreach ($variants as $variant) {
+            $by_login = get_user_by('login', $variant);
+            if ($by_login) {
+                $user = $by_login;
+                break;
+            }
+        }
+
+        // ۲) billing_phone با IN همهٔ فرم‌ها — یک کوئری سبک (روی ایندکس meta_key)
+        if (!$user) {
+            $placeholders = implode(',', array_fill(0, count($variants), '%s'));
+            $uid = (int) $wpdb->get_var(call_user_func_array(
+                array($wpdb, 'prepare'),
+                array_merge(array(
+                    "SELECT user_id FROM {$wpdb->usermeta} WHERE meta_key = 'billing_phone' AND meta_value IN ({$placeholders}) LIMIT 1"
+                ), $variants)
+            ));
+            if ($uid > 0) {
+                $user = get_user_by('ID', $uid);
+            }
+        }
+
+        // ۳) فال‌بک LIKE — فرم‌های کثیف مثل «0912 345 6789» یا «(0912) 3456789»
+        if (!$user) {
+            $core_digits = preg_replace('/\D+/', '', (string) $phone);
+            if (preg_match('/^(?:0|98|0098)?(9\d{9})$/', (string) $core_digits, $m)) {
+                $uid = (int) $wpdb->get_var($wpdb->prepare(
+                    "SELECT user_id FROM {$wpdb->usermeta} WHERE meta_key = 'billing_phone' AND meta_value LIKE %s LIMIT 1",
+                    '%' . $wpdb->esc_like($m[1]) . '%'
+                ));
+                if ($uid > 0) {
+                    $user = get_user_by('ID', $uid);
+                }
+            }
+        }
+
         $meta_elapsed = round(microtime(true) - $t_meta, 2);
 
         // v1.7.9: تشخیص پایدار — اگر حتی کوئری سبک کند بود، ریشه (ایندکس/دیتابیس هاست)
@@ -581,12 +689,9 @@ class MrDastbaaf_Auth_Controller {
             );
         }
 
-        if ($uid > 0) {
-            set_transient('mrdastbaaf_phone_uid_' . md5($phone), $uid, 12 * HOUR_IN_SECONDS);
-            $user = get_user_by('ID', $uid);
-            if ($user) {
-                return $user;
-            }
+        if ($user instanceof WP_User) {
+            set_transient('mrdastbaaf_phone_uid_' . md5($phone), (int) $user->ID, 12 * HOUR_IN_SECONDS);
+            return $user;
         }
 
         // کش منفی کوتاه — شمارهٔ واقعاً جدید دوباره اسکن نمی‌شود

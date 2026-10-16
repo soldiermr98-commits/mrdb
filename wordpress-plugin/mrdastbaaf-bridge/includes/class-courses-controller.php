@@ -1099,10 +1099,21 @@ class MrDastbaaf_Courses_Controller {
             }
         }
 
-        // ۲) سفارش‌های مهمان با همان شماره موبایل
+        // ۲) سفارش‌های مهمان با همان شماره موبایل — v1.7.13: کاندیداهای شماره از
+        // «هر دو منبع» user_login و متای billing_phone حساب ساخته و با همهٔ فرم‌های
+        // phone_variants تطبیق داده می‌شوند (حساب‌هایی که login‌شان شماره نیست —
+        // گزارش کارفرما: دوره‌های خریداری‌شده در داشبورد ظاهر نمی‌شد).
         $user = get_user_by('ID', (int) $user_id);
         if ($user) {
             $phone_candidates = $this->phone_normalization_candidates((string) $user->user_login);
+            $account_phone = (string) get_user_meta((int) $user_id, 'billing_phone', true);
+            if ('' !== $account_phone) {
+                $phone_candidates = array_merge(
+                    $phone_candidates,
+                    $this->phone_normalization_candidates($account_phone)
+                );
+            }
+            $phone_candidates = array_values(array_unique(array_filter($phone_candidates)));
             foreach ($phone_candidates as $phone) {
                 foreach ($this->get_paid_order_ids_by_phone($phone, $paid_statuses) as $oid) {
                     $order_ids[] = (int) $oid;
@@ -1144,34 +1155,21 @@ class MrDastbaaf_Courses_Controller {
     }
 
     /**
-     * v1.3.5: فرم‌های نرمال‌سازی شماره موبایل (هم‌راستا با auth controller) —
-     * [۰۹...، ۹۸...، +۹۸...، ۰۰۹۸...] برای تطبیق با billing_phone سفارش‌ها
+     * v1.3.5: فرم‌های نرمال‌سازی شماره موبایل برای تطبیق با billing_phone سفارش‌ها
+     * v1.7.13: به هستهٔ مشترک MrDastbaaf_Auth_Controller::phone_variants سپرده شد —
+     * هر فرم شناخته‌شده (09…/9…/989…/+989…/0098…) به «هر ۵ فرم» گسترش می‌یابد
+     * (قبلاً فقط ۲ فرم برگردانده می‌شد و سفارش مهمانی که شماره‌اش با فرم دیگری
+     * ثبت شده بود پیدا نمی‌شد). فرم خام ارقام به‌عنوان آخرین کاندیدا حفظ شده است.
      *
-     * @param string $raw_phone شمارهٔ خام (user_login)
+     * @param string $raw_phone شمارهٔ خام (user_login یا billing_phone)
      * @return string[] کاندیداهای یکتا
      */
     private function phone_normalization_candidates($raw_phone) {
+        $candidates = MrDastbaaf_Auth_Controller::phone_variants($raw_phone);
+
+        // فرم خام ارقام (بدون +) — برای ذخیره‌سازی‌های نامتعارف
         $digits = preg_replace('/\D+/', '', (string) $raw_phone);
-        if ('' === $digits) {
-            return array();
-        }
-
-        // تبدیل ارقام فارسی/عربی اگر از مسیرهای دیگر آمده باشد
-        $fa = array('۰','۱','۲','۳','۴','۵','۶','۷','۸','۹');
-        $en = array('0','1','2','3','4','5','6','7','8','9');
-        $digits = str_replace($fa, $en, $digits);
-
-        $candidates = array();
-        if (preg_match('/^(9\d{9})$/', $digits)) {
-            $candidates[] = '0' . $digits;      // 912... → 0912...
-            $candidates[] = '+98' . $digits;    // شکل بین‌المللی
-        } elseif (preg_match('/^(0\d{10})$/', $digits)) {
-            $candidates[] = $digits;            // 0912...
-            $candidates[] = '+98' . substr($digits, 1);
-        } elseif (preg_match('/^(?:98|0098)(\d{10})$/', $digits, $m)) {
-            $candidates[] = '0' . $m[1];        // 98/0098 + 912... → 0912...
-            $candidates[] = $digits;
-        } else {
+        if (null !== $digits && '' !== $digits) {
             $candidates[] = $digits;
         }
 
