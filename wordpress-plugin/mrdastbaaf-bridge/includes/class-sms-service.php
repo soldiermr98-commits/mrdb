@@ -157,25 +157,48 @@ class MrDastbaaf_Sms_Service {
      */
     public static function enqueue_request($phone, $code, $code_hash, $ip_md5 = '') {
         global $wpdb;
-        $now_gmt = current_time('mysql', true);
-        $ok = $wpdb->insert(
-            self::otp_table(),
-            array(
-                'phone'      => (string) $phone,
-                'code'       => (string) $code,
-                'code_hash'  => (string) $code_hash,
-                'ip_md5'     => (string) $ip_md5,
-                'status'     => 'pending',
-                'attempts'   => 0,
-                'created_at' => $now_gmt,
-                'updated_at' => $now_gmt,
-            ),
-            array('%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s')
+        $row = array(
+            'phone'      => (string) $phone,
+            'code'       => (string) $code,
+            'code_hash'  => (string) $code_hash,
+            'ip_md5'     => (string) $ip_md5,
+            'status'     => 'pending',
+            'attempts'   => 0,
+            'created_at' => current_time('mysql', true),
+            'updated_at' => current_time('mysql', true),
         );
+        $formats = array('%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s');
+        $ok = $wpdb->insert(self::otp_table(), $row, $formats);
+        if (false === $ok) {
+            // v1.7.12: خودترمیم — اگر INSERT به هر دلیل شکست خورد (جدول ناموجود،
+            // ستون غایب و… — پیشینه: باگ ستون code در ۱.۷.۱۱ که همهٔ ورودها را
+            // ۵۰۰ کرد)، یک‌بار dbDelta اجرا و INSERT تکرار می‌شود. هزینه فقط در
+            // مسیر شکست است؛ در موفقیت صفر کوئری اضافه. اگر INSERT اول به هر
+            // ترتیبی رکوردی گذاشته بود، false برنمی‌گشت — پس تکرار ایمن است.
+            self::heal_otp_schema_once();
+            $ok = $wpdb->insert(self::otp_table(), $row, $formats);
+        }
         if (false === $ok) {
             return false;
         }
         return (int) $wpdb->insert_id;
+    }
+
+    /**
+     * v1.7.12: خودترمیم اسکیمای جدول OTP — یک‌بار در هر ریکوئست (گارد استاتیک).
+     * فقط از مسیر شکست enqueue_request صدا زده می‌شود؛ در بارگذاری‌های عادی
+     * هیچ کاری نمی‌کند. dbDelta جداول را با تعریف جاری (کلاس Database) هم‌تراز
+     * می‌کند — ستون/جدول غایب ساخته می‌شود و INSERT دوم شانس داشت.
+     *
+     * @return void
+     */
+    private static function heal_otp_schema_once() {
+        static $healed = false;
+        if ($healed || !class_exists('MrDastbaaf_Database')) {
+            return;
+        }
+        $healed = true;
+        MrDastbaaf_Database::create_tables();
     }
 
     /**
@@ -284,12 +307,32 @@ class MrDastbaaf_Sms_Service {
 
     /**
      * v1.7.11: آمار جدول برای اندپوینت سلامت — پنجرهٔ بیرونی روی صف و عبور.
+     * v1.7.12: table_exists + write_probe — COUNT روی جدول ناموجود بی‌صدا
+     * null/0 برمی‌گرداند و «ساخته‌نشدن جدول/ستون» را نقاب می‌زد (همان نقابی که
+     * باگ ستون code در ۱.۷.۱۱ را چند ساعت پنهان کرد). پروب نوشتن+حذف یک ردیف
+     * آزمایشی (status=probe — هرگز توسط دیسپچ واکشی نمی‌شود) هر انحراف اسکیما
+     * را با پیام خطای صریح MySQL در چند ثانیه آشکار می‌کند.
      *
-     * @return array {pending:int, sent_24h:int, oldest_pending_age_s:int}
+     * @return array {pending:int, sent_24h:int, oldest_pending_age_s:int, table_exists:bool, write_probe:{ok,ms,error}}
      */
     public static function otp_table_stats() {
         global $wpdb;
         $table = self::otp_table();
+        $stats = array(
+            'pending'              => 0,
+            'sent_24h'             => 0,
+            'oldest_pending_age_s' => 0,
+            'table_exists'         => false,
+            'write_probe'          => array('ok' => false, 'ms' => 0, 'error' => ''),
+        );
+
+        $exists = ('' !== (string) $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table)));
+        $stats['table_exists'] = $exists;
+        if (!$exists) {
+            $stats['write_probe']['error'] = 'table_missing';
+            return $stats;
+        }
+
         $pending = (int) $wpdb->get_var(
             "SELECT COUNT(*) FROM {$table} WHERE status IN ('pending','sending')"
         );
@@ -304,11 +347,49 @@ class MrDastbaaf_Sms_Service {
         if (is_string($oldest) && '' !== $oldest) {
             $oldest_age = max(0, time() - (int) strtotime($oldest));
         }
-        return array(
-            'pending'             => $pending,
-            'sent_24h'            => $sent_24h,
-            'oldest_pending_age_s' => $oldest_age,
+        $stats['pending'] = $pending;
+        $stats['sent_24h'] = $sent_24h;
+        $stats['oldest_pending_age_s'] = $oldest_age;
+
+        // پروب نوشتن: INSERT ردیف آزمایشی + حذف فوری — همهٔ ستون‌های موردنیاز
+        // enqueue_request را لمس می‌کند؛ انحراف اسکیما را با متن خطای واقعی
+        // MySQL نشان می‌دهد. ردیف probe هرگز در get_pending_requests واکشی
+        // نمی‌شود (status فقط pending/sending) و همین‌جا حذف می‌شود.
+        $t = microtime(true);
+        $now_gmt = current_time('mysql', true);
+        $ins = $wpdb->insert(
+            $table,
+            array(
+                'phone'      => '0000000000',
+                'code'       => '000000',
+                'code_hash'  => '',
+                'ip_md5'     => '',
+                'status'     => 'probe',
+                'attempts'   => 0,
+                'created_at' => $now_gmt,
+                'updated_at' => $now_gmt,
+            ),
+            array('%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s')
         );
+        if (false !== $ins) {
+            $wpdb->delete(
+                $table,
+                array('phone' => '0000000000', 'status' => 'probe'),
+                array('%s', '%s')
+            );
+            $stats['write_probe'] = array(
+                'ok'    => true,
+                'ms'    => round((microtime(true) - $t) * 1000, 1),
+                'error' => '',
+            );
+        } else {
+            $stats['write_probe'] = array(
+                'ok'    => false,
+                'ms'    => round((microtime(true) - $t) * 1000, 1),
+                'error' => (string) $wpdb->last_error,
+            );
+        }
+        return $stats;
     }
 
     /**

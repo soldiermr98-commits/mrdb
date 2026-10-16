@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.7.11
+ * Version: 1.7.12
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.7.11');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.7.12');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -108,8 +108,18 @@ define('MRDASTBAAF_BRIDGE_VERSION', '1.7.11');
  *   (text NULL؛ کیفیت‌های ۴۸۰p/۷۲۰p/۱۰۸۰p هر درس برای پاسخ playback). چک نسخهٔ
  *   پایین (mrdastbaaf_bridge_maybe_upgrade_db) dbDelta را دوباره اجرا می‌کند و
  *   ستون‌ها روی نصب‌های موجود بدون دستور دستی اضافه می‌شوند.
+ *
+ * v1.7.11 (اسکیما ۱.۵.۰): جدول NEW wp_mrdastbaaf_otp_requests (جایگزین باکس
+ *   خروجی transient — صفر نوشتن اشتراکی در مسیر پاسخ OTP).
+ *
+ * v1.7.12 (اسکیما ۱.۵.۱): فیکس بحرانی ۱.۷.۱۱ — ستون NEW code در جدول
+ *   wp_mrdastbaaf_otp_requests. رشتهٔ CREATE نسخهٔ ۱.۵.۰ به‌اشتباه این ستون را
+ *   نداشت در حالی که enqueue_request آن را INSERT می‌کرد ⇒ «Unknown column
+ *   'code'» ⇒ 500 otp_storage_failed روی هر درخواست کد (با بامپ به ۱.۵.۱،
+ *   dbDelta روی نصب‌های موجود ۱.۷.۱۱ ستون را خودکار اضافه می‌کند؛ enqueue_request
+ *   نیز در شکست یک‌بار dbDelta + تلاش مجدد انجام می‌دهد — خودترمیم).
  */
-define('MRDASTBAAF_DB_VERSION', '1.5.0');
+define('MRDASTBAAF_DB_VERSION', '1.5.1');
 define('MRDASTBAAF_BRIDGE_PATH', plugin_dir_path(__FILE__));
 define('MRDASTBAAF_BRIDGE_URL', plugin_dir_url(__FILE__));
 define('MRDASTBAAF_API_NAMESPACE', 'mrdastbaaf/v1');

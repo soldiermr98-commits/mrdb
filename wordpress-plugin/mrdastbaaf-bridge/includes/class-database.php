@@ -182,9 +182,19 @@ class MrDastbaaf_Database {
         // و سهمیه‌ها (نرخ ۲دقیقه، ۵/ساعت، ۱۵/روز، ۱۰/ساعت per-IP) به COUNT ایندکس‌شده
         // روی همین ردیف‌ها تبدیل می‌شود — صفر نوشتن اشتراکی در مسیر پاسخ.
         $table_otp = $wpdb->prefix . 'mrdastbaaf_otp_requests';
+        // v1.7.12 (اسکیما ۱.۵.۱) — فیکس باگ بحرانی ۱.۷.۱۱: ستون NEW code.
+        // رشتهٔ CREATE نسخهٔ ۱.۷.۱۱ به‌اشتباه ستون code (کد خام ۶ رقمی که
+        // دیسپچ ارسال می‌خواند) را نداشت در حالی که enqueue_request آن را
+        // INSERT می‌کرد ⇒ «Unknown column 'code' in 'field list'» ⇒ پاسخ
+        // 500 otp_storage_failed روی «هر» درخواست کد (پروب زندهٔ ۱۶ اکتبر:
+        // {"code":"otp_storage_failed"} در ~۳.۴s، صفر ردیف در جدول).
+        // dbDelta با بامپ نسخهٔ اسکیما (1.5.0→1.5.1 در فایل اصلی) این ستون را
+        // روی نصب‌های موجودِ ۱.۷.۱۱ خودکار اضافه می‌کند؛ enqueue_request نیز
+        // اکنون خودترمیم دارد (در شکست INSERT، یک‌بار dbDelta + تلاش مجدد).
         $sql_otp = "CREATE TABLE $table_otp (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             phone varchar(20) NOT NULL,
+            code varchar(6) NOT NULL,
             code_hash varchar(100) NOT NULL,
             ip_md5 char(32) DEFAULT '' NOT NULL,
             status varchar(16) DEFAULT 'pending' NOT NULL,
