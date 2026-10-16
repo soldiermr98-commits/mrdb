@@ -22,6 +22,17 @@ class MrDastbaaf_Auth_Controller {
             'permission_callback' => '__return_true',
         ));
 
+        // v1.7.8: اندپوینت دیسپچ ارسال پیامک — از درخواست loopbackِ غیربلاک‌کنندهٔ
+        // trigger_dispatch() فراخوانی می‌شود (فرایند PHP کاملاً جداست) تا ارسال
+        // ملی‌پیامک/هوک ثالث هرگز در فرایند پاسخ request-otp اجرا نشود.
+        // عمومی اما کم‌اثر: فقط ورودی‌های در انتظارِ باکس خروجی (که خود سرور نوشته)
+        // را پردازش می‌کند؛ قفل ۳۰ ثانیه‌ای از اجرای موازی جلوگیری می‌کند.
+        register_rest_route(MRDASTBAAF_API_NAMESPACE, '/auth/otp-dispatch', array(
+            'methods' => 'POST',
+            'callback' => array($this, 'handle_otp_dispatch'),
+            'permission_callback' => '__return_true',
+        ));
+
         // v1.2.0: permission_callback مشترک — اول maybe_authenticate_bearer سپس چک لاگین؛
         // فیلتر determine_current_user در برخی نصب‌ها دیر فایر می‌شود (یافتهٔ ۰-۲).
         register_rest_route(MRDASTBAAF_API_NAMESPACE, '/auth/me', array(
@@ -66,6 +77,11 @@ class MrDastbaaf_Auth_Controller {
      * ارسال پیامک کد تایید به شماره موبایل هنرجو
      */
     public function handle_request_otp(WP_REST_Request $request) {
+        // v1.7.8: سنجش زمان مسیر پاسخ — اگر گذشت زمان از ۵ ثانیه بیشتر شد، هشدار
+        // در لاگ پیشخوان ثبت می‌شود تا ریشهٔ کندی (دیتابیس/آبجکت‌کش هاست) از
+        // پیشخوان قابل تشخیص باشد (ارسال پیامک در این مسیر نقشی ندارد).
+        $otp_path_t0 = microtime(true);
+
         $phone = sanitize_text_field($request->get_param('phone'));
         $phone = preg_replace('/^(\+98|0098)/', '0', trim($phone));
 
@@ -155,17 +171,15 @@ class MrDastbaaf_Auth_Controller {
         update_option('mrdastbaaf_otp_hourly_started', $global_window_started, false);
 
         /**
-         * v1.7.7: مسیر پاسخ REST هیچ عملیات زمان‌بندی/شبکه‌ای/هوکی ندارد.
-         * حادثهٔ ۱.۷.۶/پروب‌های زندهٔ پروداکشن: حتی schedule_async_send/spawn_cron
-         * در درخواست می‌توانست پاسخ را تا ۷۴.۶s نگه دارد (HTTP 200 با ۰ بایت؛
-         * rate-limit در «همان درخواست معلق» نوشته شده بود → تعلیق بعد از نوشتن‌ها
-         * و قبل از پاسخ بود). اکنون:
-         *  - اگر سرویس پیامک آماده باشد یا افزونه‌ای به هوک «mrdastbaaf_send_otp_sms»
-         *    وصل باشد: ارسال به shutdown واگذار می‌شود (بعد از fastcgi_finish_request
-         *    اجرا می‌شود؛ پاسخ ~۲ ثانیه‌ای به کلاینت تحویل می‌شود).
-         *  - وگرنه: هشدار دقیق «تنظیم‌نبودن سرویس» بلافاصله در همان پاسخ می‌رود.
-         * نتیجه با زمان‌سنجی مراحل (هوک ثالث / ملی‌پیامک) در mrdastbaaf_sms_last_log
-         * ثبت می‌شود تا ریشهٔ هر تأخیر از پیشخوان قابل تشخیص باشد.
+         * v1.7.8: مسیر پاسخ REST فقط primitives است — پروب‌های زندهٔ پروداکشن
+         * (۴.۱s/۵۵.۳s با ۰ بایت پس از ۱.۷.۷) ثابت کرد روی این هاست «هر» کاری
+         * کندتر از چند ثانیه در فرایند درخواست = قطع سرور + پاسخ خالی + گم‌شدن
+         * لاگ است؛ حتی register_shutdown_function هم بی‌اثر بود. اکنون:
+         *  - ثبت در «باکس خروجی» (transient + فلگ autoload) — دو نوشتن سریع؛
+         *  - تریگر فوری دیسپچ با loopback غیربلاک‌کنندهٔ سقف‌دار ۲ ثانیه (فرایند
+         *    PHP جدید ارسال را انجام می‌دهد؛ شکستش هم به پاسخ آسیب نمی‌زند)؛
+         *  - خودترمیمی: init هر درخواست بعدی سایت باکسِ غیرخالی را دوباره تریگر می‌کند.
+         * نتیجه با زمان‌سنجی مراحل در mrdastbaaf_sms_last_log ثبت می‌شود.
          */
         $response = array(
             'success' => true,
@@ -178,14 +192,32 @@ class MrDastbaaf_Auth_Controller {
         );
 
         if (MrDastbaaf_Sms_Service::is_ready() || has_action('mrdastbaaf_send_otp_sms')) {
-            // واگذاری به shutdown — در مسیر پاسخ فقط ثبت صف است (چند millisecond)
-            MrDastbaaf_Sms_Service::queue_shutdown_send($phone, $otp_code);
+            // ثبت در باکس خروجی (دو نوشتن سریع) + تریگر فوری loopback سقف‌دار
+            MrDastbaaf_Sms_Service::queue_outbox_send($phone, $otp_code);
+            MrDastbaaf_Sms_Service::trigger_dispatch(true);
         } else {
             // سرویس تنظیم نشده و افزونهٔ ثالثی هم روی هوک نیست — هشدار فوری بدون هیچ تماس شبکه‌ای
             $response['smsWarning'] = 'سرویس پیامک هنوز تنظیم نشده است؛ کد تایید شما در سامانه معتبر است اما پیامکی ارسال نشد.';
         }
 
+        // v1.7.8: هشدار تشخیصی اگر مسیر پاسخ (بدون ارسال پیامک) کند بود — هر
+        // تأخیر باقی‌مانده از سمت دیتابیس/آبجکت‌کش هاست است و از پیشخوان دیده می‌شود.
+        $otp_path_elapsed = round(microtime(true) - $otp_path_t0, 2);
+        if ($otp_path_elapsed > 5) {
+            MrDastbaaf_Sms_Service::write_admin_log(
+                'هشدار — ساخت پاسخ request-otp کند بود (' . $otp_path_elapsed . 's)؛ ریشهٔ احتمالی: دیتابیس/آبجکت‌کش هاست (ارسال پیامک در این تأخیر نقشی ندارد).'
+            );
+        }
+
         return rest_ensure_response($response);
+    }
+
+    /**
+     * v1.7.8: اجرای دیسپچ ارسال OTP در فرایند PHP جدا (loopback/کرون).
+     * پاسخ فقط خلاصهٔ آماری است؛ خودِ ارسال در همین فرایندِ بدونِ منتظر انجام می‌شود.
+     */
+    public function handle_otp_dispatch() {
+        return rest_ensure_response(MrDastbaaf_Sms_Service::handle_dispatch());
     }
 
     /**
