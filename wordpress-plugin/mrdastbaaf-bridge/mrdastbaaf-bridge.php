@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.7.8
+ * Version: 1.7.9
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.7.8');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.7.9');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -74,6 +74,16 @@ define('MRDASTBAAF_BRIDGE_VERSION', '1.7.8');
  *     از آپشن mrdastbaaf_featured_products برمی‌گرداند.
  *  ۳) فیلدست «محصولات ویژه» روی صفحهٔ پیشخوان «محصولات فیزیکی» + گرید واکنش‌گرای
  *     چک‌باکس‌ها؛ عنوان پیش‌فرض سکشن فروشگاه «محصولات» شد و متن‌های seed پاکسازی شد.
+ * v1.7.9 (فیکس واقعی تایم‌اوت OTP — ریشهٔ یافته‌شده با پروب زندهٔ پروداکشن):
+ *  ریشهٔ تعلیق ۳۶-۷۴ ثانیه‌ای مسیر request-otp در نسخه‌های ۱.۷.۶ تا ۱.۷.۸ «ارسال
+ *  پیامک» نبود — فال‌بک find_user_by_phone بود: get_users با meta_key=billing_phone
+ *  (WP_User_Query با JOIN + DISTINCT + ORDER BY روی متای بدون ایندکس) روی دیتابیس
+ *  این هاست ۴۵-۶۰ ثانیه معلق می‌ماند و LiteSpeed فرایند را پیش از اولین نوشتن
+ *  می‌کشد (پاسخ ۲۰۰ با ۰ بایت؛ اثبات: درخواست تکراری همان شماره هرگز 429 نگرفت).
+ *  فیکس: مسیر پاسخ فقط جست‌وجوی سریع (user_login + کش transient)؛ فال‌بک متا با
+ *  کوئری سبک get_var فقط در verify-otp (کش سرد) و پس‌زمینه؛ کش مثبت ۱۲ ساعت /
+ *  منفی ۱۰ دقیقه؛ لاگ همیشه-روشن زمان‌سنجی مسیر؛ دیسپچ: سقف ۲ ورودی + timeout
+ *  ملی‌پیامک ۱۰ ثانیه + گرم‌کردن کش بعد از ارسال.
  */
 
 /**

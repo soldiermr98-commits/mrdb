@@ -145,9 +145,19 @@ class MrDastbaaf_Auth_Controller {
             error_log('MrDastbaaf: global OTP hourly cap reached — possible distributed abuse');
         }
 
-        // v1.2.0: گارد نقش‌های ممتاز — اگر حسابی با این شماره وجود دارد که هنرجو نیست
-        // (ادمین/شاپ‌منیجر و ...)، نباید کد ورود اپ هنرجو برایش ارسال شود.
-        $existing_user = self::find_user_by_phone($phone);
+        /**
+         * v1.7.9 — ریشهٔ واقعی حادثهٔ تایم‌اوت OTP (پروب‌های زندهٔ ۱۶ اکتبر):
+         * فال‌بک get_users روی متای billing_phone (WP_User_Query با JOIN + DISTINCT
+         * + ORDER BY روی متای بدون ایندکس) روی این هاست ۴۵-۶۰ ثانیه معلق می‌ماند و
+         * LiteSpeed فرایند را پیش از «اولین نوشتن» (حتی قفل rate-limit) می‌کشد —
+         * اثبات: درخواست تکراری همان شماره هرگز 429 نگرفت و پاسخ ۲۰۰ با ۰ بایت بود.
+         * مسیر پاسخ اکنون فقط جست‌وجوی سریع (user_login + کش transient) را انجام
+         * می‌دهد؛ فال‌بک متا فقط در verify-otp (کش سرد، با کوئری سبک get_var) و
+         * در پس‌زمینه (دیسپچ، بعد از ارسال) اجرا می‌شود.
+         */
+        $t_find = microtime(true);
+        $existing_user = self::find_user_by_phone_fast($phone);
+        $find_elapsed = round(microtime(true) - $t_find, 2);
         $role_guard = self::guard_student_role($existing_user);
         if (is_wp_error($role_guard)) {
             return $role_guard;
@@ -200,14 +210,16 @@ class MrDastbaaf_Auth_Controller {
             $response['smsWarning'] = 'سرویس پیامک هنوز تنظیم نشده است؛ کد تایید شما در سامانه معتبر است اما پیامکی ارسال نشد.';
         }
 
-        // v1.7.8: هشدار تشخیصی اگر مسیر پاسخ (بدون ارسال پیامک) کند بود — هر
-        // تأخیر باقی‌مانده از سمت دیتابیس/آبجکت‌کش هاست است و از پیشخوان دیده می‌شود.
+        // v1.7.9: ثبت «همیشه-روشن» زمان‌سنجی مسیر پاسخ — لاگ پیشخوان با هر تلاش
+        // ورود تازه می‌شود؛ سلامت/کندی مسیر بدون پروب بیرونی از پیشخوان قابل
+        // مشاهده است (اگر این ردیف با هر تلاش تازه نشود، یعنی پروسه پیش از این
+        // نقطه کشته شده و مکان تعلیق در خود لاگ مشخص می‌شود).
         $otp_path_elapsed = round(microtime(true) - $otp_path_t0, 2);
-        if ($otp_path_elapsed > 5) {
-            MrDastbaaf_Sms_Service::write_admin_log(
-                'هشدار — ساخت پاسخ request-otp کند بود (' . $otp_path_elapsed . 's)؛ ریشهٔ احتمالی: دیتابیس/آبجکت‌کش هاست (ارسال پیامک در این تأخیر نقشی ندارد).'
-            );
-        }
+        $request_phone_masked = substr($phone, 0, 4) . '***' . substr($phone, -4);
+        MrDastbaaf_Sms_Service::write_admin_log(
+            'اطلاع — درخواست کد برای ' . $request_phone_masked . ' در ' . $otp_path_elapsed . 's تکمیل شد'
+            . ' (جست‌وجوی شماره: ' . $find_elapsed . 's).'
+        );
 
         return rest_ensure_response($response);
     }
@@ -273,7 +285,19 @@ class MrDastbaaf_Auth_Controller {
 
         // جستجوی کاربر: user_login (شماره) سپس فال‌بک billing_phone (یافتهٔ ۲-۱۵:
         // حساب‌های ساخته‌شده خارج از مسیر OTP ممکن است login شان شماره نباشد)
-        $user = self::find_user_by_phone($phone);
+        // v1.7.9: اول جست‌وجوی سریع (user_login + کش)؛ فال‌بک متا فقط در کش سرد
+        // و با کوئری سبک get_var (LIMIT 1) به‌جای WP_User_Query سنگین.
+        $t_find = microtime(true);
+        $user = self::find_user_by_phone_fast($phone);
+        if (!$user) {
+            $user = self::find_user_by_phone_full($phone);
+        }
+        $find_elapsed = round(microtime(true) - $t_find, 2);
+        if ($find_elapsed > 3) {
+            MrDastbaaf_Sms_Service::write_admin_log(
+                'هشدار — جست‌وجوی شماره در verify-otp کند بود (' . $find_elapsed . 's)؛ ریشهٔ احتمالی: متای billing_phone بدون ایندکس/کندی دیتابیس هاست.'
+            );
+        }
 
         if (!$user) {
             // v1.2.0: ساخت کاربر با wp_insert_user و نقش صریح «subscriber» — نقش
@@ -305,6 +329,10 @@ class MrDastbaaf_Auth_Controller {
                 update_user_meta($new_user_id, 'billing_last_name', $last_name);
             }
             $user = get_user_by('ID', $new_user_id);
+            // v1.7.9: کش مثبت شماره→کاربر — ورودهای بعدی هرگز به فال‌بک متا نمی‌رسند
+            if ($user) {
+                set_transient('mrdastbaaf_phone_uid_' . md5($phone), (int) $new_user_id, 12 * HOUR_IN_SECONDS);
+            }
         }
 
         if (!$user) {
@@ -408,24 +436,75 @@ class MrDastbaaf_Auth_Controller {
     }
 
     /**
-     * v1.2.0: یافتن کاربر با شماره موبایل — ابتدا user_login (شماره خام مسیر OTP)،
-     * سپس فال‌بک meta billing_phone.
+     * v1.7.9: جست‌وجوی سریع شماره → کاربر — فقط مسیرهای «پاسخ» (request-otp).
+     *  ۱) user_login = شماره (ایندکس یکتا، سریع همیشه) — حساب‌های ساخته‌شده از PWA؛
+     *  ۲) کش transient شماره→ID (مثبت: ۱۲ ساعت) — حاصل فال‌بک قبلی/ساخت حساب.
+     * هرگز WP_User_Query/فال‌بک متا را اجرا نمی‌کند — ریشهٔ تعلیق ۴۵-۶۰ ثانیه‌ای
+     * حادثهٔ تایم‌اوت همین بود.
      *
-     * @param string $phone شماره نرمال‌شدهٔ ۰۹…
+     * @param string $phone شمارهٔ نرمال‌شده (09xxxxxxxxx)
      * @return WP_User|false
      */
-    private static function find_user_by_phone($phone) {
+    public static function find_user_by_phone_fast($phone) {
         $user = get_user_by('login', $phone);
         if ($user) {
             return $user;
         }
-        $found = get_users(array(
-            'meta_key'   => 'billing_phone',
-            'meta_value' => $phone,
-            'number'     => 1,
-            'fields'     => 'all',
+        $cached_id = (int) get_transient('mrdastbaaf_phone_uid_' . md5($phone));
+        if ($cached_id > 0) {
+            $cached_user = get_user_by('ID', $cached_id);
+            if ($cached_user) {
+                return $cached_user;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * v1.7.9: جست‌وجوی کامل شماره → کاربر — فقط کش سرد در verify-otp و پس‌زمینه
+     * (دیسپچ، بعد از ارسال). به‌جای WP_User_query سنگین (JOIN + DISTINCT + ORDER BY
+     * روی متای بدون ایندکس — ریشهٔ تعلیق ۴۵-۶۰ ثانیه‌ای)، کوئری سبک get_var با
+     * LIMIT 1 اجرا می‌شود و نتیجه (مثبت/منفی) کش می‌شود.
+     *
+     * کش منفی فقط ۱۰ دقیقه است تا حساب ووکامرسی تازه‌ساخت‌شده با همان شماره
+     * حداکثر ۱۰ دقیقه بعد در مسیر OTP قابل یافتن باشد.
+     *
+     * @param string $phone شمارهٔ نرمال‌شده (09xxxxxxxxx)
+     * @return WP_User|false
+     */
+    public static function find_user_by_phone_full($phone) {
+        $fast = self::find_user_by_phone_fast($phone);
+        if ($fast) {
+            return $fast;
+        }
+
+        global $wpdb;
+        $t_meta = microtime(true);
+        $uid = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT user_id FROM {$wpdb->usermeta} WHERE meta_key = 'billing_phone' AND meta_value = %s LIMIT 1",
+            $phone
         ));
-        return !empty($found) ? $found[0] : false;
+        $meta_elapsed = round(microtime(true) - $t_meta, 2);
+
+        // v1.7.9: تشخیص پایدار — اگر حتی کوئری سبک کند بود، ریشه (ایندکس/دیتابیس هاست)
+        // از پیشخوان قابل مشاهده است و راه‌حل نهایی (ایندکس دستی یا جدول نگاشت) تصمیم‌گیری می‌شود.
+        if ($meta_elapsed > 3) {
+            MrDastbaaf_Sms_Service::write_admin_log(
+                'هشدار — فال‌بک متای billing_phone کند بود (' . $meta_elapsed . 's)؛ ریشهٔ احتمالی: نبود ایندکس روی متا یا کندی دیتابیس هاست.'
+            );
+        }
+
+        if ($uid > 0) {
+            set_transient('mrdastbaaf_phone_uid_' . md5($phone), $uid, 12 * HOUR_IN_SECONDS);
+            $user = get_user_by('ID', $uid);
+            if ($user) {
+                return $user;
+            }
+        }
+
+        // کش منفی کوتاه — شمارهٔ واقعاً جدید دوباره اسکن نمی‌شود
+        set_transient('mrdastbaaf_phone_uid_' . md5($phone), 0, 10 * MINUTE_IN_SECONDS);
+        return false;
     }
 
     /**
