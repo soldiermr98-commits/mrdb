@@ -1,6 +1,6 @@
 <?php
 /**
- * سرویس ارسال پیامک واقعی (v1.1.0) — ارسال پس‌زمینه از v1.7.6
+ * سرویس ارسال پیامک واقعی (v1.1.0) — دیسپچ فرایند-جدید از v1.7.8
  *
  * تا نسخهٔ ۱.۰.۳ ارسال OTP فقط به هوک «mrdastbaaf_send_otp_sms» واگذار می‌شد و
  * در نصب‌های بدون افزونهٔ ثالث، هیچ پیامکی واقعاً ارسال نمی‌شد. این کلاس ارسال
@@ -24,11 +24,36 @@
  *  معلق» نوشته شده بود (پروب B: 429 در ۲.۳s) و verify-otp با bcrypt هم ۲.۱s
  *  پاسخ می‌داد؛ یعنی تعلیق دقیقاً بعد از نوشتن‌ها و داخل schedule_async_send /
  *  fallback همگام بود (زمان‌بندی کرون، loopback یا هوک ثالث — از بیرون تفکیک‌ناپذیر).
- *  فیکس نهایی: مسیر پاسخ REST از ۱.۷.۷ هیچ عملیات زمان‌بندی/شبکه‌ای/هوکی ندارد؛
- *  ارسال با register_shutdown_function به «بعد از تحویل پاسخ» می‌رود — ابتدا
- *  fastcgi_finish_request (کلاینت پاسخ را کامل می‌گیرد) و بعد هوک ثالث +
- *  ملی‌پیامک. تور ایمنی: اگر ارسال shutdown شکست بخورد، یک رویداد WP-Cron در +۹۰
- *  ثانیه زمان‌بندی می‌شود؛ مارکر «ارسال‌شده» از ارسال تکراری جلوگیری می‌کند.
+ *  فیکس ۱.۷.۷: ارسال با register_shutdown_function به بعد از fastcgi_finish_request
+ *  منتقل شد.
+ *
+ * v1.7.8 (فیکس نهایی — پروب‌های زندهٔ پس از نصب ۱.۷.۷):
+ *  پروب‌ها روی پروداکشن ۱.۷.۷ تکرار شد: مسیر 429 → 1.7s، مسیر verify-otp → 1.9s،
+ *  اما مسیر «گذرندهٔ» request-otp همچنان ۳۶.۱s و ۵۵.۳s طول می‌کشید و پاسخ
+ *  HTTP 200 با ۰ بایت بود و هیچ ردیفی در mrdastbaaf_sms_last_log ثبت نمی‌شد.
+ *  نتیجهٔ تشخیص: روی این هاست (LiteSpeed + WAF) «هیچ» کاری در فرایند PHP یک
+ *  درخواست نباید بیش از چند ثانیه طول بکشد؛ سرور فرایند را قطع می‌کند و چون
+ *  fastcgi_finish_request/litespeed_finish_request پاسخ را زودتر تحویل نمی‌دهند،
+ *  هم بدنهٔ پاسخ گم می‌شود و هم ادامهٔ کار (ارسال پیامک/ثبت لاگ) هرگز اجرا نمی‌شود.
+ *  نتیجه: register_shutdown_function روی این هاست بی‌اثر است.
+ *  معماری ۱.۷.۸ — «باکس خروجی + دیسپچ در فرایند واقعاً جداست»:
+ *   ۱) مسیر پاسخ request-otp فقط primitives: اعتبارسنجی + rate-limit + bcrypt +
+ *      نوشتن transient + ثبت در «باکس خروجی» (transient) — بدون هیچ شبکه/کرون/هوکی.
+ *   ۲) تریگر فوری دیسپچ: یک درخواست loopback «غیربلاک‌کننده» با سقف زمانی عدد
+ *      صحیح ۲ ثانیه (هشدار: timeout کسری مثل 0.01 در cURL به long=0 یعنی
+ *      «بی‌نهایت» گرد می‌شود — ریشهٔ تعلیق ۷۴s نسخهٔ ۱.۷.۶!) به اندپوینت
+ *      POST /auth/otp-dispatch. حتی اگر این تریگر شکست بخورد، مسیر پاسخ دست‌نخورده
+ *      در ~۲-۳ ثانیه تحویل می‌شود.
+ *   ۳) اندپوینت دیسپچ در فرایند PHP «جدید» اجرا می‌شود (درخواست loopback مستقل):
+ *      باکس را می‌خواند، ملی‌پیامک را اول صدا می‌زند (سریع و اثبات‌شده) و لاگ را
+ *      قبل از هر کار کندی دیگری می‌نویسد. هوک ثالث فقط وقتی اجرا می‌شود که
+ *      ملی‌پیامک تنظیم نباشد (سایت‌هایی که فقط با افزونهٔ پیامکی ثالث کار می‌کنند) —
+ *      هوک‌های کند دیگر هرگز جلوی ارسال/لاگ ملی‌پیامک را نمی‌گیرند.
+ *   ۴) خودترمیمی: هوک init روی «هر» درخواست وردپرس (پنل/سایت/REST) با سقف
+ *      زمانی ۴۵ ثانیه باکسِ غیرخالی را دوباره تریگر می‌کند؛ پس حتی شکست تریگر
+ *      فوری با بعدیِ درخواست‌های سایت جبران می‌شود.
+ *   ۵) مارکر «ارسال‌شده» (mrdastbaaf_otp_sent_*) از ارسال تکراری جلوگیری می‌کند و
+ *      ورودی‌های بالای ۱۵ دقیقه / سه تلاش ناموفق با لاگ فارسی حذف می‌شوند.
  *
  * نکتهٔ امنیتی: رمز سرویس پیامک در پاسخ‌ها/لاگ‌ها هرگز بازتاب داده نمی‌شود و
  * شمارهٔ موبایل در لاگ فقط به شکل ماسک‌شده نوشته می‌شود.
@@ -40,25 +65,28 @@ if (!defined('ABSPATH')) {
 
 class MrDastbaaf_Sms_Service {
 
-    /**
-     * v1.7.7: صف ارسال‌های در انتظار shutdown — پر شده در درخواست REST، خالی‌شده
-     * بعد از تحویل پاسخ (run_shutdown_sends). هر درخواست PHP یک پروسهٔ مستقل است؛
-     * پس static بین درخواست‌ها نشت نمی‌کند.
-     *
-     * @var array<int, array{0: string, 1: string}>
-     */
-    private static $pending_shutdown_sends = array();
+    /** v1.7.8: نام transient باکس خروجی (صف ارسال‌های در انتظار دیسپچ). */
+    const OUTBOX_TRANSIENT = 'mrdastbaaf_otp_outbox';
 
-    /** آیا shutdown handler قبلاً ثبت شده است؟ (هر درخواست فقط یک‌بار) */
-    private static $shutdown_registered = false;
+    /** v1.7.8: فلگ autoload شدهٔ «باکس غیرخالی است» — چک init بدون کوئری اضافه. */
+    const OUTBOX_PENDING_OPTION = 'mrdastbaaf_otp_outbox_pending';
 
-    /**
-     * v1.7.7: آیا سرویس پیامک آمادهٔ ارسال است؟ (فقط خواندن آپشن‌ها — بدون شبکه)
-     * در مسیر پاسخ REST استفاده می‌شود تا smsWarning دقیق بدون هیچ تماس سنگین
-     * به کلاینت برسد.
-     *
-     * @return bool
-     */
+    /** v1.7.8: حداکثر تعداد ورودی همزمان در باکس (قدیمی‌ترین حذف می‌شود). */
+    const OUTBOX_MAX_ENTRIES = 5;
+
+    /** v1.7.8: عمر مفید ورودی باکس — کد OTP فقط ۱۲۰ ثانیه اعتبار دارد. */
+    const OUTBOX_TTL_SECONDS = 900;
+
+    /** v1.7.8: قفل جلوگیری از دیسپچ موازی. */
+    const DISPATCH_LOCK_TRANSIENT = 'mrdastbaaf_otp_dispatch_lock';
+
+    /** v1.7.8: کلید فاصلهٔ حداقلی دو تریگر خودترمیمی init. */
+    const RETRIGGER_COOLDOWN_TRANSIENT = 'mrdastbaaf_otp_retrigger_cd';
+
+    /** v1.7.8: فاصلهٔ حداقلی دو تریگر خودترمیمی init (ثانیه). */
+    const RETRIGGER_COOLDOWN_SECONDS = 45;
+
+    /** v1.7.8: آپشن‌ها/توابع — فقط خواندن آپشن (بدون شبکه) — نسخهٔ ۱.۷.۷ حفظ شد. */
     public static function is_ready() {
         if ('melipayamak' !== get_option('mrdastbaaf_sms_provider', 'none')) {
             return false;
@@ -72,90 +100,299 @@ class MrDastbaaf_Sms_Service {
         return true;
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // v1.7.8: باکس خروجی + تریگر دیسپچ
+    // ─────────────────────────────────────────────────────────────────────
+
     /**
-     * v1.7.7: واگذاری ارسال به shutdown — پس از اینکه پاسخ REST به کلاینت تحویل شد.
-     *
-     * این متد در مسیر پاسخ فقط داده را در صف static می‌گذارد و handler را ثبت
-     * می‌کند (هر دو چند millisecond)؛ هیچ شبکه/کرون/هوکی اجرا نمی‌کند.
+     * v1.7.8: ثبت ارسال در «باکس خروجی» — فقط دو نوشتنِ سریع (transient + آپشن
+     * autoload شده). هیچ شبکه/کرون/هوکی در این متد اجرا نمی‌شود و در مسیر پاسخ
+     * request-otp امن است.
      *
      * @param string $phone شمارهٔ نرمال‌شده
      * @param string $code  کد ۶ رقمی
      * @return void
      */
-    public static function queue_shutdown_send($phone, $code) {
-        self::$pending_shutdown_sends[] = array((string) $phone, (string) $code);
-        if (!self::$shutdown_registered) {
-            self::$shutdown_registered = true;
-            register_shutdown_function(array(__CLASS__, 'run_shutdown_sends'));
-        }
-    }
+    public static function queue_outbox_send($phone, $code) {
+        $phone = (string) $phone;
+        $code  = (string) $code;
 
-    /**
-     * v1.7.7: اجرای صف — بعد از پایان اسکریپت (پاسخ REST تحویل شده یا در آستانهٔ
-     * تحویل است). اول پاسخ را قطعی تحویل می‌دهیم (finish_request) و بعد هر ارسال
-     * را با همان منطق کامل (هوک ثالث + ملی‌پیامک) انجام می‌دهیم؛ اگر ارسال شکست
-     * بخورد، تور ایمنی WP-Cron در +۹۰ ثانیه یک تلاش دوم زمان‌بندی می‌شود.
-     *
-     * @return void
-     */
-    public static function run_shutdown_sends() {
-        if (empty(self::$pending_shutdown_sends)) {
-            return;
+        $outbox = get_transient(self::OUTBOX_TRANSIENT);
+        if (!is_array($outbox)) {
+            $outbox = array();
         }
 
-        // ۱) تحویل قطعی پاسخ به کلاینت — هر خطایی پس از این نقطه به کاربر نمی‌رسد.
-        if (function_exists('litespeed_finish_request')) {
-            litespeed_finish_request();
-        } elseif (function_exists('fastcgi_finish_request')) {
-            fastcgi_finish_request();
-        }
-
-        // ۲) ارسال‌های صف‌شده — خارج از چرخهٔ پاسخ، با سقف زمانی خودشان (۱۵s ملی‌پیامک).
-        foreach (self::$pending_shutdown_sends as $send) {
-            list($phone, $code) = $send;
-            try {
-                $result = self::send_otp($phone, $code, 'full');
-                if (true === $result) {
-                    // مارکر ضد ارسال تکراری (تور ایمنی کرون آن را می‌بیند)
-                    set_transient('mrdastbaaf_otp_sent_' . md5($phone . '|' . $code), 1, 5 * MINUTE_IN_SECONDS);
-                } else {
-                    self::schedule_retry_event($phone, $code);
-                }
-            } catch (Throwable $e) {
-                // هیچ خطای پس‌زمینه‌ای نباید به هیچ‌چیز آسیب بزند
+        // کد تازهٔ همان شماره جایگزین ورودی قبلی می‌شود (ضد ارسال کد کهنه)
+        $kept = array();
+        foreach ($outbox as $entry) {
+            if (is_array($entry) && isset($entry['phone']) && (string) $entry['phone'] === $phone) {
+                continue;
             }
+            $kept[] = $entry;
         }
-        self::$pending_shutdown_sends = array();
+        $kept[] = array(
+            'phone'    => $phone,
+            'code'     => $code,
+            'ts'       => time(),
+            'attempts' => 0,
+        );
+        if (count($kept) > self::OUTBOX_MAX_ENTRIES) {
+            $kept = array_slice($kept, -self::OUTBOX_MAX_ENTRIES);
+        }
+
+        set_transient(self::OUTBOX_TRANSIENT, $kept, self::OUTBOX_TTL_SECONDS);
+        // فلگ autoload=yes → چک init در هوک init از alloptions می‌خواند (صفر کوئری اضافه)
+        update_option(self::OUTBOX_PENDING_OPTION, time(), true);
+    }
+
+    /** v1.7.8: آیا باکس خروجی ورودی در انتظار دارد؟ (خواندن آپشن autoload شده) */
+    public static function has_pending_outbox() {
+        return (int) get_option(self::OUTBOX_PENDING_OPTION, 0) > 0;
     }
 
     /**
-     * v1.7.7: تور ایمنی — زمان‌بندی یک تلاش دوم WP-Cron (فقط وقتی ارسال اول شکست
-     * خورد). نوشتن آپشن کرون اینجا انجام می‌شود، یعنی بعد از تحویل پاسخ.
+     * v1.7.8: خودترمیمی — روی هوک init «هر» درخواست وردپرس اجرا می‌شود؛ اگر باکس
+     * غیرخالی باشد و از آخرین تریگر بیش از ۴۵ ثانیه گذشته باشد، دیسپچ را دوباره
+     * تریگر می‌کند. هزینهٔ حالت عادی (باکس خالی): یک خواندن از alloptions کش‌شده —
+     * صفر کوئری اضافه.
      *
-     * @param string $phone شمارهٔ نرمال‌شده
-     * @param string $code  کد ۶ رقمی
      * @return void
      */
-    private static function schedule_retry_event($phone, $code) {
-        $hook = 'mrdastbaaf_otp_async_send';
-        $args = array((string) $phone, (string) $code);
-        if (wp_next_scheduled($hook, $args)) {
+    public static function maybe_retrigger() {
+        if (!self::has_pending_outbox()) {
             return;
         }
-        wp_schedule_single_event(time() + 90, $hook, $args);
+        if (get_transient(self::RETRIGGER_COOLDOWN_TRANSIENT)) {
+            return;
+        }
+        set_transient(self::RETRIGGER_COOLDOWN_TRANSIENT, 1, self::RETRIGGER_COOLDOWN_SECONDS);
+        self::trigger_dispatch();
+    }
+
+    /**
+     * v1.7.8: تریگر دیسپچ — درخواست loopback غیربلاک‌کننده به
+     * POST /auth/otp-dispatch (فرایند PHP مستقل = هیچ کندی به درخواست جاری
+     * منتقل نمی‌شود).
+     *
+     * نکتهٔ بحرانی: timeout باید «عدد صحیح ≥ ۱» باشد. WP_Http مقدار timeout را
+     * مستقیم به CURLOPT_TIMEOUT (long) می‌دهد؛ مقدار کسری مثل 0.01 به 0 گرد
+     * می‌شود که در cURL یعنی «بدون سقف زمانی» — همین ریشهٔ تعلیق ۷۴ ثانیه‌ای
+     * spawn_cron در نسخهٔ ۱.۷.۶ بود (spawn_cron هسته با timeout=0.01 کار می‌کند).
+     *
+     * @param bool $log_errors ثبت خطا در لاگ پیشخوان (برای تریگر فوری request-otp روشن است)
+     * @return bool true = تریگر ارسال شد یا دیسپچ دیگری در جریان بود
+     */
+    public static function trigger_dispatch($log_errors = false) {
+        if (get_transient(self::DISPATCH_LOCK_TRANSIENT)) {
+            return true; // دیسپچ دیگری در جریان است — باکس را همان پردازش می‌کند
+        }
+
+        $response = wp_remote_post(
+            rest_url('mrdastbaaf/v1/auth/otp-dispatch'),
+            array(
+                'timeout'  => 2, // عدد صحیح — هرگز کسری نکنید (توضیح بالا)
+                'blocking' => false,
+                'body'     => array('trigger' => 'outbox'),
+            )
+        );
+
+        if (is_wp_error($response)) {
+            if ($log_errors && !get_transient('mrdastbaaf_otp_dispatch_err_cd')) {
+                // ثبت خطا با سقف نرخ ۱۰ دقیقه‌ای — لاگ پیشخوان ریشهٔ واقعی را نشان می‌دهد
+                set_transient('mrdastbaaf_otp_dispatch_err_cd', 1, 600);
+                self::write_admin_log(
+                    'هشدار — تریگر دیسپچ پیامک به فرایند پس‌زمینه ناموفق بود: ' . $response->get_error_message()
+                    . '؛ ارسال با درخواست بعدی سایت (خودترمیمی ۴۵ ثانیه‌ای) دوباره تلاش می‌شود.'
+                );
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // v1.7.8: پردازش باکس در فرایند جداست (اندپوینت دیسپچ / کرون)
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * v1.7.8: اجرای دیسپچ — از اندپوینت REST /auth/otp-dispatch (فرایند loopback
+     * مستقل) یا رویداد کرون فراخوانی می‌شود. در فرایند جاری «هیچ کلاینتی منتظر
+     * پاسخ نیست»؛ کندی هوک ثالث/سرویس‌دهنده به هیچ درخواست کاربری منتقل نمی‌شود.
+     *
+     * ترتیب عمدی: ملی‌پیامک اول (سریع و اثبات‌شده) → ثبت لاگ → مارکر ارسال.
+     * هوک ثالث فقط وقتی اجرا می‌شود که ملی‌پیامک تنظیم نباشد؛ در نتیجه هوک‌های
+     * کند هرگز جلوی ارسال/لاگ ملی‌پیامک را نمی‌گیرند (ریشهٔ تعلیق ۳۵-۵۵s حادثه).
+     *
+     * @return array خلاصهٔ نتیجه برای پاسخ REST/کرون
+     */
+    public static function handle_dispatch() {
+        if (function_exists('ignore_user_abort')) {
+            @ignore_user_abort(true); // قطع اتصال loopback پردازش را نمی‌کشد
+        }
+
+        $result = array(
+            'processed' => 0,
+            'results'   => array(),
+            'pending'   => 0,
+        );
+
+        if (get_transient(self::DISPATCH_LOCK_TRANSIENT)) {
+            $result['skipped'] = 'lock';
+            return $result;
+        }
+        set_transient(self::DISPATCH_LOCK_TRANSIENT, 1, 30);
+
+        try {
+            // پایان try/finally در پایین متد — قفل در «هر» مسیر خروج آزاد می‌شود
+            $outbox = get_transient(self::OUTBOX_TRANSIENT);
+            if (!is_array($outbox) || empty($outbox)) {
+                update_option(self::OUTBOX_PENDING_OPTION, 0, true);
+                $result['skipped'] = 'empty';
+                return $result;
+            }
+
+            $remaining = array();
+            foreach ($outbox as $entry) {
+                if (!is_array($entry) || !isset($entry['phone'], $entry['code'])) {
+                    continue;
+                }
+
+                $phone = (string) $entry['phone'];
+                $code  = (string) $entry['code'];
+                $mask  = substr($phone, 0, 4) . '***' . substr($phone, -4);
+                $age   = time() - (int) $entry['ts'];
+
+                // سقف پردازش در هر دیسپچ: ۳ ورودی (باقی برای دیسپچ بعدی)
+                if (count($result['results']) >= 3) {
+                    $remaining[] = $entry;
+                    continue;
+                }
+
+                if ($age > self::OUTBOX_TTL_SECONDS) {
+                    self::write_log('رد شد — ورودی باکس خروجی قدیمی‌تر از ۱۵ دقیقه بود (' . $mask . ')؛ حذف شد.');
+                    continue;
+                }
+
+                // کد منقضی/مصرف‌شده = ارسال بی‌مصرف؛ لغو با لاگ (رفتار ۱.۷.۶ حفظ شد)
+                if (get_transient('mrdastbaaf_otp_val_' . md5($phone)) === false) {
+                    self::write_log('رد شد — کد OTP ' . $mask . ' منقضی یا مصرف شده بود؛ ارسال لغو شد.');
+                    continue;
+                }
+
+                // ضد ارسال تکراری (بعد از موفقیت دیسپچ قبلی)
+                if (get_transient('mrdastbaaf_otp_sent_' . md5($phone . '|' . $code))) {
+                    continue;
+                }
+
+                $send_result = self::send_direct($phone, $code);
+                $result['processed'] = (int) $result['processed'] + 1;
+
+                if (true === $send_result) {
+                    set_transient('mrdastbaaf_otp_sent_' . md5($phone . '|' . $code), 1, 5 * MINUTE_IN_SECONDS);
+                    $result['results'][] = array('phone' => $mask, 'status' => 'sent');
+                } else {
+                    $attempts = isset($entry['attempts']) ? (int) $entry['attempts'] + 1 : 1;
+                    $result['results'][] = array(
+                        'phone'    => $mask,
+                        'status'   => 'failed',
+                        'attempts' => $attempts,
+                    );
+                    // تا ۳ تلاش (هر تریگر بعدی = یک تلاش)؛ بعد از آن حذف قطعی
+                    if ($attempts < 3 && $age < 600) {
+                        $entry['attempts'] = $attempts;
+                        $remaining[] = $entry;
+                    }
+                }
+            }
+
+            // v1.7.8: ادغام ایمن — در فاصلهٔ خواندن/نوشتن ما ممکن است درخواست‌های
+            // تازه‌ای ورودی به باکس اضافه کرده باشند؛ بازنویسی کورکورانه آن‌ها را
+            // گم می‌کند. ورودی‌های تازه (کلید phone|code جدید) به لیست باقی‌مانده
+            // اضافه می‌شوند تا در دیسپچ بعدی پردازش شوند.
+            $known_keys = array();
+            foreach ($remaining as $e) {
+                if (is_array($e) && isset($e['phone'], $e['code'])) {
+                    $known_keys[] = (string) $e['phone'] . '|' . (string) $e['code'];
+                }
+            }
+            $fresh = get_transient(self::OUTBOX_TRANSIENT);
+            if (is_array($fresh)) {
+                foreach ($fresh as $e) {
+                    if (!is_array($e) || !isset($e['phone'], $e['code'])) {
+                        continue;
+                    }
+                    $key = (string) $e['phone'] . '|' . (string) $e['code'];
+                    if (!in_array($key, $known_keys, true)) {
+                        $known_keys[] = $key;
+                        $remaining[] = $e;
+                    }
+                }
+            }
+
+            if (empty($remaining)) {
+                delete_transient(self::OUTBOX_TRANSIENT);
+                update_option(self::OUTBOX_PENDING_OPTION, 0, true);
+            } else {
+                if (count($remaining) > self::OUTBOX_MAX_ENTRIES) {
+                    $remaining = array_slice($remaining, -self::OUTBOX_MAX_ENTRIES);
+                }
+                set_transient(self::OUTBOX_TRANSIENT, $remaining, self::OUTBOX_TTL_SECONDS);
+                update_option(self::OUTBOX_PENDING_OPTION, time(), true);
+            }
+            $result['pending'] = count($remaining);
+        } catch (Throwable $e) {
+            // هیچ استثنایی نباید فرایند دیسپچ را نیمه‌کاره و قفل‌شده رها کند
+            self::write_admin_log('خطا — پردازش باکس خروجی با استثنا متوقف شد: ' . $e->getMessage());
+        } finally {
+            // آزادی قفل در «هر» مسیر خروج (شامل return زودهنگام داخل try)
+            delete_transient(self::DISPATCH_LOCK_TRANSIENT);
+        }
+
+        return $result;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // ارسال
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * v1.7.8: ارسال مستقیم — مسیر دیسپچ (فرایند جداست).
+     * ملی‌پیامک اول؛ هوک ثالث فقط در نبود ملی‌پیامک.
+     *
+     * @param string $phone شمارهٔ موبایل نرمال‌شده (09xxxxxxxxx)
+     * @param string $code  کد ۶ رقمی
+     * @return true|string true در موفقیت؛ رشتهٔ فارسی در شکست
+     */
+    public static function send_direct($phone, $code) {
+        if (self::is_ready()) {
+            return self::send_melipayamak($phone, $code);
+        }
+
+        if (has_action('mrdastbaaf_send_otp_sms')) {
+            $timing = array();
+            $t_hook = microtime(true);
+            do_action('mrdastbaaf_send_otp_sms', $phone, $code);
+            $timing[] = 'هوک ثالث: ' . round(microtime(true) - $t_hook, 2) . 's';
+            self::write_log(
+                'واگذاری به هوک ثالث انجام شد — شماره: ' . substr((string) $phone, 0, 4) . '***' . substr((string) $phone, -4)
+                . self::timing_suffix($timing) . '.'
+            );
+            return true;
+        }
+
+        self::write_log('ارسال نشد — سرویس پیامک تنظیم نشده است (کد برای ' . substr((string) $phone, 0, 4) . '***' . substr((string) $phone, -4) . ' تولید شد).');
+        return 'سرویس پیامک هنوز تنظیم نشده است؛ کد تایید شما در سامانه معتبر است اما پیامکی ارسال نشد.';
     }
 
     /**
      * ارسال کد تایید یک‌بارمصرف (OTP) با الگوی پترن BaseServiceNumber.
      *
-     * پارامتر $mode (v1.7.6):
-     *  - 'full' (پیش‌فرض): هوک سفارشی + ارسال ملی‌پیامک — مخصوص اجرای پس‌زمینه (WP-Cron)
-     *    و fallback همگامِ نادر. هوک «mrdastbaaf_send_otp_sms» تا افزونه‌های ثالث
-     *    بدون تغییر کار کنند فراخوانی می‌شود.
-     *  - در هر دو حالت نتیجه و زمان‌سنجی مراحل در mrdastbaaf_sms_last_log ثبت می‌شود.
+     * v1.7.8: این متد برای «سازگاری» حفظ شده (هوک ثالث اول + ملی‌پیامک) و دیگر
+     * در هیچ مسیر پاسخ کاربر اجرا نمی‌شود؛ مسیر اصلی send_direct + دیسپچ است.
      *
      * @param string $phone شمارهٔ موبایل نرمال‌شده (09xxxxxxxxx)
-     * @param string $code کد ۶ رقمی تایید
+     * @param string $code  کد ۶ رقمی
      * @param string $mode 'full' = هوک + سرویس‌دهنده (پیش‌فرض)
      * @return true|string در موفقیت true و در شکست رشتهٔ فارسی مناسب نمایش به کاربر
      */
@@ -176,9 +413,24 @@ class MrDastbaaf_Sms_Service {
             return 'سرویس پیامک هنوز تنظیم نشده است؛ کد تایید شما در سامانه معتبر است اما پیامکی ارسال نشد.';
         }
 
+        return self::send_melipayamak($phone, $code, $timing);
+    }
+
+    /**
+     * v1.7.8: هستهٔ ارسال ملی‌پیامک (استخراج‌شده از send_otp — منطق دست‌نخورده).
+     * نتیجهٔ موفق/خطا با زمان‌سنجی در mrdastbaaf_sms_last_log ثبت می‌شود.
+     *
+     * @param string $phone شمارهٔ موبایل نرمال‌شده (09xxxxxxxxx)
+     * @param string $code  کد ۶ رقمی
+     * @param array  $timing مراحل قبلی برای پسوند لاگ (مثلاً زمان هوک ثالث)
+     * @return true|string true در موفقیت؛ رشتهٔ فارسی در شکست
+     */
+    private static function send_melipayamak($phone, $code, $timing = array()) {
+        $phone_masked = substr((string) $phone, 0, 4) . '***' . substr((string) $phone, -4);
+
         $username = trim((string) get_option('mrdastbaaf_sms_username', ''));
         $password = (string) get_option('mrdastbaaf_sms_password', '');
-        $body_id = trim((string) get_option('mrdastbaaf_sms_body_id', ''));
+        $body_id  = trim((string) get_option('mrdastbaaf_sms_body_id', ''));
 
         if ('' === $username || '' === $password) {
             self::write_log('خطا — نام کاربری یا رمز سرویس ملی‌پیامک تکمیل نشده است (شماره: ' . $phone_masked . ')' . self::timing_suffix($timing) . '.');
@@ -245,30 +497,22 @@ class MrDastbaaf_Sms_Service {
     }
 
     /**
-     * v1.7.6: صف‌کردن ارسال OTP در WP-Cron + شروع فوری cron.
-     * v1.7.7: دیگر در مسیر پاسخ REST فراخوانی نمی‌شود (پروب‌های زنده نشان داد همین
-     * نقطه می‌تواند پاسخ را تا ۷۴s نگه دارد)؛ برای سازگاری حفظ شده و فقط از
-     * پس‌زمینه/کدهای ثالث قابل استفاده است. مسیر اصلی اکنون queue_shutdown_send است.
+     * v1.7.6: صف‌کردن ارسال OTP در WP-Cron — v1.7.8: منسوخ برای مسیر اصلی
+     * (باکس خروجی + دیسپچ جایگزین شد) و فقط برای سازگاری حفظ شده است.
      *
      * @param string $phone شمارهٔ نرمال‌شده
-     * @param string $code کد ۶ رقمی
+     * @param string $code  کد ۶ رقمی
      * @return bool true = به صف رفت / false = صف نشد
      */
     public static function schedule_async_send($phone, $code) {
-        // اگر سرویس/اعتبارنامه آماده نیست، صف نکن — کنترلر با ارسال همگامِ سبک
-        // هشدار دقیق (تنظیم‌نشده بودن سرویس/اعتبارنامه) را همان‌جا به کلاینت می‌دهد.
-        if ('melipayamak' !== get_option('mrdastbaaf_sms_provider', 'none')) {
-            return false;
-        }
-        if ('' === trim((string) get_option('mrdastbaaf_sms_username', '')) || '' === (string) get_option('mrdastbaaf_sms_password', '')) {
+        if (!self::is_ready()) {
             return false;
         }
 
         $hook = 'mrdastbaaf_otp_async_send';
         $args = array((string) $phone, (string) $code);
 
-        // محکم‌کاری: رویداد قبلیِ همین شماره/کد را پاک کن (قفل ۲ دقیقه‌ای rate-limit
-        // عملاً جلوی دوبارکاری را می‌گیرد؛ این فقط اضافه‌ای ایمن است).
+        // محکم‌کاری: رویداد قبلیِ همین شماره/کد را پاک کن
         $pending = wp_next_scheduled($hook, $args);
         if ($pending) {
             wp_unschedule_event($pending, $hook, $args);
@@ -280,22 +524,16 @@ class MrDastbaaf_Sms_Service {
             return false;
         }
 
-        // شروع فوری WP-Cron — درخواست loopback غیربلاک‌کننده؛ پاسخ REST را عقب نمی‌اندازد.
-        spawn_cron();
-
-        self::write_log('صف شد — ارسال OTP برای ' . substr((string) $phone, 0, 4) . '***' . substr((string) $phone, -4) . ' به WP-Cron واگذار شد (پاسخ REST بدون انتظار برگشت).');
+        self::write_log('صف شد — ارسال OTP برای ' . substr((string) $phone, 0, 4) . '***' . substr((string) $phone, -4) . ' به WP-Cron واگذار شد.');
         return true;
     }
 
     /**
-     * v1.7.6: اجرای صف — از WP-Cron فراخوانی می‌شود (افزوده‌شده در فایل اصلی افزونه).
-     *
-     * اگر تا زمان اجرا کد منقضی (۱۲۰ ثانیه) یا مصرف شده باشد، ارسال لغو می‌شود تا
-     * پیامک بی‌مصرف به کاربر نرود؛ در غیر این صورت ارسال کامل ('full') انجام و
-     * نتیجه با زمان‌سنجی ثبت می‌شود.
+     * v1.7.6: اجرای صف — از WP-Cron فراخوانی می‌شود (سازگاری رویدادهای در جریان
+     * نسخه‌های قبلی). v1.7.8: ارسال با send_direct (ملی‌پیامک اول).
      *
      * @param string $phone شمارهٔ نرمال‌شده
-     * @param string $code کد ۶ رقمی
+     * @param string $code  کد ۶ رقمی
      * @return void
      */
     public static function handle_async_send($phone, $code) {
@@ -304,12 +542,12 @@ class MrDastbaaf_Sms_Service {
             self::write_log('رد شد — کد OTP ' . substr($phone, 0, 4) . '***' . substr($phone, -4) . ' منقضی یا مصرف شده بود؛ ارسال پس‌زمینه لغو شد.');
             return;
         }
-        // v1.7.7: اگر ارسال shutdown موفق بوده، تلاش دوم لازم نیست (ضد پیامک تکراری)
+        // ضد ارسال تکراری (اگر دیسپچ/تور ایمنی قبلاً فرستاده باشد)
         if (get_transient('mrdastbaaf_otp_sent_' . md5($phone . '|' . (string) $code))) {
-            self::write_log('رد شد — این کد قبلاً با موفقیت ارسال شده بود؛ تلاش دوم تور ایمنی لغو شد.');
+            self::write_log('رد شد — این کد قبلاً با موفقیت ارسال شده بود؛ تلاش دوم لغو شد.');
             return;
         }
-        self::send_otp($phone, (string) $code, 'full');
+        self::send_direct($phone, (string) $code);
     }
 
     /**
@@ -323,6 +561,17 @@ class MrDastbaaf_Sms_Service {
             return '';
         }
         return ' {' . implode(' / ', $timing) . '}';
+    }
+
+    /**
+     * v1.7.8: ثبت پیام تشخیصی در لاگ پیشخوان — برای هشدارهای مسیر پاسخ/تریگر که
+     * از کلاس‌های دیگر (کنترلر احراز هویت) ثبت می‌شوند.
+     *
+     * @param string $message پیام کامل فارسی
+     * @return void
+     */
+    public static function write_admin_log($message) {
+        self::write_log($message);
     }
 
     /**

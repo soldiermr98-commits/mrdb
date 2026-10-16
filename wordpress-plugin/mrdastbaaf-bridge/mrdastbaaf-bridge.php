@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.7.7
+ * Version: 1.7.8
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.7.7');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.7.8');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -212,6 +212,12 @@ class MrDastbaaf_Bridge_Plugin {
         // هر درخواست REST افزونه، یک هدر منحصربه‌فرد (nonce) به Vary اضافه می‌کند
         // تا LiteSpeed نتواند پاسخ را کش کند.
         add_action('rest_api_init', array($this, 'disable_litespeed_cache_for_namespace'), 1);
+
+        // v1.7.8: خودترمیمی دیسپچ پیامک — در «هر» درخواست وردپرس (سایت/پنل/REST)
+        // اگر باکس خروجی OTP غیرخالی باشد و از آخرین تریگر بیش از ۴۵ ثانیه گذشته
+        // باشد، دیسپچ دوباره تریگر می‌شود. حالت عادی (باکس خالی): یک خواندن از
+        // alloptions کش‌شده — صفر کوئری اضافه و هیچ تماس شبکه‌ای.
+        add_action('init', array('MrDastbaaf_Sms_Service', 'maybe_retrigger'), 20);
 
         // v1.7.3: روش رسمی LiteSpeed Cache — مستقیم به پلاگین می‌گوید پاسخ را کش
         // نکند. این قوی‌تر از header() است چون:
@@ -781,12 +787,10 @@ add_action('mrdastbaaf_reconciliation_tick', array('MrDastbaaf_Payment_Controlle
 
 /**
  * v1.7.6: اجرای صف ارسال OTP پس‌زمینه (WP-Cron) — حادثهٔ تایم‌اوت ورود پیامکی.
- * v1.7.7: این هوک حالا نقش «تور ایمنی» دارد — ارسال اصلی به shutdown بعد از
- * تحویل پاسخ منتقل شد (register_shutdown_function + fastcgi_finish_request؛
- * جزئیات در class-sms-service.php). اگر ارسال shutdown شکست بخورد، کنترلر یک
- * رویداد +۹۰ ثانیه‌ای روی همین هوک زمان‌بندی می‌کند؛ مارکر «ارسال‌شده» از ارسال
- * تکراری جلوگیری می‌کند. زمان‌سنجی مراحل (هوک ثالث / ملی‌پیامک) در
- * mrdastbaaf_sms_last_log ثبت می‌شود تا ریشهٔ هر تأخیر از پیشخوان دیده شود.
+ * v1.7.8: مسیر اصلی ارسال «باکس خروجی + دیسپچ در فرایند جدا» شد (POST
+ * /auth/otp-dispatch با loopback غیربلاک‌کنندهٔ سقف‌دار ۲ ثانیه + خودترمیمی init؛
+ * جزئیات در class-sms-service.php). این هوک فقط برای سازگاری با رویدادهای
+ * در-جریان نسخه‌های قبلی حفظ شده و همان مسیر send_direct را اجرا می‌کند.
  */
 add_action('mrdastbaaf_otp_async_send', array('MrDastbaaf_Sms_Service', 'handle_async_send'), 10, 2);
 
