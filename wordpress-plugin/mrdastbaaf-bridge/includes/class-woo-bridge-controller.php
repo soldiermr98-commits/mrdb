@@ -216,15 +216,11 @@ class MrDastbaaf_Woo_Bridge_Controller {
             return false;
         }
 
-        // نرمال‌سازی پیشوندهای ایران (+98/0098 → 0) — همان الگوی کنترلر احراز هویت
-        $normalized = preg_replace('/^(\+98|0098)/', '0', $phone);
-        $candidates = array();
-        if (is_string($normalized) && '' !== $normalized && !in_array($normalized, $candidates, true)) {
-            $candidates[] = $normalized;
-        }
-        if (!in_array($phone, $candidates, true)) {
-            $candidates[] = $phone; // فرم خام (گاهی ادمین شماره را با فرمت دیگری ثبت کرده)
-        }
+        // v1.7.13: کاندیداها از هستهٔ مشترک phone_variants — همهٔ فرم‌های شناخته‌شده
+        // (09…/9…/989…/+989…/0098…) + فرم خام (گاهی ادمین شماره را با فرمت دیگری ثبت کرده)
+        $candidates = MrDastbaaf_Auth_Controller::phone_variants($phone);
+        $candidates[] = $phone;
+        $candidates = array_values(array_unique(array_filter(array_map('trim', $candidates))));
 
         foreach ($candidates as $candidate) {
             $user = get_user_by('login', $candidate);

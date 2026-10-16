@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.7.12
+ * Version: 1.7.13
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.7.12');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.7.13');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -118,6 +118,17 @@ define('MRDASTBAAF_BRIDGE_VERSION', '1.7.12');
  *   'code'» ⇒ 500 otp_storage_failed روی هر درخواست کد (با بامپ به ۱.۵.۱،
  *   dbDelta روی نصب‌های موجود ۱.۷.۱۱ ستون را خودکار اضافه می‌کند؛ enqueue_request
  *   نیز در شکست یک‌بار dbDelta + تلاش مجدد انجام می‌دهد — خودترمیم).
+ *
+ * v1.7.13 (بدون تغییر اسکیما — ۱.۵.۱ ثابت): فیکس «شمارهٔ عضو، عضو شناخته نمی‌شد» —
+ *   گزارش کارفرما: شماره‌ای که عضو بود و دوره خریده بود در ورود پیامکی پیام
+ *   «این شماره عضو مستر دستباف نیست» می‌گرفت و دوره‌هایش در داشبورد نمی‌آمد.
+ *   ریشه: لوکاپ شماره→کاربر فقط user_login دقیق (فرم 09…) + کش بود؛ حساب‌های
+ *   ساخت ووکامرسی (login ایمیل/فرم دیگر، شماره فقط در billing_phone با فرمت
+ *   آزاد) find نمی‌شدند ⇒ isRegistered=false ⇒ مسیر ثبت‌نام جدید. اکنون:
+ *   هستهٔ مشترک phone_variants (۵ فرم: 09…/9…/989…/+989…/0098… + ارقام فارسی)
+ *   در request-otp (لوکاپ کامل با کش سرد)، verify-otp، لوکاپ سفارش‌های مهمان
+ *   (courses: منبع billing_phone حساب هم اضافه شد) و woo-bridge (resolve کاربر
+ *   سفارش) به‌کار رفت؛ فال‌بک LIKE روی هستهٔ ۱۰ رقمی فرم‌های «کثیف» را می‌پوشاند.
  */
 define('MRDASTBAAF_DB_VERSION', '1.5.1');
 define('MRDASTBAAF_BRIDGE_PATH', plugin_dir_path(__FILE__));
