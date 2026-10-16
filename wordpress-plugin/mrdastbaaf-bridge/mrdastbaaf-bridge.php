@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.7.10
+ * Version: 1.7.11
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.7.10');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.7.11');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -109,7 +109,7 @@ define('MRDASTBAAF_BRIDGE_VERSION', '1.7.10');
  *   پایین (mrdastbaaf_bridge_maybe_upgrade_db) dbDelta را دوباره اجرا می‌کند و
  *   ستون‌ها روی نصب‌های موجود بدون دستور دستی اضافه می‌شوند.
  */
-define('MRDASTBAAF_DB_VERSION', '1.4.0');
+define('MRDASTBAAF_DB_VERSION', '1.5.0');
 define('MRDASTBAAF_BRIDGE_PATH', plugin_dir_path(__FILE__));
 define('MRDASTBAAF_BRIDGE_URL', plugin_dir_url(__FILE__));
 define('MRDASTBAAF_API_NAMESPACE', 'mrdastbaaf/v1');
@@ -223,11 +223,11 @@ class MrDastbaaf_Bridge_Plugin {
         // تا LiteSpeed نتواند پاسخ را کش کند.
         add_action('rest_api_init', array($this, 'disable_litespeed_cache_for_namespace'), 1);
 
-        // v1.7.8: خودترمیمی دیسپچ پیامک — در «هر» درخواست وردپرس (سایت/پنل/REST)
-        // اگر باکس خروجی OTP غیرخالی باشد و از آخرین تریگر بیش از ۴۵ ثانیه گذشته
-        // باشد، دیسپچ دوباره تریگر می‌شود. حالت عادی (باکس خالی): یک خواندن از
-        // alloptions کش‌شده — صفر کوئری اضافه و هیچ تماس شبکه‌ای.
-        add_action('init', array('MrDastbaaf_Sms_Service', 'maybe_retrigger'), 20);
+        // v1.7.11: خودترمیمی دیسپچ پیامک با کرون تکراری ۵دقیقه‌ای (sweep) — هوک
+        // init قدیمی (maybe_retrigger با فلگ autoload) حذف شد: فلگ، ردیف اشتراکی
+        // بود که هر درخواستی می‌نوشت (بخشی از ریشهٔ تعلیق ۴۱-۴۶s). کرون sweep
+        // صف جدول درخواست‌های OTP را می‌خواند و شکست تریگر فوری را جبران می‌کند
+        // (زمان‌بندی در mrdastbaaf_bridge_schedule_otp_sweep_cron).
 
         // v1.7.3: روش رسمی LiteSpeed Cache — مستقیم به پلاگین می‌گوید پاسخ را کش
         // نکند. این قوی‌تر از header() است چون:
@@ -670,6 +670,9 @@ function mrdastbaaf_bridge_activate() {
 
     // v1.2.0: زمان‌بندی کرون ۱۰دقیقه‌ای ریکنسیلیشن سفارش‌های زیبال (جایگزین روزانه)
     mrdastbaaf_bridge_schedule_reconciliation_cron();
+
+    // v1.7.11: کرون sweep صف OTP (خودترمیمی دیسپچ)
+    mrdastbaaf_bridge_schedule_otp_sweep_cron();
 }
 register_activation_hook(__FILE__, 'mrdastbaaf_bridge_activate');
 
@@ -683,6 +686,12 @@ function mrdastbaaf_bridge_add_cron_interval($schedules) {
         $schedules['mrdastbaaf_10min'] = array(
             'interval' => 600,
             'display'  => 'Every 10 Minutes (MrDastbaaf)',
+        );
+    }
+    if (!isset($schedules['mrdastbaaf_5min'])) {
+        $schedules['mrdastbaaf_5min'] = array(
+            'interval' => 300,
+            'display'  => 'Every 5 Minutes (MrDastbaaf)',
         );
     }
     return $schedules;
@@ -711,10 +720,19 @@ function mrdastbaaf_bridge_maybe_upgrade_db() {
     if (get_option('mrdastbaaf_db_version') !== MRDASTBAAF_DB_VERSION) {
         MrDastbaaf_Database::create_tables();
         update_option('mrdastbaaf_db_version', MRDASTBAAF_DB_VERSION);
+
+        // v1.7.11 (اسکیما ۱.۵.۰): پاک‌سازی یک‌بارمصرف وضعیت باکس خروجی قدیمی —
+        // جدول درخواست‌های OTP جایگزین شده و این ردیف‌های اشتراکی دیگر هرگز
+        // خوانده/نوشته نمی‌شوند (روتین فقط در همین شاخهٔ ارتقا اجرا می‌شود).
+        MrDastbaaf_Database::cleanup_legacy_otp_state();
     }
 
     // v1.2.0: اطمینان از موجود بودن زمان‌بندی کرون جدید پس از ارتقا یا حذف اتفاقی
     mrdastbaaf_bridge_schedule_reconciliation_cron();
+
+    // v1.7.11: اطمینان از موجود بودن کرون sweep صف OTP (wp_next_scheduled از
+    // آپشن cron کش‌شده می‌خواند — صفر کوئری اضافه در بارگذاری‌های عادی)
+    mrdastbaaf_bridge_schedule_otp_sweep_cron();
 
     // v1.2.0: توکن اختصاصی اندپوینت GET /cron/reconcile — یک‌بار در نخستین ارتقا
     // تولید می‌شود؛ هرگز بازتاب داده نمی‌شود و فقط مقدار ثابت hash_equals مقایسه می‌کند.
@@ -805,6 +823,25 @@ add_action('mrdastbaaf_reconciliation_tick', array('MrDastbaaf_Payment_Controlle
 add_action('mrdastbaaf_otp_async_send', array('MrDastbaaf_Sms_Service', 'handle_async_send'), 10, 2);
 
 /**
+ * v1.7.11: خودترمیمی قطعی صف OTP — کرون تکراری ۵دقیقه‌ای صف جدول
+ * درخواست‌ها را می‌خواند و اگر تریگر فوری (loopback) دیسپچی را گم کرده باشد،
+ * ارسال را حداکثر ۵ دقیقه بعد جبران می‌کند. جایگزین هوک init/فلگ autoload
+ * نسخه‌های ۱.۷.۸-۱.۷.۱۰ (نوشتن اشتراکی در هر درخواست = ریشهٔ تعلیق).
+ */
+add_action('mrdastbaaf_otp_sweep', array('MrDastbaaf_Sms_Service', 'handle_dispatch'));
+
+/**
+ * v1.7.11: زمان‌بندی کرون sweep صف OTP — idempotent (فقط اگر موجود نباشد
+ * زمان‌بندی می‌شود)؛ wp_next_scheduled از آپشن cron کش‌شده می‌خواند (صفر
+ * کوئری اضافه در هر بارگذاری). در فعال‌سازی و بلوک ارتقای خودکار صدا زده می‌شود.
+ */
+function mrdastbaaf_bridge_schedule_otp_sweep_cron() {
+    if (!wp_next_scheduled('mrdastbaaf_otp_sweep')) {
+        wp_schedule_event(time() + 5 * MINUTE_IN_SECONDS, 'mrdastbaaf_5min', 'mrdastbaaf_otp_sweep');
+    }
+}
+
+/**
  * v1.2.0: پاک‌سازی زمان‌بندی کرون هنگام غیرفعال‌سازی افزونه (رویداد جدید +
  * رویداد روزانهٔ قدیمی، برای پاک‌سازی کامل مهاجرت‌های ناتمام)
  */
@@ -812,5 +849,6 @@ function mrdastbaaf_bridge_deactivate() {
     wp_clear_scheduled_hook('mrdastbaaf_reconciliation_tick');
     wp_clear_scheduled_hook('mrdastbaaf_daily_reconciliation');
     wp_clear_scheduled_hook('mrdastbaaf_otp_async_send');
+    wp_clear_scheduled_hook('mrdastbaaf_otp_sweep');
 }
 register_deactivation_hook(__FILE__, 'mrdastbaaf_bridge_deactivate');

@@ -55,6 +55,24 @@
  *   ۵) مارکر «ارسال‌شده» (mrdastbaaf_otp_sent_*) از ارسال تکراری جلوگیری می‌کند و
  *      ورودی‌های بالای ۱۵ دقیقه / سه تلاش ناموفق با لاگ فارسی حذف می‌شوند.
  *
+ * v1.7.11 (فیکس معماری نهایی — پروب زندهٔ ۱۶ اکتبر روی خود 1.7.10):
+ *  پروب‌های پس از نصب ۱.۷.۱۰ (اندپوینت سلامت جدید) تشخیص را قطعی کرد:
+ *   - request-otp معتبر هنوز ۴۱.۲s و ۴۲.۴s معلق می‌ماند (HTTP 200 با ۰ بایت)؛
+ *   - ردیف لاگِ «قبل از تریگر» ۱.۷.۱۰ هرگز نوشته نشد و باکس خروجی هم خالی ماند
+ *     (entries:0) — یعنی فرایند در قطعهٔ «نوشتن‌های بعد از transient نرخ» کشته شد؛
+ *   - تکرار همان شماره 429 در ۱.۵s و شمارهٔ «تازه» هم معلق ماند (پس ردیف‌های
+ *     per-phone مقصر نیستند)؛
+ *   - پروب نوشتنِ «ردیف تازه» در سلامت ۹۰-۱۷۷ms سبک بود (یک نمونهٔ ۳.۱s نوسان).
+ *  نتیجه: تعلیق روی به‌روزرسانی «ردیف‌های اشتراکی» ثابت wp_options است — شمارندهٔ
+ *  سراسری، سهمیهٔ IP، transient باکس، فلگ autoload و لاگ — که هر درخواستی به همان
+ *  چند ردیف می‌نویسد و فرایندهای کشته‌شده/زامبی روی آن‌ها صف قفل می‌سازند؛
+ *  LiteSpeed این هاست هر فرایند معلق ~۴۱-۴۶ ثانیه‌ای را می‌کشد.
+ *  فیکس معماری: مسیر پاسخ request-otp «صفر نوشتن اشتراکی» دارد — تنها نوشتن،
+ *  INSERT ردیف تازه در جدول wp_mrdastbaaf_otp_requests (اسکیما ۱.۵.۰) است؛
+ *  سهمیه‌ها (۲دقیقه/۵ساعته/۱۵روزانه/۱۰ساعته per-IP) به COUNT ایندکس‌شدهٔ همان
+ *  جدول تبدیل شدند (فقط خواندن)؛ دیسپچ در فرایند جدا (معماری ۱.۷.۸، تغییرنکرده)
+ *  از جدول می‌خواند؛ خودترمیمی با کرون تکراری ۵دقیقه‌ای جای فلگ autoload را گرفت.
+ *
  * نکتهٔ امنیتی: رمز سرویس پیامک در پاسخ‌ها/لاگ‌ها هرگز بازتاب داده نمی‌شود و
  * شمارهٔ موبایل در لاگ فقط به شکل ماسک‌شده نوشته می‌شود.
  */
@@ -65,26 +83,29 @@ if (!defined('ABSPATH')) {
 
 class MrDastbaaf_Sms_Service {
 
-    /** v1.7.8: نام transient باکس خروجی (صف ارسال‌های در انتظار دیسپچ). */
+    /** v1.7.8: نام transient باکس خروجی — v1.7.11: فقط برای پاک‌سازی یک‌بارمصرف ارتقا. */
     const OUTBOX_TRANSIENT = 'mrdastbaaf_otp_outbox';
 
-    /** v1.7.8: فلگ autoload شدهٔ «باکس غیرخالی است» — چک init بدون کوئری اضافه. */
+    /** v1.7.8: فلگ autoload — v1.7.11: فقط برای پاک‌سازی یک‌بارمصرف ارتقا. */
     const OUTBOX_PENDING_OPTION = 'mrdastbaaf_otp_outbox_pending';
 
-    /** v1.7.8: حداکثر تعداد ورودی همزمان در باکس (قدیمی‌ترین حذف می‌شود). */
-    const OUTBOX_MAX_ENTRIES = 5;
-
-    /** v1.7.8: عمر مفید ورودی باکس — کد OTP فقط ۱۲۰ ثانیه اعتبار دارد. */
-    const OUTBOX_TTL_SECONDS = 900;
-
-    /** v1.7.8: قفل جلوگیری از دیسپچ موازی. */
+    /** v1.7.11: قفل جلوگیری از دیسپچ موازی. */
     const DISPATCH_LOCK_TRANSIENT = 'mrdastbaaf_otp_dispatch_lock';
 
-    /** v1.7.8: کلید فاصلهٔ حداقلی دو تریگر خودترمیمی init. */
-    const RETRIGGER_COOLDOWN_TRANSIENT = 'mrdastbaaf_otp_retrigger_cd';
+    /** v1.7.11: اعتبار کد OTP (ثانیه) — هم‌سقف قفل نرخ ۲ دقیقه‌ای. */
+    const CODE_TTL_SECONDS = 120;
 
-    /** v1.7.8: فاصلهٔ حداقلی دو تریگر خودترمیمی init (ثانیه). */
-    const RETRIGGER_COOLDOWN_SECONDS = 45;
+    /** v1.7.11: حداکثر تلاش ارسال هر درخواست در دیسپچ‌های بعدی. */
+    const MAX_SEND_ATTEMPTS = 3;
+
+    /** v1.7.11: پنجرهٔ واکشی صف دیسپچ (ثانیه). */
+    const DISPATCH_PICK_WINDOW_SECONDS = 900;
+
+    /** v1.7.11: مدت نگه‌داری ردیف‌ها (۲۵ ساعت) — پنجرهٔ سهمیهٔ روزانه + حاشیه. */
+    const REQUEST_RETAIN_SECONDS = 90000;
+
+    /** v1.7.11: ردیف‌های «sending» قدیمی‌تر از این (ثانیه) دوباره واکشی می‌شوند. */
+    const SENDING_STALE_SECONDS = 60;
 
     /** v1.7.8: آپشن‌ها/توابع — فقط خواندن آپشن (بدون شبکه) — نسخهٔ ۱.۷.۷ حفظ شد. */
     public static function is_ready() {
@@ -101,72 +122,208 @@ class MrDastbaaf_Sms_Service {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // v1.7.8: باکس خروجی + تریگر دیسپچ
+    // v1.7.11: جدول درخواست‌های OTP (اسکیما ۱.۵.۰) + تریگر دیسپچ
     // ─────────────────────────────────────────────────────────────────────
 
+    /** v1.7.11: نام کامل جدول درخواست‌های OTP. */
+    private static function otp_table() {
+        global $wpdb;
+        return $wpdb->prefix . 'mrdastbaaf_otp_requests';
+    }
+
     /**
-     * v1.7.8: ثبت ارسال در «باکس خروجی» — فقط دو نوشتنِ سریع (transient + آپشن
-     * autoload شده). هیچ شبکه/کرون/هوکی در این متد اجرا نمی‌شود و در مسیر پاسخ
-     * request-otp امن است.
+     * v1.7.11: برش زمانی GMT برای مقایسه با ستون‌های datetime جدول — همهٔ
+     * زمان‌های جدول GMT نوشته می‌شوند (current_time('mysql', true)) و PHP در
+     * وردپرس همیشه UTC است؛ در نتیجه time()/gmdate()/strtotime هم‌ساعت‌اند.
+     *
+     * @param int $seconds_ago فاصله از اکنون به ثانیه
+     * @return string رشتهٔ Y-m-d H:i:s
+     */
+    private static function gmt_cutoff($seconds_ago) {
+        return gmdate('Y-m-d H:i:s', time() - (int) $seconds_ago);
+    }
+
+    /**
+     * v1.7.11: ثبت درخواست OTP — «تنها نوشتنِ» مسیر پاسخ request-otp.
+     * INSERT ردیف تازه با AUTO_INCREMENT = صفر رقابت ردیفی (برخلاف
+     * update_option روی ردیف‌های اشتراکی که ریشهٔ تعلیق ۴۱-۴۲ ثانیه‌ای بود).
+     * کدِ خام برای دیسپچ ارسال و هش bcrypt برای verify-otp ذخیره می‌شود.
+     *
+     * @param string $phone     شمارهٔ نرمال‌شده (09xxxxxxxxx)
+     * @param string $code      کد ۶ رقمی خام (برای ارسال در دیسپچ)
+     * @param string $code_hash هش bcrypt کد (برای verify)
+     * @param string $ip_md5    md5 آی‌پی کلاینت (سهمیهٔ per-IP)
+     * @return int|false id ردیف در موفقیت؛ false در شکست
+     */
+    public static function enqueue_request($phone, $code, $code_hash, $ip_md5 = '') {
+        global $wpdb;
+        $now_gmt = current_time('mysql', true);
+        $ok = $wpdb->insert(
+            self::otp_table(),
+            array(
+                'phone'      => (string) $phone,
+                'code'       => (string) $code,
+                'code_hash'  => (string) $code_hash,
+                'ip_md5'     => (string) $ip_md5,
+                'status'     => 'pending',
+                'attempts'   => 0,
+                'created_at' => $now_gmt,
+                'updated_at' => $now_gmt,
+            ),
+            array('%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s')
+        );
+        if (false === $ok) {
+            return false;
+        }
+        return (int) $wpdb->insert_id;
+    }
+
+    /**
+     * v1.7.11: شمارش ایندکس‌شدهٔ درخواست‌های اخیر — سهمیه‌های ضد-سوءاستفاده اکنون
+     * «فقط خواندن» اند (COUNT روی ایندکس phone_created/ip_created) به‌جای
+     * transientهای اشتراکی؛ صفر نوشتن برای کنترل نرخ.
+     *
+     * @param string $column 'phone' یا 'ip_md5'
+     * @param string $value  مقدار دقیق
+     * @param int    $window_seconds پنجرهٔ زمانی به ثانیه
+     * @return int
+     */
+    public static function count_recent_requests($column, $value, $window_seconds) {
+        global $wpdb;
+        if (!in_array($column, array('phone', 'ip_md5'), true) || '' === (string) $value) {
+            return 0;
+        }
+        $table = self::otp_table();
+        // $column از فهرست سفید بالا می‌آید؛ مقدارها با prepare امن‌اند.
+        return (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$table} WHERE {$column} = %s AND created_at > %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+            (string) $value,
+            self::gmt_cutoff($window_seconds)
+        ));
+    }
+
+    /**
+     * v1.7.11: واکشی درخواست‌های در انتظار ارسال — حداکثر ۲ ورودی در هر دیسپچ
+     * (بدترین حالت با timeout ملی‌پیامک ۱۰s ≈ ۲۲ ثانیه، زیر آستانهٔ کشته‌شدن
+     * فرایند این هاست). ردیف‌های «sending» که بیش از ۶۰ ثانیه پیش به‌روز شده‌اند
+     * (دیسپچ زامبیِ کشته‌شده) هم دوباره واکشی می‌شوند — خودترمیمی صف.
+     *
+     * @param int $limit حداکثر تعداد
+     * @return array[]
+     */
+    public static function get_pending_requests($limit = 2) {
+        global $wpdb;
+        $table = self::otp_table();
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, phone, code, code_hash, attempts, created_at
+             FROM {$table}
+             WHERE attempts < %d
+               AND created_at > %s
+               AND (status = 'pending' OR (status = 'sending' AND updated_at < %s))
+             ORDER BY id ASC
+             LIMIT %d",
+            self::MAX_SEND_ATTEMPTS,
+            self::gmt_cutoff(self::DISPATCH_PICK_WINDOW_SECONDS),
+            self::gmt_cutoff(self::SENDING_STALE_SECONDS),
+            (int) $limit
+        ), ARRAY_A);
+        return is_array($rows) ? $rows : array();
+    }
+
+    /**
+     * v1.7.11: آخرین درخواست «قابل استفاده» یک شماره — منبع کد در verify-otp.
+     * وضعیت‌های پذیرفته: pending/sending/sent (کد تا ۱۲۰ ثانیه بعد از ارسال هم
+     * برای ورود معتبر است؛ همان معناشناسی transient قدیمی). وضعیت‌های
+     * used/expired/failed هرگز برگردانده نمی‌شوند (کد یک‌بارمصرف می‌ماند).
      *
      * @param string $phone شمارهٔ نرمال‌شده
-     * @param string $code  کد ۶ رقمی
-     * @return void
+     * @return array|null {id, code_hash, created_at}
      */
-    public static function queue_outbox_send($phone, $code) {
-        $phone = (string) $phone;
-        $code  = (string) $code;
-
-        $outbox = get_transient(self::OUTBOX_TRANSIENT);
-        if (!is_array($outbox)) {
-            $outbox = array();
-        }
-
-        // کد تازهٔ همان شماره جایگزین ورودی قبلی می‌شود (ضد ارسال کد کهنه)
-        $kept = array();
-        foreach ($outbox as $entry) {
-            if (is_array($entry) && isset($entry['phone']) && (string) $entry['phone'] === $phone) {
-                continue;
-            }
-            $kept[] = $entry;
-        }
-        $kept[] = array(
-            'phone'    => $phone,
-            'code'     => $code,
-            'ts'       => time(),
-            'attempts' => 0,
-        );
-        if (count($kept) > self::OUTBOX_MAX_ENTRIES) {
-            $kept = array_slice($kept, -self::OUTBOX_MAX_ENTRIES);
-        }
-
-        set_transient(self::OUTBOX_TRANSIENT, $kept, self::OUTBOX_TTL_SECONDS);
-        // فلگ autoload=yes → چک init در هوک init از alloptions می‌خواند (صفر کوئری اضافه)
-        update_option(self::OUTBOX_PENDING_OPTION, time(), true);
-    }
-
-    /** v1.7.8: آیا باکس خروجی ورودی در انتظار دارد؟ (خواندن آپشن autoload شده) */
-    public static function has_pending_outbox() {
-        return (int) get_option(self::OUTBOX_PENDING_OPTION, 0) > 0;
+    public static function get_latest_verifiable_request($phone) {
+        global $wpdb;
+        $table = self::otp_table();
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT id, code_hash, created_at FROM {$table}
+             WHERE phone = %s AND status IN ('pending','sending','sent')
+             ORDER BY id DESC LIMIT 1",
+            (string) $phone
+        ), ARRAY_A);
+        return is_array($row) ? $row : null;
     }
 
     /**
-     * v1.7.8: خودترمیمی — روی هوک init «هر» درخواست وردپرس اجرا می‌شود؛ اگر باکس
-     * غیرخالی باشد و از آخرین تریگر بیش از ۴۵ ثانیه گذشته باشد، دیسپچ را دوباره
-     * تریگر می‌کند. هزینهٔ حالت عادی (باکس خالی): یک خواندن از alloptions کش‌شده —
-     * صفر کوئری اضافه.
+     * v1.7.11: تغییر وضعیت ردیف بر اساس id — هر فرایند فقط ردیف «خودش» را
+     * به‌روز می‌کند (بدون رقابت ردیفی). وضعیت‌ها: pending|sending|sent|failed|used|expired
+     *
+     * @param int    $id
+     * @param string $status
+     * @param int|null $attempts در صورت ارائه ثبت می‌شود
+     * @param string|null $only_if_current در صورت ارائه، فقط وقتی وضعیت فعلی همین
+     *        باشد به‌روزرسانی می‌شود (ضد بازنویسی وضعیت used/expired توسط دیسپچ)
+     * @return void
+     */
+    public static function mark_request_status($id, $status, $attempts = null, $only_if_current = null) {
+        global $wpdb;
+        $data = array(
+            'status'     => (string) $status,
+            'updated_at' => current_time('mysql', true),
+        );
+        $formats = array('%s', '%s');
+        if (null !== $attempts) {
+            $data['attempts'] = (int) $attempts;
+            $formats[] = '%d';
+        }
+        $where = array('id' => (int) $id);
+        $where_formats = array('%d');
+        if (null !== $only_if_current && '' !== (string) $only_if_current) {
+            $where['status'] = (string) $only_if_current;
+            $where_formats[] = '%s';
+        }
+        $wpdb->update(self::otp_table(), $data, $where, $formats, $where_formats);
+    }
+
+    /**
+     * v1.7.11: آمار جدول برای اندپوینت سلامت — پنجرهٔ بیرونی روی صف و عبور.
+     *
+     * @return array {pending:int, sent_24h:int, oldest_pending_age_s:int}
+     */
+    public static function otp_table_stats() {
+        global $wpdb;
+        $table = self::otp_table();
+        $pending = (int) $wpdb->get_var(
+            "SELECT COUNT(*) FROM {$table} WHERE status IN ('pending','sending')"
+        );
+        $sent_24h = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$table} WHERE status = 'sent' AND created_at > %s",
+            self::gmt_cutoff(DAY_IN_SECONDS)
+        ));
+        $oldest = $wpdb->get_var(
+            "SELECT MIN(created_at) FROM {$table} WHERE status IN ('pending','sending')"
+        );
+        $oldest_age = 0;
+        if (is_string($oldest) && '' !== $oldest) {
+            $oldest_age = max(0, time() - (int) strtotime($oldest));
+        }
+        return array(
+            'pending'             => $pending,
+            'sent_24h'            => $sent_24h,
+            'oldest_pending_age_s' => $oldest_age,
+        );
+    }
+
+    /**
+     * v1.7.11: حذف ردیف‌های کهنه (بیش از ۲۵ ساعت) — پنجرهٔ سهمیهٔ روزانه کامل
+     * می‌ماند و جدول کوچک. در دیسپچ‌ها احتمالی (۱ از ۱۰) و در کرون ۵دقیقه‌ای
+     * (sweep) قطعی اجرا می‌شود.
      *
      * @return void
      */
-    public static function maybe_retrigger() {
-        if (!self::has_pending_outbox()) {
-            return;
-        }
-        if (get_transient(self::RETRIGGER_COOLDOWN_TRANSIENT)) {
-            return;
-        }
-        set_transient(self::RETRIGGER_COOLDOWN_TRANSIENT, 1, self::RETRIGGER_COOLDOWN_SECONDS);
-        self::trigger_dispatch();
+    public static function cleanup_old_requests() {
+        global $wpdb;
+        $wpdb->query($wpdb->prepare(
+            'DELETE FROM ' . self::otp_table() . ' WHERE created_at < %s', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+            self::gmt_cutoff(self::REQUEST_RETAIN_SECONDS)
+        ));
     }
 
     /**
@@ -246,13 +403,17 @@ class MrDastbaaf_Sms_Service {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // v1.7.8: پردازش باکس در فرایند جداست (اندپوینت دیسپچ / کرون)
+    // v1.7.11: پردازش صف در فرایند جداست (اندپوینت دیسپچ / کرون sweep)
     // ─────────────────────────────────────────────────────────────────────
 
     /**
      * v1.7.8: اجرای دیسپچ — از اندپوینت REST /auth/otp-dispatch (فرایند loopback
      * مستقل) یا رویداد کرون فراخوانی می‌شود. در فرایند جاری «هیچ کلاینتی منتظر
      * پاسخ نیست»؛ کندی هوک ثالث/سرویس‌دهنده به هیچ درخواست کاربری منتقل نمی‌شود.
+     *
+     * v1.7.11: منبع صف = جدول mrdastbaaf_otp_requests (به‌جای transient باکس).
+     * همهٔ نوشتن‌های اشتراکی (لاگ پیشخوان، مارکر ارسال) فقط اینجاست — هیچ کلاینتی
+     * منتظرشان نیست و شکستشان با دیسپچ بعدی/کرون sweep جبران می‌شود.
      *
      * ترتیب عمدی: ملی‌پیامک اول (سریع و اثبات‌شده) → ثبت لاگ → مارکر ارسال.
      * هوک ثالث فقط وقتی اجرا می‌شود که ملی‌پیامک تنظیم نباشد؛ در نتیجه هوک‌های
@@ -279,48 +440,40 @@ class MrDastbaaf_Sms_Service {
 
         try {
             // پایان try/finally در پایین متد — قفل در «هر» مسیر خروج آزاد می‌شود
-            $outbox = get_transient(self::OUTBOX_TRANSIENT);
-            if (!is_array($outbox) || empty($outbox)) {
-                update_option(self::OUTBOX_PENDING_OPTION, 0, true);
+            $rows = self::get_pending_requests(2);
+            if (empty($rows)) {
                 $result['skipped'] = 'empty';
                 return $result;
             }
 
-            $remaining = array();
-            foreach ($outbox as $entry) {
-                if (!is_array($entry) || !isset($entry['phone'], $entry['code'])) {
-                    continue;
-                }
+            foreach ($rows as $row) {
+                $id       = (int) $row['id'];
+                $phone    = (string) $row['phone'];
+                $code     = (string) $row['code'];
+                $mask     = substr($phone, 0, 4) . '***' . substr($phone, -4);
+                $age      = max(0, time() - (int) strtotime($row['created_at']));
+                $attempts = (int) $row['attempts'];
 
-                $phone = (string) $entry['phone'];
-                $code  = (string) $entry['code'];
-                $mask  = substr($phone, 0, 4) . '***' . substr($phone, -4);
-                $age   = time() - (int) $entry['ts'];
-
-                // سقف پردازش در هر دیسپچ: ۲ ورودی (v1.7.9: با timeout ملی‌پیامک ۱۰s
-                // بدترین حالت ~۲۲ ثانیه زیر آستانهٔ کشته‌شدن فرایند این هاست)
-                if (count($result['results']) >= 2) {
-                    $remaining[] = $entry;
-                    continue;
-                }
-
-                if ($age > self::OUTBOX_TTL_SECONDS) {
-                    self::write_log('رد شد — ورودی باکس خروجی قدیمی‌تر از ۱۵ دقیقه بود (' . $mask . ')؛ حذف شد.');
-                    continue;
-                }
-
-                // کد منقضی/مصرف‌شده = ارسال بی‌مصرف؛ لغو با لاگ (رفتار ۱.۷.۶ حفظ شد)
-                if (get_transient('mrdastbaaf_otp_val_' . md5($phone)) === false) {
-                    self::write_log('رد شد — کد OTP ' . $mask . ' منقضی یا مصرف شده بود؛ ارسال لغو شد.');
+                // کد منقضی (بیش از ۱۲۰ ثانیه) = ارسال بی‌مصرف؛ لغو با لاگ (رفتار ۱.۷.۶)
+                if ($age > self::CODE_TTL_SECONDS) {
+                    self::mark_request_status($id, 'expired', $attempts);
+                    self::write_log('رد شد — کد OTP ' . $mask . ' منقضی بود (سن ' . $age . ' ثانیه)؛ ارسال لغو شد.');
                     continue;
                 }
 
                 // ضد ارسال تکراری (بعد از موفقیت دیسپچ قبلی)
                 if (get_transient('mrdastbaaf_otp_sent_' . md5($phone . '|' . $code))) {
+                    self::mark_request_status($id, 'sent', $attempts, 'sending');
                     continue;
                 }
 
+                // نشانه‌گذاری «در حال ارسال» پیش از هر کار شبکه‌ای — اگر فرایند میانی
+                // کشته شود، ردیف پس از ۶۰ ثانیه دوباره واکشی می‌شود (خودترمیمی صف).
+                self::mark_request_status($id, 'sending');
+
+                $t_send = microtime(true);
                 $send_result = self::send_direct($phone, $code);
+                $send_elapsed = round(microtime(true) - $t_send, 2);
                 $result['processed'] = (int) $result['processed'] + 1;
 
                 // v1.7.9: پس از ارسال، کش شماره→کاربر گرم می‌شود تا verify-otp
@@ -332,64 +485,42 @@ class MrDastbaaf_Sms_Service {
 
                 if (true === $send_result) {
                     set_transient('mrdastbaaf_otp_sent_' . md5($phone . '|' . $code), 1, 5 * MINUTE_IN_SECONDS);
-                    $result['results'][] = array('phone' => $mask, 'status' => 'sent');
+                    // فقط اگر هنوز «sending» است — اگر verify-otp هم‌زمان کد را مصرف
+                    // کرده و «used» گذاشته، وضعیت used حفظ می‌شود (کد یک‌بارمصرف می‌ماند).
+                    self::mark_request_status($id, 'sent', $attempts, 'sending');
+                    $result['results'][] = array('phone' => $mask, 'status' => 'sent', 'ms' => $send_elapsed);
                 } else {
-                    $attempts = isset($entry['attempts']) ? (int) $entry['attempts'] + 1 : 1;
+                    $new_attempts = $attempts + 1;
+                    // تا ۳ تلاش (هر دیسپچ بعدی = یک تلاش)؛ بعد از آن حذف قطعی از صف.
+                    // هر دو مارک فقط اگر وضعیت هنوز «sending» باشد — اگر verify-otp
+                    // هم‌زمان کد را مصرف کرده بود (used)، ردیف هرگز زنده نمی‌شود.
+                    if ($new_attempts < self::MAX_SEND_ATTEMPTS && $age < 600) {
+                        self::mark_request_status($id, 'pending', $new_attempts, 'sending');
+                    } else {
+                        self::mark_request_status($id, 'failed', $new_attempts, 'sending');
+                    }
                     $result['results'][] = array(
                         'phone'    => $mask,
                         'status'   => 'failed',
-                        'attempts' => $attempts,
+                        'attempts' => $new_attempts,
+                        'ms'       => $send_elapsed,
                     );
-                    // تا ۳ تلاش (هر تریگر بعدی = یک تلاش)؛ بعد از آن حذف قطعی
-                    if ($attempts < 3 && $age < 600) {
-                        $entry['attempts'] = $attempts;
-                        $remaining[] = $entry;
-                    }
                 }
             }
 
-            // v1.7.8: ادغام ایمن — در فاصلهٔ خواندن/نوشتن ما ممکن است درخواست‌های
-            // تازه‌ای ورودی به باکس اضافه کرده باشند؛ بازنویسی کورکورانه آن‌ها را
-            // گم می‌کند. ورودی‌های تازه (کلید phone|code جدید) به لیست باقی‌مانده
-            // اضافه می‌شوند تا در دیسپچ بعدی پردازش شوند.
-            $known_keys = array();
-            foreach ($remaining as $e) {
-                if (is_array($e) && isset($e['phone'], $e['code'])) {
-                    $known_keys[] = (string) $e['phone'] . '|' . (string) $e['code'];
-                }
+            // حذف ردیف‌های کهنه — احتمالی (۱ از ۱۰ دیسپچ)؛ کرون sweep پوشش قطعی دارد
+            if (0 === mt_rand(0, 9)) {
+                self::cleanup_old_requests();
             }
-            $fresh = get_transient(self::OUTBOX_TRANSIENT);
-            if (is_array($fresh)) {
-                foreach ($fresh as $e) {
-                    if (!is_array($e) || !isset($e['phone'], $e['code'])) {
-                        continue;
-                    }
-                    $key = (string) $e['phone'] . '|' . (string) $e['code'];
-                    if (!in_array($key, $known_keys, true)) {
-                        $known_keys[] = $key;
-                        $remaining[] = $e;
-                    }
-                }
-            }
-
-            if (empty($remaining)) {
-                delete_transient(self::OUTBOX_TRANSIENT);
-                update_option(self::OUTBOX_PENDING_OPTION, 0, true);
-            } else {
-                if (count($remaining) > self::OUTBOX_MAX_ENTRIES) {
-                    $remaining = array_slice($remaining, -self::OUTBOX_MAX_ENTRIES);
-                }
-                set_transient(self::OUTBOX_TRANSIENT, $remaining, self::OUTBOX_TTL_SECONDS);
-                update_option(self::OUTBOX_PENDING_OPTION, time(), true);
-            }
-            $result['pending'] = count($remaining);
         } catch (Throwable $e) {
             // هیچ استثنایی نباید فرایند دیسپچ را نیمه‌کاره و قفل‌شده رها کند
-            self::write_admin_log('خطا — پردازش باکس خروجی با استثنا متوقف شد: ' . $e->getMessage());
+            self::write_admin_log('خطا — پردازش صف OTP با استثنا متوقف شد: ' . $e->getMessage());
         } finally {
             // آزادی قفل در «هر» مسیر خروج (شامل return زودهنگام داخل try)
             delete_transient(self::DISPATCH_LOCK_TRANSIENT);
         }
+
+        $result['pending'] = (int) (self::otp_table_stats()['pending']);
 
         return $result;
     }

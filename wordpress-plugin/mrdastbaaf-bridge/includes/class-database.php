@@ -171,6 +171,33 @@ class MrDastbaaf_Database {
         ) $charset_collate;";
         dbDelta($sql_audit);
 
+        // ۸. درخواست‌های OTP (v1.7.11 — اسکیما ۱.۵.۰): جایگزین باکس خروجیِ transient +
+        // فلگ autoload + transientهای سهمیه. پروب زندهٔ ۱۶ اکتبر روی 1.7.10:
+        // request-otp معتبر ۴۱-۴۲ ثانیه معلق ماند (HTTP 200 با ۰ بایت) در حالی که
+        // نوشتنِ «ردیف تازه» (پروب سلامت) ۹۰-۱۷۷ms سبک بود — یعنی تعلیق روی
+        // به‌روزرسانی ردیف‌های «اشتراکی» ثابتِ wp_options است (شمارندهٔ سراسری،
+        // سهمیهٔ IP، فلگ باکس، لاگ) که هر درخواستی به همان چند ردیف می‌نویسد و
+        // فرایندهای کشته‌شده/زامبی روی آن‌ها صف قفل می‌سازند. این جدول هر درخواست
+        // را «ردیف تازهٔ خودش» (INSERT با AUTO_INCREMENT — هیچ رقابت ردیفی) می‌نویسد
+        // و سهمیه‌ها (نرخ ۲دقیقه، ۵/ساعت، ۱۵/روز، ۱۰/ساعت per-IP) به COUNT ایندکس‌شده
+        // روی همین ردیف‌ها تبدیل می‌شود — صفر نوشتن اشتراکی در مسیر پاسخ.
+        $table_otp = $wpdb->prefix . 'mrdastbaaf_otp_requests';
+        $sql_otp = "CREATE TABLE $table_otp (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            phone varchar(20) NOT NULL,
+            code_hash varchar(100) NOT NULL,
+            ip_md5 char(32) DEFAULT '' NOT NULL,
+            status varchar(16) DEFAULT 'pending' NOT NULL,
+            attempts tinyint(3) unsigned DEFAULT 0 NOT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            updated_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            PRIMARY KEY  (id),
+            KEY phone_created_idx (phone, created_at),
+            KEY status_created_idx (status, created_at),
+            KEY ip_created_idx (ip_md5, created_at)
+        ) $charset_collate;";
+        dbDelta($sql_otp);
+
         // درج پلن‌های پیش‌فرض در صورت خالی بودن جدول
         self::seed_initial_plans();
     }
@@ -265,5 +292,21 @@ class MrDastbaaf_Database {
 
         // PERF (فاز ۳): کش REST لیست پلن‌ها پس از seed باطل می‌شود
         delete_transient('mrdastbaaf_plans_cache');
+    }
+
+    /**
+     * v1.7.11 (اسکیما ۱.۵.۰): پاک‌سازی یک‌بارمصرف وضعیت باکس خروجی قدیمی —
+     * با مهاجرت به جدول mrdastbaaf_otp_requests، این ردیف‌های اشتراکیِ قدیمی
+     * دیگر هرگز خوانده/نوشته نمی‌شوند و حذفشان از alloptions حافظهٔ هر درخواست
+     * را سبک می‌کند. در بلوک ارتقای خودکار (چک mrdastbaaf_db_version) صدا زده
+     * می‌شود؛ اتمام‌ناپذیری خطاها критی نیست (هر مورد جداگانه و بی‌خطر).
+     *
+     * @return void
+     */
+    public static function cleanup_legacy_otp_state() {
+        delete_option(MrDastbaaf_Sms_Service::OUTBOX_PENDING_OPTION);
+        delete_option('mrdastbaaf_otp_hourly_count');
+        delete_option('mrdastbaaf_otp_hourly_started');
+        delete_transient(MrDastbaaf_Sms_Service::OUTBOX_TRANSIENT);
     }
 }
