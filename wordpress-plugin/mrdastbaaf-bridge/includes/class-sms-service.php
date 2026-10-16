@@ -170,6 +170,21 @@ class MrDastbaaf_Sms_Service {
     }
 
     /**
+     * v1.7.10: گارد سقف زمانی تریگر — با اولویت PHP_INT_MAX نصب می‌شود تا هر
+     * بازنویسیِ فیلتر http_request_timeout از سوی افزونه‌های ثالث (پشتیبان‌گیری،
+     * به‌روزرسانی خودکار، امنیت و…) که سقف ۲ ثانیه را به ۳۰-۶۰ ثانیه بالا می‌برد
+     * بی‌اثر شود. پروب زندهٔ ۱.۷.۹ (۱۶ اکتبر): request-otp با timeout=2 هم ~۴۷
+     * ثانیه معلق ماند و فرایند پیش از نوشتن لاگ کشته شد — همین گارد برای همین
+     * سناریوست. مقدار نهایی: همیشه ۲ ثانیهٔ صحیح.
+     *
+     * @param mixed $timeout مقدار timeout پس از زنجیرهٔ فیلترها
+     * @return int سقف ۲ ثانیه
+     */
+    public static function force_trigger_timeout_guard($timeout) {
+        return 2;
+    }
+
+    /**
      * v1.7.8: تریگر دیسپچ — درخواست loopback غیربلاک‌کننده به
      * POST /auth/otp-dispatch (فرایند PHP مستقل = هیچ کندی به درخواست جاری
      * منتقل نمی‌شود).
@@ -179,6 +194,10 @@ class MrDastbaaf_Sms_Service {
      * می‌شود که در cURL یعنی «بدون سقف زمانی» — همین ریشهٔ تعلیق ۷۴ ثانیه‌ای
      * spawn_cron در نسخهٔ ۱.۷.۶ بود (spawn_cron هسته با timeout=0.01 کار می‌کند).
      *
+     * v1.7.10: گارد http_request_timeout با اولویت PHP_INT_MAX حین فراخوانی نصب
+     * و بلافاصله برداشته می‌شود تا سقف ۲ ثانیه از هر منبعی (افزونهٔ ثالث/موهیتیس)
+     * مصون بماند؛ زمان واقعی تریگر نیز اندازه‌گیری و اگر >۳s شد در لاگ ثبت می‌شود.
+     *
      * @param bool $log_errors ثبت خطا در لاگ پیشخوان (برای تریگر فوری request-otp روشن است)
      * @return bool true = تریگر ارسال شد یا دیسپچ دیگری در جریان بود
      */
@@ -187,6 +206,8 @@ class MrDastbaaf_Sms_Service {
             return true; // دیسپچ دیگری در جریان است — باکس را همان پردازش می‌کند
         }
 
+        add_filter('http_request_timeout', array(__CLASS__, 'force_trigger_timeout_guard'), PHP_INT_MAX);
+        $t_trigger = microtime(true);
         $response = wp_remote_post(
             rest_url('mrdastbaaf/v1/auth/otp-dispatch'),
             array(
@@ -195,6 +216,8 @@ class MrDastbaaf_Sms_Service {
                 'body'     => array('trigger' => 'outbox'),
             )
         );
+        remove_filter('http_request_timeout', array(__CLASS__, 'force_trigger_timeout_guard'), PHP_INT_MAX);
+        $trigger_elapsed = round(microtime(true) - $t_trigger, 2);
 
         if (is_wp_error($response)) {
             if ($log_errors && !get_transient('mrdastbaaf_otp_dispatch_err_cd')) {
@@ -202,10 +225,21 @@ class MrDastbaaf_Sms_Service {
                 set_transient('mrdastbaaf_otp_dispatch_err_cd', 1, 600);
                 self::write_admin_log(
                     'هشدار — تریگر دیسپچ پیامک به فرایند پس‌زمینه ناموفق بود: ' . $response->get_error_message()
-                    . '؛ ارسال با درخواست بعدی سایت (خودترمیمی ۴۵ ثانیه‌ای) دوباره تلاش می‌شود.'
+                    . ' (زمان: ' . $trigger_elapsed . 's)؛ ارسال با درخواست بعدی سایت (خودترمیمی ۴۵ ثانیه‌ای) دوباره تلاش می‌شود.'
                 );
             }
             return false;
+        }
+
+        // v1.7.10: تشخیص پایدار — اگر با گارد فعال هم بیش از ۳ ثانیه طول کشید،
+        // ریشه جای دیگری است (شبکهٔ خروجی هاست به خود دامنه / کش آبجکت / قفل
+        // جدول آپشن‌ها) و با سقف نرخ ۱۰ دقیقه‌ای در لاگ ثبت می‌شود.
+        if ($trigger_elapsed > 3 && !get_transient('mrdastbaaf_otp_trigger_slow_cd')) {
+            set_transient('mrdastbaaf_otp_trigger_slow_cd', 1, 600);
+            self::write_admin_log(
+                'هشدار — تریگر دیسپچ با گارد سقف ۲ ثانیه‌ای هم ' . $trigger_elapsed . 's طول کشید؛'
+                . ' ریشهٔ احتمالی: کندی loopback (شبکهٔ خروجی هاست به خود دامنه) یا قفل جدول آپشن‌ها.'
+            );
         }
 
         return true;

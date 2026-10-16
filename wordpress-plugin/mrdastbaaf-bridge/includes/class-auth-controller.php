@@ -33,6 +33,17 @@ class MrDastbaaf_Auth_Controller {
             'permission_callback' => '__return_true',
         ));
 
+        // v1.7.10: اندپوینت تشخیصی عمومی — وضعیت زندهٔ زنجیرهٔ OTP را بدون دسترسی
+        // پیشخوان گزارش می‌دهد: تایمینگ خواندن/نوشتن DB، وضعیت باکس خروجی/قفل
+        // دیسپچ، لاگ آخرین پیامک، مقدار «مؤثر» فیلتر http_request_timeout (+ نام
+        // افزونه‌های مداخله‌گر) و تست اتصال خروجی به سرور ملی‌پیامک. عمومی اما
+        // کم‌حجم: بدون هیچ رمزی، با سقف نرخ ۱ در ۱۰ ثانیه per-IP.
+        register_rest_route(MRDASTBAAF_API_NAMESPACE, '/auth/health', array(
+            'methods' => 'GET',
+            'callback' => array($this, 'handle_health'),
+            'permission_callback' => '__return_true',
+        ));
+
         // v1.2.0: permission_callback مشترک — اول maybe_authenticate_bearer سپس چک لاگین؛
         // فیلتر determine_current_user در برخی نصب‌ها دیر فایر می‌شود (یافتهٔ ۰-۲).
         register_rest_route(MRDASTBAAF_API_NAMESPACE, '/auth/me', array(
@@ -201,25 +212,40 @@ class MrDastbaaf_Auth_Controller {
             'isRegistered' => !empty($existing_user),
         );
 
+        $queue_elapsed = '0';
         if (MrDastbaaf_Sms_Service::is_ready() || has_action('mrdastbaaf_send_otp_sms')) {
             // ثبت در باکس خروجی (دو نوشتن سریع) + تریگر فوری loopback سقف‌دار
+            $t_queue = microtime(true);
             MrDastbaaf_Sms_Service::queue_outbox_send($phone, $otp_code);
+            $queue_elapsed = round(microtime(true) - $t_queue, 2);
+
+            /**
+             * v1.7.10: ردیف زمان‌سنجی «همیشه-روشن» اکنون «قبل از» تریگر دیسپچ
+             * نوشته می‌شود (در ۱.۷.۹ بعد از آن بود). پروب زندهٔ ۱۶ اکتبر: تریگر
+             * loopback ~۴۷ ثانیه معلق ماند و فرایند پیش از نوشتن لاگ کشته شد =
+             * لاگ یخ‌زدهٔ پیشخوان که کارفرما دید. با این ترتیب، هر تلاش ورود —
+             * در هر شرایطی — ردیف تازه‌ای در لاگ می‌گذارد و اگر تریگر/ارسال
+             * بعدش گم شود، خودِ فاصلهٔ زمانی ردیف‌ها مکان تعلیق را نشان می‌دهد.
+             */
+            $otp_path_elapsed = round(microtime(true) - $otp_path_t0, 2);
+            $request_phone_masked = substr($phone, 0, 4) . '***' . substr($phone, -4);
+            MrDastbaaf_Sms_Service::write_admin_log(
+                'اطلاع — درخواست کد برای ' . $request_phone_masked . ' در ' . $otp_path_elapsed . 's تکمیل شد'
+                . ' (جست‌وجوی شماره: ' . $find_elapsed . 's، باکس خروجی: ' . $queue_elapsed . 's)؛ ارسال در فرایند جدا ادامه دارد.'
+            );
+
             MrDastbaaf_Sms_Service::trigger_dispatch(true);
         } else {
             // سرویس تنظیم نشده و افزونهٔ ثالثی هم روی هوک نیست — هشدار فوری بدون هیچ تماس شبکه‌ای
             $response['smsWarning'] = 'سرویس پیامک هنوز تنظیم نشده است؛ کد تایید شما در سامانه معتبر است اما پیامکی ارسال نشد.';
-        }
 
-        // v1.7.9: ثبت «همیشه-روشن» زمان‌سنجی مسیر پاسخ — لاگ پیشخوان با هر تلاش
-        // ورود تازه می‌شود؛ سلامت/کندی مسیر بدون پروب بیرونی از پیشخوان قابل
-        // مشاهده است (اگر این ردیف با هر تلاش تازه نشود، یعنی پروسه پیش از این
-        // نقطه کشته شده و مکان تعلیق در خود لاگ مشخص می‌شود).
-        $otp_path_elapsed = round(microtime(true) - $otp_path_t0, 2);
-        $request_phone_masked = substr($phone, 0, 4) . '***' . substr($phone, -4);
-        MrDastbaaf_Sms_Service::write_admin_log(
-            'اطلاع — درخواست کد برای ' . $request_phone_masked . ' در ' . $otp_path_elapsed . 's تکمیل شد'
-            . ' (جست‌وجوی شماره: ' . $find_elapsed . 's).'
-        );
+            $otp_path_elapsed = round(microtime(true) - $otp_path_t0, 2);
+            $request_phone_masked = substr($phone, 0, 4) . '***' . substr($phone, -4);
+            MrDastbaaf_Sms_Service::write_admin_log(
+                'اطلاع — درخواست کد برای ' . $request_phone_masked . ' در ' . $otp_path_elapsed . 's تکمیل شد'
+                . ' (جست‌وجوی شماره: ' . $find_elapsed . 's)؛ اما سرویس پیامک تنظیم نشده است.'
+            );
+        }
 
         return rest_ensure_response($response);
     }
@@ -230,6 +256,109 @@ class MrDastbaaf_Auth_Controller {
      */
     public function handle_otp_dispatch() {
         return rest_ensure_response(MrDastbaaf_Sms_Service::handle_dispatch());
+    }
+
+    /**
+     * v1.7.10: اندپوینت تشخیصی سلامت زنجیرهٔ OTP — GET /auth/health
+     *
+     * هدف: عیب‌یابی از بیرون، بدون دسترسی پیشخوان و بدون حدس زدن. هر مؤلفهٔ
+     * مشکوکِ زنجیره با عدد/وضعیت صریح گزارش می‌شود:
+     *  - db_read_ms / db_write_ms: کندی دیتابیس/قفل جدول آپشن‌ها (ریشهٔ احتمالی
+     *    تعلیق‌های ~۵۰ ثانیه‌ای — innodb_lock_wait_timeout پیش‌فرض ۵۰s است)
+     *  - outbox/dispatch_lock: صف ارسال‌های گم‌شده و دیسپچ‌های گیرکرده
+     *  - sms_last_log: متن کامل «آخرین وضعیت ارسال پیامک» (همان که در پیشخوان دیده می‌شود)
+     *  - http_request_timeout.effective: اگر افزونه‌ای سقف ۲ ثانیهٔ تریگر را بالا
+     *    برده باشد، اینجا عدد واقعی + نام کالبک‌ها دیده می‌شود
+     *  - melipayamak_outbound: تست TCP خام (۳ ثانیه سقف) به سرور ملی‌پیامک —
+     *    فایروال خروجی هاست را بدون حدس نشان می‌دهد
+     *
+     * امنیت: هیچ رمز/توکنی در پاسخ نیست؛ شماره‌ها در لاگ ماسک‌شده‌اند؛ سقف نرخ
+     * ۱ درخواست در ۱۰ ثانیه per-IP؛ LiteSpeed nocache (namespace-wide) اعمال است.
+     *
+     * @return WP_REST_Response|WP_Error
+     */
+    public function handle_health() {
+        $ip = self::get_client_ip();
+        $rl_key = 'mrdastbaaf_health_rl_' . md5($ip !== '' ? $ip : 'anon');
+        if (get_transient($rl_key)) {
+            return new WP_Error('rate_limited', 'برای سلامت‌سنجی هر ۱۰ ثانیه یک‌بار مجاز است.', array('status' => 429));
+        }
+        set_transient($rl_key, 1, 10);
+
+        $t_all = microtime(true);
+
+        // ۱) تایمینگ خواندن DB (transient ناموجود = خالص‌ترین خواندن)
+        $t = microtime(true);
+        get_transient('mrdastbaaf_health_probe_missing');
+        $db_read_ms = round((microtime(true) - $t) * 1000, 1);
+
+        // ۲) تایمینگ نوشتن+حذف DB (قفل جدول آپشن‌ها را آشکار می‌کند)
+        $t = microtime(true);
+        set_transient('mrdastbaaf_health_probe', 1, 60);
+        delete_transient('mrdastbaaf_health_probe');
+        $db_write_ms = round((microtime(true) - $t) * 1000, 1);
+
+        // ۳) محیط فیلتر http_request_timeout — مقدار مؤثر + کالبک‌های ثبت‌شده
+        $effective_timeout = apply_filters('http_request_timeout', 2, home_url('/'));
+        $timeout_callbacks = array();
+        if (isset($GLOBALS['wp_filter']['http_request_timeout'])) {
+            foreach ($GLOBALS['wp_filter']['http_request_timeout']->callbacks as $prio => $cbs) {
+                foreach ($cbs as $cb) {
+                    $fn = isset($cb['function']) ? $cb['function'] : null;
+                    if (is_string($fn)) {
+                        $label = $fn;
+                    } elseif (is_array($fn) && count($fn) === 2) {
+                        $label = (is_object($fn[0]) ? get_class($fn[0]) : (string) $fn[0]) . '::' . (string) $fn[1];
+                    } elseif (is_object($fn) && $fn instanceof Closure) {
+                        $label = 'Closure';
+                    } else {
+                        $label = 'unknown';
+                    }
+                    $timeout_callbacks[] = $label . '@' . (string) $prio;
+                }
+            }
+        }
+
+        // ۴) تست اتصال خروجی به سرور ملی‌پیامک (TCP خام، بدون ارسال داده، سقف ۳ ثانیه)
+        $t = microtime(true);
+        $mel_conn = @fsockopen('tls://rest.payamak-panel.com', 443, $mel_errno, $mel_err, 3);
+        $mel_ms = round((microtime(true) - $t) * 1000);
+        if ($mel_conn) {
+            fclose($mel_conn);
+            $melipayamak_outbound = array('ok' => true, 'ms' => $mel_ms);
+        } else {
+            $melipayamak_outbound = array('ok' => false, 'errno' => (int) $mel_errno, 'error' => (string) $mel_err, 'ms' => $mel_ms);
+        }
+
+        // ۵) وضعیت باکس خروجی / قفل دیسپچ / لاگ پیامک
+        $outbox = get_transient(MrDastbaaf_Sms_Service::OUTBOX_TRANSIENT);
+
+        $payload = array(
+            'plugin_version'   => defined('MRDASTBAAF_BRIDGE_VERSION') ? MRDASTBAAF_BRIDGE_VERSION : 'unknown',
+            'server_time'      => current_time('mysql'),
+            'db_read_ms'       => $db_read_ms,
+            'db_write_ms'      => $db_write_ms,
+            'object_cache'     => wp_using_ext_object_cache() ? 'external' : 'db-transients',
+            'outbox'           => array(
+                'pending_flag' => MrDastbaaf_Sms_Service::has_pending_outbox(),
+                'entries'      => is_array($outbox) ? count($outbox) : 0,
+            ),
+            'dispatch_lock'    => (bool) get_transient(MrDastbaaf_Sms_Service::DISPATCH_LOCK_TRANSIENT),
+            'sms'              => array(
+                'provider' => (string) get_option('mrdastbaaf_sms_provider', 'none'),
+                'ready'    => MrDastbaaf_Sms_Service::is_ready(),
+            ),
+            'sms_last_log'     => (string) get_option('mrdastbaaf_sms_last_log', ''),
+            'http_request_timeout' => array(
+                'requested' => 2,
+                'effective' => $effective_timeout,
+                'callbacks' => $timeout_callbacks,
+            ),
+            'melipayamak_outbound' => $melipayamak_outbound,
+            'total_ms'         => round((microtime(true) - $t_all) * 1000, 1),
+        );
+
+        return rest_ensure_response($payload);
     }
 
     /**
