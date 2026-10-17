@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.7.13
+ * Version: 1.7.14
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.7.13');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.7.14');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -191,6 +191,37 @@ class MrDastbaaf_Bridge_Plugin {
 
     private static $instance = null;
 
+    /**
+     * v1.7.14: گارد ضدبازگشت و ضدنوشتن‌تکراری content_hash —
+     *  $regenerating_hash: در حین نوشتن هش true است؛ هر فراخوانی بازگشتی/هم‌زمان
+     *    فوراً برمی‌گردد (حلقهٔ بازگشتیِ ریشهٔ WSOD پیشخوان در 1.7.2 تا 1.7.13).
+     *  $content_hash_written: در هر درخواست فقط «یک» نوشتن هش مجاز است؛ چند
+     *    bump هم‌زمان (پست + آپشن) در یک درخواست فقط یک بار هش را عوض می‌کند.
+     */
+    private static $regenerating_hash = false;
+    private static $content_hash_written = false;
+
+    /**
+     * v1.7.14: گزینه‌های عملیاتی/لاگ/نشانه‌گذاری که «محتوای اپ» نیستند و نباید
+     * هش محتوا را عوض کنند. قبلاً نوشتنِ هر گزینهٔ mrdastbaaf_* هش را می‌بُرد
+     * (لاگ پیامک در هر ورود OTP، لاگ ریکنسیلیشن در هر کرون و...) — و بدتر از
+     * همه، نوشتنِ خودِ mrdastbaaf_content_hash دوباره هوک updated_option را
+     * روشن می‌کرد ⇒ بازگشت بی‌نهایت ⇒ Fatal memory ⇒ صفحهٔ سفید پس از ذخیرهٔ
+     * هر پست در پیشخوان.
+     * توسعهٔ آینده: فیلتر mrdastbaaf_hash_exempt_options.
+     */
+    private static $hash_exempt_options = array(
+        'mrdastbaaf_content_hash',       // خودِ هش — ریشهٔ بازگشت بی‌نهایت (بحرانی)
+        'mrdastbaaf_sms_last_log',       // لاگ آخرین ارسال پیامک (هر ورود OTP)
+        'mrdastbaaf_last_reconcile_log', // لاگ کرون ریکنسیلیشن (هر ۱۰ دقیقه)
+        'mrdastbaaf_cron_token',         // توکن داخلی کرون
+        'mrdastbaaf_db_version',         // نشانگر اسکیمای دیتابیس
+        'mrdastbaaf_pwa_version',        // نسخهٔ مستقر PWA (آپدیت کلاینت از فیلد pwa_version در /version می‌آید، نه content_hash)
+        'mrdastbaaf_options_norm_174',   // فلگ یک‌بارمصرف نرمال‌سازی گزینه‌ها
+        'mrdastbaaf_otp_hourly_count',   // شمارندهٔ قدیمی سهمیهٔ OTP (دفاعی)
+        'mrdastbaaf_otp_hourly_started', // نشانگر قدیمی سهمیهٔ OTP (دفاعی)
+    );
+
     public static function get_instance() {
         if (null === self::$instance) {
             self::$instance = new self();
@@ -261,6 +292,8 @@ class MrDastbaaf_Bridge_Plugin {
         // v1.7.2: به‌روزرسانی content_hash هر بار که کارفرما چیزی در پیشخوان ذخیره می‌کند
         // (پلن‌ها، درس‌ها، محصولات، محتوا). کلاینت هر ۲ دقیقه چک می‌کند و اگه هش عوض
         // شده باشد، داده‌ها را دوباره بارگذاری می‌کند (بدون reload کامل صفحه).
+        // v1.7.14: گاردهای ضدبازگشت/مستثنی‌ها/محدودسازی نوع پست داخل همان متدها
+        // اعمال می‌شود — حلقهٔ بازگشتیِ نوشتنِ خودِ هش (WSOD پیشخوان) بسته شد.
         add_action('save_post', array($this, 'bump_content_hash'), 10, 3);
         add_action('updated_option', array($this, 'bump_content_hash_on_option_update'), 10, 3);
         add_action('added_option', array($this, 'bump_content_hash_on_option_add'), 10, 2);
@@ -337,38 +370,83 @@ class MrDastbaaf_Bridge_Plugin {
     }
 
     /**
-     * v1.7.2: به‌روزرسانی content_hash وقتی پست (محصول/دوره/صفحه) ذخیره می‌شود.
+     * v1.7.2 (اصلاح v1.7.14): به‌روزرسانی content_hash وقتی پست ذخیره می‌شود.
      * این هش در پاسخ /version سرو می‌شود و کلاینت هر ۲ دقیقه چک می‌کند.
+     *
+     * v1.7.14 — محدودسازی به انواع محتوای اپ:
+     *  - فقط product (محصولات ووکامرس = دوره‌ها) و page (صفحات وب‌اپ) هش را
+     *    می‌بُردند؛ انواع دیگر (post بلاگ، nav_menu_item، elementor_library و...)
+     *    بی‌اثرند — قبلاً «هر» پستی هش را می‌بُرد و کلاینت بی‌دلیل ری‌فچ می‌کرد.
+     *  - revision / autosave / auto-draft صریحاً مستثنی‌اند.
+     *  - افزودن نوع سفارشی: فیلتر mrdastbaaf_hash_post_types.
      */
-    public function bump_content_hash($post_id, $post, $update) {
-        // فقط برای محصولات ووکامرس و صفحات منتشرشده
+    public function bump_content_hash($post_id, $post = null, $update = null) {
+        if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
+            return;
+        }
         if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) {
+            return;
+        }
+        $post_type = ($post instanceof WP_Post) ? $post->post_type : (string) get_post_type($post_id);
+        if ('' === $post_type || 'auto-draft' === $post_type) {
+            return;
+        }
+        $allowed = (array) apply_filters('mrdastbaaf_hash_post_types', array('product', 'page'));
+        if (!in_array($post_type, $allowed, true)) {
             return;
         }
         $this->regenerate_content_hash();
     }
 
-    public function bump_content_hash_on_option_update($option_name, $old_value, $value) {
-        // فقط گزینه‌های مرتبط با افزونه
-        if (strpos($option_name, 'mrdastbaaf_') === 0) {
-            $this->regenerate_content_hash();
+    /**
+     * v1.7.2 (اصلاح v1.7.14): فقط گزینه‌های «محتوای اپ» هش را می‌بُرند؛
+     * لاگ‌ها/نشانه‌های عملیاتی و مهم‌تر از همه خودِ mrdastbaaf_content_hash
+     * (ریشهٔ حلقهٔ بازگشتی) در bump مستثنی‌اند.
+     */
+    public function bump_content_hash_on_option_update($option_name, $old_value = null, $value = null) {
+        if (!is_string($option_name) || strpos($option_name, 'mrdastbaaf_') !== 0) {
+            return;
         }
-    }
-
-    public function bump_content_hash_on_option_add($option_name, $value) {
-        if (strpos($option_name, 'mrdastbaaf_') === 0) {
-            $this->regenerate_content_hash();
+        if (in_array($option_name, self::$hash_exempt_options, true)) {
+            return;
         }
+        $extra_exempt = (array) apply_filters('mrdastbaaf_hash_exempt_options', array());
+        if (in_array($option_name, $extra_exempt, true)) {
+            return;
+        }
+        $this->regenerate_content_hash();
     }
 
     /**
-     * v1.7.2: تولید هش جدید از محتوای فعلی (timestamp + random).
-     * کلاینت این هش را با هش قبلی مقایسه می‌کند — اگه متفاوت بود، داده‌ها را
-     * دوباره بارگذاری می‌کند.
+     * v1.7.14: added_option همان قاعدهٔ updated_option را دارد — برای پرهیز از
+     * دوشاخه‌شدن منطق، به هندلر update واگذار می‌شود.
+     */
+    public function bump_content_hash_on_option_add($option_name, $value = null) {
+        $this->bump_content_hash_on_option_update($option_name, null, $value);
+    }
+
+    /**
+     * v1.7.2 (بازنویسی v1.7.14): تولید هش جدید از محتوای فعلی (timestamp + random)
+     * با سه لایهٔ گارد:
+     *   ۱) خودِ گزینه در bump مستثنی است — updated_optionِ نوشتنِ خودش دیگر روشن
+     *      نمی‌شود (ریشهٔ حلقهٔ بی‌نهایت و WSOD پیشخوان).
+     *   ۲) $regenerating_hash — ضدورودمجدد: حتی اگر روزی مسیر دیگری هش را بنویسد،
+     *      بازگشت ممکن نیست.
+     *   ۳) $content_hash_written — در هر درخواست فقط یک نوشتن؛ چند bump هم‌زمان
+     *      در یک درخواست فقط یک بار هش عوض می‌کند.
      */
     private function regenerate_content_hash() {
-        $hash = wp_generate_password(12, false) . '_' . time();
-        update_option('mrdastbaaf_content_hash', $hash, false); // false = autoload غیرفعال (سبک)
+        if (self::$regenerating_hash || self::$content_hash_written) {
+            return;
+        }
+        self::$regenerating_hash = true;
+        try {
+            $hash = wp_generate_password(12, false) . '_' . time();
+            update_option('mrdastbaaf_content_hash', $hash, false); // false = autoload غیرفعال (سبک)
+            self::$content_hash_written = true;
+        } finally {
+            self::$regenerating_hash = false;
+        }
     }
 
     /**

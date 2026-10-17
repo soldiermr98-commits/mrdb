@@ -149,8 +149,9 @@ class MrDastbaaf_Settings_Controller {
         // پس از استقرار باندل جدید روی app.mrdastbaaf.com، همین عدد باید به
         // نسخهٔ جدید تغییر کند؛ کلاینت‌های 1.5.4+ (چکر نسخه) حداکثر تا ۲ دقیقه
         // بعد خودکار reload می‌شوند — حتی اپ‌های نصب‌شده (standalone).
-        // ذخیرهٔ همین فیلد، خودکار content_hash را هم تازه می‌کند (bump_content_hash_on_option_update)
-        // یعنی داده‌ها (قیمت‌ها/محتوا) هم بلافاصله refetch می‌شوند.
+        // v1.7.14: ذخیرهٔ این فیلد دیگر content_hash را نمی‌بُرد (مستثنی‌های bump)؛
+        // آپدیت کلاینت فقط از فیلد pwa_version در /version می‌آید و تغییر باندل
+        // «محتوای اپ» نیست — ری‌فچ بی‌دلیل داده‌ها نمی‌سازد.
         register_setting(self::SETTINGS_GROUP, 'mrdastbaaf_pwa_version', array(
             'type' => 'string',
             'sanitize_callback' => array($this, 'sanitize_pwa_version'),
