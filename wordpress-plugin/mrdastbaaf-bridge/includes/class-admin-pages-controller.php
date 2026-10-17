@@ -66,6 +66,9 @@ class MrDastbaaf_Admin_Pages_Controller {
         add_action('admin_post_mrdastbaaf_plan_toggle', array($this, 'handle_plan_toggle'));
         add_action('admin_post_mrdastbaaf_plan_delete', array($this, 'handle_plan_delete'));
         add_action('admin_post_mrdastbaaf_receipt_review', array($this, 'handle_receipt_review'));
+        // v1.5.7: حذف تکی تصویر فیش + پاکسازی جمعی (همراه ذخیرهٔ دورهٔ نگهداری)
+        add_action('admin_post_mrdastbaaf_receipt_image_delete', array($this, 'handle_receipt_image_delete'));
+        add_action('admin_post_mrdastbaaf_receipt_purge_images', array($this, 'handle_receipt_purge_images'));
         // v1.3.3: صفحات وب‌اپ — انتخاب صفحهٔ سایت + سطح دسترسی از پیشخوان
         add_action('admin_post_mrdastbaaf_app_page_save', array($this, 'handle_app_page_save'));
         add_action('admin_post_mrdastbaaf_app_page_toggle', array($this, 'handle_app_page_toggle'));
@@ -78,6 +81,8 @@ class MrDastbaaf_Admin_Pages_Controller {
         add_action('admin_post_mrdastbaaf_app_ui_move', array($this, 'handle_app_ui_move'));
         // v1.3.5: دوره‌های برگزیده صفحهٔ نخست اپ
         add_action('admin_post_mrdastbaaf_app_ui_save_featured', array($this, 'handle_app_ui_save_featured'));
+        // v1.5.7: کارت «مدرس دوره‌ها» (نام/عکس/معرفی — عکس با انتخابگر رسانه)
+        add_action('admin_post_mrdastbaaf_app_ui_save_instructor', array($this, 'handle_app_ui_save_instructor'));
         // v1.3.4: اتصال خرید سایت (نگاشت پلن → محصول ووکامرس)
         add_action('admin_post_mrdastbaaf_woo_map_save', array($this, 'handle_woo_map_save'));
         // v1.4.0: محصولات فیزیکی (تیک محصولات بخش «محصولات دست‌ساز» وب‌اپ)
@@ -793,7 +798,8 @@ class MrDastbaaf_Admin_Pages_Controller {
         }
 
         // همان JOIN صفحهٔ REST (handle_get_pending_receipts) + ستون یادداشت ادمین
-        $base_sql = "SELECT o.*, t.tracking_code, t.card_last_four, t.deposit_date_jalali, t.sender_notes, t.admin_review_note
+        // v1.5.7: ستون receipt_image_name هم برای نمایش تصویر فیش
+        $base_sql = "SELECT o.*, t.tracking_code, t.card_last_four, t.deposit_date_jalali, t.sender_notes, t.admin_review_note, t.reviewed_at, t.receipt_image_name
                      FROM $table_orders o
                      INNER JOIN $table_transfers t ON o.id = t.order_id";
 
@@ -807,6 +813,18 @@ class MrDastbaaf_Admin_Pages_Controller {
         }
 
         $pending_count = (int) $wpdb->get_var("SELECT COUNT(*) FROM $table_orders WHERE gateway = 'card_to_card' AND status = 'pending'");
+
+        // v1.5.7: آمار پاکسازی تصاویر — تعداد فیش‌های بررسی‌شدهٔ دارای تصویر
+        // (کوئری سبک روی ردیف‌های بررسی‌شده؛ فقط برای چیپ اطلاعاتی جعبهٔ پاکسازی)
+        $purgeable_count = (int) $wpdb->get_var(
+            "SELECT COUNT(*) FROM $table_transfers t
+             INNER JOIN $table_orders o ON o.id = t.order_id
+             WHERE o.status IN ('completed', 'rejected')
+               AND t.receipt_image_name IS NOT NULL AND t.receipt_image_name != ''"
+        );
+        $retention_days = (int) get_option('mrdastbaaf_receipt_image_retention_days', 14);
+        $rest_image_base = rest_url(MRDASTBAAF_API_NAMESPACE . '/receipts/');
+        $rest_nonce = wp_create_nonce('wp_rest');
 
         $tabs = array(
             'pending'   => 'در انتظار بررسی',
@@ -834,6 +852,33 @@ class MrDastbaaf_Admin_Pages_Controller {
                 <span class="mrd-chip mrd-chip--amber">در انتظار بررسی: <?php echo esc_html(number_format_i18n($pending_count)); ?> فیش</span>
             </div>
 
+            <?php
+            // ─── v1.5.7: جعبهٔ پاکسازی تصاویر فیش ───
+            // کارفرما: «خیلی مهمه که بعد چک کردن، این بخش پاکسازی بشه که زیاد حجم
+            // نگیره تو دیتابیس». تصاویر روی فایل‌سیستم‌اند (صفر باد DB)؛ این جعبه
+            // حذف دستی جمعی + کرون روزانهٔ خودکار را با دورهٔ نگهداری قابل‌تنظیم می‌دهد.
+            ?>
+            <div class="mrd-card" style="margin-top:14px;">
+                <h2 class="mrd-card__title" style="margin-top:0;">پاکسازی تصاویر فیش‌ها</h2>
+                <p class="mrd-hint">
+                    تصاویر فیش روی دیسک (پوشهٔ محافظت‌شدهٔ <code dir="ltr">uploads/mrdastbaaf-receipts/</code>) نگهداری می‌شوند و در دیتابیس فقط نام فایل است؛
+                    پس «حجم دیتابیس» به‌خاطر عکس رشد نمی‌کند. برای منظم‌ماندن دیسک: تصاویر فیش‌های تایید/رد‌شده پس از دورهٔ زیر خودکار حذف می‌شوند
+                    (کرون روزانه) و دکمهٔ پاکسازی هم همین الان همه را یک‌جا پاک می‌کند. ردیف اطلاعات فیش (کد پیگیری/مبلغ/تصمیم) همیشه می‌ماند.
+                </p>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px;">
+                    <input type="hidden" name="action" value="mrdastbaaf_receipt_purge_images" />
+                    <?php wp_nonce_field('mrdastbaaf_receipt_purge_images', 'mrd_nonce'); ?>
+                    <label>
+                        حذف خودکار پس از
+                        <input type="number" name="retention_days" min="0" max="365" value="<?php echo esc_attr((string) $retention_days); ?>" style="width:72px;" />
+                        روز (۰ = بدون حذف خودکار)
+                    </label>
+                    <button type="submit" class="button button-secondary" onclick="return confirm('تصاویر <?php echo esc_attr(number_format_i18n($purgeable_count)); ?> فیش بررسی‌شده حذف می‌شود. ادامه می‌دهید؟');">
+                        پاکسازی الان (<?php echo esc_html(number_format_i18n($purgeable_count)); ?> تصویر بررسی‌شده)
+                    </button>
+                </form>
+            </div>
+
             <ul class="subsubsub">
                 <?php foreach ($tabs as $tab_key => $tab_label): ?>
                     <li>
@@ -854,6 +899,7 @@ class MrDastbaaf_Admin_Pages_Controller {
                         <th>پلن</th>
                         <th>مبلغ (تومان)</th>
                         <th>جزئیات فیش</th>
+                        <th>تصویر فیش</th>
                         <th>تاریخ ثبت</th>
                         <th>وضعیت</th>
                         <th>عملیات</th>
@@ -861,7 +907,7 @@ class MrDastbaaf_Admin_Pages_Controller {
                 </thead>
                 <tbody>
                     <?php if (empty($rows)): ?>
-                        <tr><td colspan="8" class="mrd-empty">فیشی با این فیلتر یافت نشد.</td></tr>
+                        <tr><td colspan="9" class="mrd-empty">فیشی با این فیلتر یافت نشد.</td></tr>
                     <?php else: ?>
                         <?php foreach ($rows as $r): ?>
                             <tr>
@@ -881,6 +927,27 @@ class MrDastbaaf_Admin_Pages_Controller {
                                     <?php endif; ?>
                                     <?php if ('rejected' === $r->status && !empty($r->admin_review_note)): ?>
                                         <br /><span style="color:#b32d2e;">علت رد: <?php echo esc_html($r->admin_review_note); ?></span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <?php $img_relative = (string) ($r->receipt_image_name ?? ''); ?>
+                                    <?php if ('' !== $img_relative): ?>
+                                        <?php
+                                        // v1.5.7: تصویر فقط از مسیر REST با احراز پیشخوان (کوکی + nonce)
+                                        // لود می‌شود — مسیر مستقیم فایل برای وب بسته است.
+                                        $image_url = add_query_arg('_wpnonce', $rest_nonce, $rest_image_base . rawurlencode((string) $r->id) . '/image');
+                                        ?>
+                                        <a href="<?php echo esc_url($image_url); ?>" target="_blank" rel="noopener" title="مشاهدهٔ تصویر در اندازهٔ کامل">
+                                            <img src="<?php echo esc_url($image_url); ?>" alt="تصویر فیش سفارش <?php echo esc_attr($r->order_number); ?>" loading="lazy" style="width:72px;height:72px;object-fit:cover;border-radius:10px;border:1px solid #e7e5e4;display:block;" />
+                                        </a>
+                                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" onsubmit="return confirm('تصویر این فیش حذف شود؟ (اطلاعات فیش می‌ماند)');" style="margin-top:4px;">
+                                            <input type="hidden" name="action" value="mrdastbaaf_receipt_image_delete" />
+                                            <input type="hidden" name="order_id" value="<?php echo esc_attr($r->id); ?>" />
+                                            <?php wp_nonce_field('mrdastbaaf_receipt_image_delete', 'mrd_nonce'); ?>
+                                            <button type="submit" class="button-link delete" style="font-size:11px;">حذف تصویر</button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span class="description">—</span>
                                     <?php endif; ?>
                                 </td>
                                 <td><?php echo esc_html(date_i18n('Y/m/d H:i', strtotime($r->created_at))); ?></td>
@@ -947,6 +1014,69 @@ class MrDastbaaf_Admin_Pages_Controller {
             $this->flash('success', $result['message']);
         }
 
+        $this->redirect_to_page(self::RECEIPTS_SLUG);
+    }
+
+    /**
+     * v1.5.7: حذف تکی تصویر یک فیش — فایل از دیسک حذف و ستون NULL می‌شود؛
+     * ردیف اطلاعات فیش (کد پیگیری/مبلغ/تاریخ/تصمیم) دست‌نخورده می‌ماند.
+     */
+    public function handle_receipt_image_delete() {
+        check_admin_referer('mrdastbaaf_receipt_image_delete', 'mrd_nonce');
+        if (!current_user_can('manage_options')) {
+            wp_die('شما مجوز انجام این عملیات را ندارید.');
+        }
+
+        global $wpdb;
+        $order_id = isset($_POST['order_id']) ? (string) wp_unslash($_POST['order_id']) : '';
+        $table_transfers = $wpdb->prefix . 'mrdastbaaf_manual_transfers';
+
+        $relative = (string) $wpdb->get_var($wpdb->prepare(
+            "SELECT receipt_image_name FROM $table_transfers WHERE order_id = %s LIMIT 1",
+            $order_id
+        ));
+
+        if ('' === $relative) {
+            $this->flash('error', 'تصویری برای این فیش ثبت نشده بود.');
+        } else {
+            $deleted_file = MrDastbaaf_Payment_Controller::delete_receipt_image_file($relative);
+            $wpdb->update(
+                $table_transfers,
+                array('receipt_image_name' => null),
+                array('order_id' => $order_id),
+                array('%s'),
+                array('%s')
+            );
+            $this->flash('success', $deleted_file
+                ? 'تصویر فیش حذف شد؛ اطلاعات فیش باقی ماند.'
+                : 'فایل تصویر روی دیسک یافت نشد ولی رکورد به‌روزرسانی شد (بدون تصویر).');
+        }
+
+        $this->redirect_to_page(self::RECEIPTS_SLUG);
+    }
+
+    /**
+     * v1.5.7: پاکسازی جمعی تصاویر فیش‌های بررسی‌شده + ذخیرهٔ دورهٔ نگهداری (روز).
+     * ۰ = بدون حذف خودکار (کرون رد می‌شود)؛ حداکثر ۳۶۵ روز.
+     */
+    public function handle_receipt_purge_images() {
+        check_admin_referer('mrdastbaaf_receipt_purge_images', 'mrd_nonce');
+        if (!current_user_can('manage_options')) {
+            wp_die('شما مجوز انجام این عملیات را ندارید.');
+        }
+
+        $retention = isset($_POST['retention_days']) ? absint($_POST['retention_days']) : 14;
+        $retention = min(365, $retention);
+        update_option('mrdastbaaf_receipt_image_retention_days', $retention, false);
+
+        $deleted = MrDastbaaf_Payment_Controller::purge_decided_receipt_images(0, 1000);
+
+        $this->flash('success', sprintf(
+            'پاکسازی انجام شد: %s تصویر حذف شد. حذف خودکار پس از %s روز %s.',
+            number_format_i18n($deleted),
+            number_format_i18n($retention),
+            0 === $retention ? 'غیرفعال است' : 'فعال است (کرون روزانه)'
+        ));
         $this->redirect_to_page(self::RECEIPTS_SLUG);
     }
 
@@ -1367,6 +1497,9 @@ class MrDastbaaf_Admin_Pages_Controller {
         $ui = MrDastbaaf_App_UI_Controller::get_app_ui();
         $updated_at = (int) get_option(MrDastbaaf_App_UI_Controller::UPDATED_AT_OPTION, 0);
         $admin_post = admin_url('admin-post.php');
+
+        // v1.5.7: انتخابگر رسانهٔ وردپرس فقط برای همین صفحه (کارت مدرس) لود می‌شود
+        wp_enqueue_media();
         ?>
         <div class="wrap mrd-scope">
             <div class="mrd-hero">
@@ -1405,6 +1538,85 @@ class MrDastbaaf_Admin_Pages_Controller {
                 </table>
                 <?php submit_button('ذخیرهٔ متن‌های بنر'); ?>
             </form>
+            </div>
+
+            <?php
+            // ─── v1.5.7: کارت «مدرس دوره‌ها» ───
+            // نام و عکس مدرس به‌صورت سراسری برای همهٔ کارت‌های دوره (جایی که سرور
+            // فیلد مدرس تکی نمی‌فرستد) + معرفی اختیاری. عکس با انتخابگر رسانهٔ وردپرس
+            // یا URL دستی؛ خالی بودن عکس = آواتار برند با حرف اول نام در اپ.
+            $instructor = isset($ui['instructor']) && is_array($ui['instructor'])
+                ? $ui['instructor']
+                : array('name' => 'استاد خاموشیان', 'photoUrl' => '', 'bio' => '');
+            ?>
+            <div class="mrd-card">
+            <h2 class="mrd-card__title">مدرس دوره‌ها</h2>
+            <p class="mrd-hint">نام و عکسی که در کارت‌های دوره (کنار نام مدرس) و بخش «مدرس دوره» در جزئیات دیده می‌شود. عکس مربعی و حداقل ۲۵۶×۲۵۶ پیکسل پیشنهاد می‌شود؛ اگر عکسی انتخاب نشود، اپ آواتار حرف اول نام را نشان می‌دهد.</p>
+            <form method="post" action="<?php echo esc_url($admin_post); ?>">
+                <input type="hidden" name="action" value="mrdastbaaf_app_ui_save_instructor" />
+                <?php wp_nonce_field('mrdastbaaf_app_ui_save_instructor', 'mrd_nonce'); ?>
+                <table class="form-table" role="presentation">
+                    <tr>
+                        <th scope="row"><label for="mrd-instructor-name">نام مدرس</label></th>
+                        <td>
+                            <input type="text" id="mrd-instructor-name" name="instructor_name" value="<?php echo esc_attr($instructor['name']); ?>" class="regular-text" placeholder="استاد خاموشیان" />
+                            <p class="description">در کارت‌های دوره به‌جای نام قدیمی «استاد مستر دستباف» نمایش داده می‌شود.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="mrd-instructor-photo">عکس مدرس</label></th>
+                        <td>
+                            <input type="text" id="mrd-instructor-photo" name="instructor_photo" value="<?php echo esc_attr($instructor['photoUrl']); ?>" class="regular-text" dir="ltr" placeholder="https://…" />
+                            <button type="button" class="button" id="mrd-instructor-photo-pick">انتخاب از رسانه</button>
+                            <button type="button" class="button-link" id="mrd-instructor-photo-clear" <?php echo '' === (string) $instructor['photoUrl'] ? 'style="display:none;"' : ''; ?>>حذف عکس</button>
+                            <p class="description">از کتابخانهٔ رسانهٔ وردپرس انتخاب کنید یا URL مستقیم بدهید. خالی = آواتار حرف اول نام.</p>
+                            <div id="mrd-instructor-photo-preview" style="margin-top:8px;<?php echo '' === (string) $instructor['photoUrl'] ? 'display:none;' : ''; ?>">
+                                <img src="<?php echo esc_url((string) $instructor['photoUrl']); ?>" alt="پیش‌نمایش عکس مدرس" style="max-width:96px;max-height:96px;border-radius:12px;border:1px solid #e7e5e4;" />
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="mrd-instructor-bio">معرفی مدرس (اختیاری)</label></th>
+                        <td>
+                            <textarea id="mrd-instructor-bio" name="instructor_bio" rows="3" class="large-text"><?php echo esc_textarea((string) $instructor['bio']); ?></textarea>
+                            <p class="description">در بخش «مدرس دوره» صفحهٔ جزئیات دوره زیر نام مدرس نمایش داده می‌شود (فقط وقتی دورهٔ مربوطه معرفی تکی خودش را نداشته باشد).</p>
+                        </td>
+                    </tr>
+                </table>
+                <?php submit_button('ذخیرهٔ مدرس دوره‌ها'); ?>
+            </form>
+            <script>
+            // انتخابگر رسانهٔ وردپرس — سبک، فقط یک فیلد (بدون فریم‌ورک)
+            (function () {
+                var input = document.getElementById('mrd-instructor-photo');
+                var preview = document.getElementById('mrd-instructor-photo-preview');
+                var clearBtn = document.getElementById('mrd-instructor-photo-clear');
+                if (!input || !preview) return;
+                document.getElementById('mrd-instructor-photo-pick').addEventListener('click', function (e) {
+                    e.preventDefault();
+                    if (!window.wp || !wp.media) return;
+                    var frame = wp.media({ title: 'انتخاب عکس مدرس', multiple: false, library: { type: 'image' } });
+                    frame.on('select', function () {
+                        var attachment = frame.state().get('selection').first().toJSON();
+                        var url = (attachment.sizes && attachment.sizes.medium) ? attachment.sizes.medium.url : attachment.url;
+                        input.value = url;
+                        var img = preview.querySelector('img');
+                        if (img) img.src = url;
+                        preview.style.display = 'block';
+                        if (clearBtn) clearBtn.style.display = 'inline';
+                    });
+                    frame.open();
+                });
+                if (clearBtn) {
+                    clearBtn.addEventListener('click', function (e) {
+                        e.preventDefault();
+                        input.value = '';
+                        preview.style.display = 'none';
+                        clearBtn.style.display = 'none';
+                    });
+                }
+            })();
+            </script>
             </div>
 
             <div class="mrd-card">
@@ -1627,6 +1839,30 @@ class MrDastbaaf_Admin_Pages_Controller {
         MrDastbaaf_App_UI_Controller::save($stored);
 
         $this->flash('success', 'متن‌های بنر اصلی ذخیره شد؛ اپ از همین لحظه متن‌های تازه را می‌بیند.');
+        $this->redirect_to_page(self::APP_UI_SLUG);
+    }
+
+    /**
+     * v1.5.7: ذخیرهٔ مدرس سراسری دوره‌ها (نام/عکس/معرفی) — کارت «مدرس دوره‌ها»
+     * در صفحهٔ محتوای وب‌اپ. ذخیرهٔ جزئی: فقط بلاک instructor بازنویسی می‌شود.
+     */
+    public function handle_app_ui_save_instructor() {
+        check_admin_referer('mrdastbaaf_app_ui_save_instructor', 'mrd_nonce');
+        if (!current_user_can('manage_options')) {
+            wp_die('شما مجوز انجام این عملیات را ندارید.');
+        }
+
+        $instructor = array(
+            'name'     => isset($_POST['instructor_name'])     ? sanitize_text_field(wp_unslash($_POST['instructor_name'])) : '',
+            'photoUrl' => isset($_POST['instructor_photo'])    ? esc_url_raw(wp_unslash($_POST['instructor_photo'])) : '',
+            'bio'      => isset($_POST['instructor_bio'])      ? sanitize_textarea_field(wp_unslash($_POST['instructor_bio'])) : '',
+        );
+
+        $stored = MrDastbaaf_App_UI_Controller::get_stored();
+        $stored['instructor'] = $instructor;
+        MrDastbaaf_App_UI_Controller::save($stored);
+
+        $this->flash('success', 'مدرس دوره‌ها ذخیره شد؛ نام و عکس تازه تا ۲ دقیقه در اپ همهٔ هنرجویان اعمال می‌شود.');
         $this->redirect_to_page(self::APP_UI_SLUG);
     }
 

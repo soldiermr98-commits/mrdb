@@ -3,7 +3,7 @@
  * Plugin Name: Mr. Dastbaaf PWA Bridge (پل ارتباطی مستر دستباف)
  * Plugin URI: https://mrdastbaaf.com
  * Description: افزونه اختصاصی ایجاد اندپوینت‌های REST API ایمن برای ارتباط وب‌اپلیکیشن PWA مستر دستباف با وردپرس، اوتینو، نیاس کورس و درگاه زیبال.
- * Version: 1.7.14
+ * Version: 1.7.15
  * Author: تیم فنی مستر دستباف
  * Author URI: https://mrdastbaaf.com
  * Text Domain: mrdastbaaf-bridge
@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly
 }
 
-define('MRDASTBAAF_BRIDGE_VERSION', '1.7.14');
+define('MRDASTBAAF_BRIDGE_VERSION', '1.7.15');
 
 /**
  * v1.2.0: نسخهٔ افزونه و ثابت بالا باید همیشه همگام باشند (باگ قبلی همگام‌نبودن تکرار نشود).
@@ -145,7 +145,7 @@ define('MRDASTBAAF_API_NAMESPACE', 'mrdastbaaf/v1');
  * سرور هنوز «1.5.3» اعلام می‌کرد و کلاینت‌های 1.5.4 (با چکر !== آن زمان)
  * وارد حلقهٔ reload می‌شدند — قطع verify-otp با پیام «ارتباط با سرور برقرار نشد».
  */
-define('MRDASTBAAF_PWA_VERSION_DEFAULT', '1.5.6');
+define('MRDASTBAAF_PWA_VERSION_DEFAULT', '1.5.7');
 
 /**
  * v1.7.4: خواندن متمرکز نسخهٔ مستقر PWA — تنها نقطهٔ خواندن گزینه.
@@ -218,6 +218,7 @@ class MrDastbaaf_Bridge_Plugin {
         'mrdastbaaf_db_version',         // نشانگر اسکیمای دیتابیس
         'mrdastbaaf_pwa_version',        // نسخهٔ مستقر PWA (آپدیت کلاینت از فیلد pwa_version در /version می‌آید، نه content_hash)
         'mrdastbaaf_options_norm_174',   // فلگ یک‌بارمصرف نرمال‌سازی گزینه‌ها
+        'mrdastbaaf_receipt_image_retention_days', // دورهٔ نگهداری تصویر فیش (عملیاتی — تغییرش محتوای اپ نیست)
         'mrdastbaaf_otp_hourly_count',   // شمارندهٔ قدیمی سهمیهٔ OTP (دفاعی)
         'mrdastbaaf_otp_hourly_started', // نشانگر قدیمی سهمیهٔ OTP (دفاعی)
     );
@@ -772,6 +773,9 @@ function mrdastbaaf_bridge_activate() {
 
     // v1.7.11: کرون sweep صف OTP (خودترمیمی دیسپچ)
     mrdastbaaf_bridge_schedule_otp_sweep_cron();
+
+    // v1.5.7: کرون روزانهٔ پاکسازی تصاویر فیش‌های بررسی‌شده
+    mrdastbaaf_bridge_schedule_receipt_purge_cron();
 }
 register_activation_hook(__FILE__, 'mrdastbaaf_bridge_activate');
 
@@ -832,6 +836,10 @@ function mrdastbaaf_bridge_maybe_upgrade_db() {
     // v1.7.11: اطمینان از موجود بودن کرون sweep صف OTP (wp_next_scheduled از
     // آپشن cron کش‌شده می‌خواند — صفر کوئری اضافه در بارگذاری‌های عادی)
     mrdastbaaf_bridge_schedule_otp_sweep_cron();
+
+    // v1.5.7: اطمینان از موجود بودن کرون روزانهٔ پاکسازی تصاویر فیش (نصب‌های
+    // ارتقایافته هوک فعال‌سازی را دوباره اجرا نمی‌کنند — اینجا idempotent هستیم)
+    mrdastbaaf_bridge_schedule_receipt_purge_cron();
 
     // v1.2.0: توکن اختصاصی اندپوینت GET /cron/reconcile — یک‌بار در نخستین ارتقا
     // تولید می‌شود؛ هرگز بازتاب داده نمی‌شود و فقط مقدار ثابت hash_equals مقایسه می‌کند.
@@ -930,6 +938,21 @@ add_action('mrdastbaaf_otp_async_send', array('MrDastbaaf_Sms_Service', 'handle_
 add_action('mrdastbaaf_otp_sweep', array('MrDastbaaf_Sms_Service', 'handle_dispatch'));
 
 /**
+ * v1.5.7: پاکسازی خودکار روزانهٔ تصاویر فیش‌های بررسی‌شده (تایید/رد) — گزارش
+ * کارفرما: «بعد چک کردن، این بخش پاکسازی بشه که زیاد حجم نگیره». فایل‌ها روی
+ * دیسک‌اند؛ رکورد متادیتا می‌ماند. دورهٔ نگهداری از آپشن
+ * mrdastbaaf_receipt_image_retention_days (پیش‌فرض ۱۴ روز؛ ۰ = غیرفعال).
+ * زمان‌بندی: بازهٔ روزانهٔ هستهٔ WP ('daily') — بدون interval سفارشی جدید.
+ */
+add_action('mrdastbaaf_receipt_image_purge', array('MrDastbaaf_Payment_Controller', 'run_daily_receipt_image_purge'));
+
+function mrdastbaaf_bridge_schedule_receipt_purge_cron() {
+    if (!wp_next_scheduled('mrdastbaaf_receipt_image_purge')) {
+        wp_schedule_event(time() + 6 * HOUR_IN_SECONDS, 'daily', 'mrdastbaaf_receipt_image_purge');
+    }
+}
+
+/**
  * v1.7.11: زمان‌بندی کرون sweep صف OTP — idempotent (فقط اگر موجود نباشد
  * زمان‌بندی می‌شود)؛ wp_next_scheduled از آپشن cron کش‌شده می‌خواند (صفر
  * کوئری اضافه در هر بارگذاری). در فعال‌سازی و بلوک ارتقای خودکار صدا زده می‌شود.
@@ -949,5 +972,6 @@ function mrdastbaaf_bridge_deactivate() {
     wp_clear_scheduled_hook('mrdastbaaf_daily_reconciliation');
     wp_clear_scheduled_hook('mrdastbaaf_otp_async_send');
     wp_clear_scheduled_hook('mrdastbaaf_otp_sweep');
+    wp_clear_scheduled_hook('mrdastbaaf_receipt_image_purge');
 }
 register_deactivation_hook(__FILE__, 'mrdastbaaf_bridge_deactivate');

@@ -7,6 +7,17 @@ import React, { useEffect, useId, useRef } from 'react';
 import { X } from 'lucide-react';
 import { acquireScrollLock } from '../../utils/scrollLock';
 
+// v1.5.7 (گزارش کارفرما «کیبورد روی پاپ‌آپ لاگین می‌افتد»):
+// در موبایل مودال‌ها به‌جای وسط صفحه، به‌صورت Bottom Sheet از پایین باز می‌شوند
+// (الگوی استاندارد اپ‌های مدرن). با interactive-widget=resizes-content در
+// viewport متا (index.html) + واحد dvh، وقتی کیبورد باز می‌شود ارتفاع
+// viewport واقعاً کوچک می‌شود و شیت همیشه بالای کیبورد می‌ماند — هیچ ورودی
+// زیر کیبورد پنهان نمی‌شود. دسکتاپ بدون تغییر (مودال وسط‌چین سابق).
+const MOBILE_SHEET_OVERLAY =
+  'items-end sm:items-center justify-center sm:p-4 p-0 sm:bg-stone-900/60 bg-stone-900/60';
+const MOBILE_SHEET_PANEL =
+  'sm:rounded-2xl rounded-t-3xl max-h-[92dvh] sm:max-h-[80vh] w-full sm:w-auto sm:my-auto animate-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 sm:zoom-in-95 duration-200';
+
 interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -49,6 +60,21 @@ export const Modal: React.FC<ModalProps> = ({
     // each other's `overflow` on unmount (restored only when the last one closes).
     const releaseScrollLock = acquireScrollLock();
 
+    // v1.5.7: وقتی ورودی داخل مودال فوکس می‌گیرد (کیبورد موبایل باز می‌شود)،
+    // عنصر فوکوس‌شده با scrollIntoView نزدیک‌ترین نقطه ممکن به دید می‌آید تا
+    // هیچ‌وقت زیر کیبورد نرود (مکمل resizes-content — برای iOS Safari هم که
+    // viewport را واقعاً کوچک می‌کند همان کافی است؛ این فقط هموارسازی است).
+    const handleFocusIn = (e: FocusEvent) => {
+      const container = containerRef.current;
+      const target = e.target as HTMLElement | null;
+      if (!container || !target || !container.contains(target)) return;
+      if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLTextAreaElement)) return;
+      window.setTimeout(() => {
+        target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }, 120);
+    };
+    document.addEventListener('focusin', handleFocusIn);
+
     // BUG-56: move focus into the dialog on open.
     containerRef.current?.focus();
 
@@ -88,9 +114,11 @@ export const Modal: React.FC<ModalProps> = ({
     };
 
     document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('focusin', handleFocusIn);
     return () => {
       releaseScrollLock();
       document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('focusin', handleFocusIn);
     };
   }, [isOpen]);
 
@@ -107,8 +135,11 @@ export const Modal: React.FC<ModalProps> = ({
   return (
     // BUG-56: backdrop click now closes the modal (inner content stops propagation).
     // v1.2.7: overlayClassName برای کنترل لایهٔ مودال‌های روی‌هم (پیش‌فرض z-50)
+    // v1.5.7: موبایل = Bottom Sheet (لبه‌های گرد فقط بالا + چسبیده به پایین)؛
+    // دسکتاپ = همان مودال وسط‌چین قبلی. overflow-y-auto روی overlay برای
+    // دسکتاپ می‌ماند؛ در موبایل خود پنل اسکرول داخلی دارد (max-h + overflow).
     <div
-      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto ${overlayClassName}`}
+      className={`fixed inset-0 z-50 flex ${MOBILE_SHEET_OVERLAY} backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto ${overlayClassName}`}
       onClick={onClose}
     >
       <div
@@ -118,7 +149,7 @@ export const Modal: React.FC<ModalProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className={`w-full ${widthClasses} bg-white rounded-2xl shadow-2xl border border-stone-200 overflow-hidden my-auto animate-in zoom-in-95 duration-200 text-stone-800 focus:outline-none`}
+        className={`w-full ${widthClasses} ${MOBILE_SHEET_PANEL} bg-white shadow-2xl border border-stone-200 overflow-hidden text-stone-800 focus:outline-none`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -136,8 +167,8 @@ export const Modal: React.FC<ModalProps> = ({
           </button>
         </div>
 
-        {/* Content */}
-        <div className="p-5 max-h-[80vh] overflow-y-auto">{children}</div>
+        {/* v1.5.7: اسکرول داخلی — در موبایل با dvh زیر کیبورد هم درست می‌ماند */}
+        <div className="p-5 overflow-y-auto max-h-[calc(92dvh-64px)] sm:max-h-[calc(80vh-76px)]">{children}</div>
       </div>
     </div>
   );

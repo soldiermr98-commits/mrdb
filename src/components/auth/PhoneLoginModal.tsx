@@ -1,10 +1,21 @@
 /**
  * @file components/auth/PhoneLoginModal.tsx
- * @description Phone login modal simulating WordPress & Otino SMS OTP authentication
+ * @description Phone login modal — OTP authentication against the WordPress bridge
+ *
+ * v1.5.7 (بازطراحی موبایل — گزارش کارفرما «کیبورد روی پاپ‌آپ می‌افتد؛ مدرن‌تر باشد»):
+ *  - مودال لایه (Modal.tsx) در موبایل Bottom Sheet شد + interactive-widget=resizes-content
+ *    ⇒ کیبورد هرگز ورودی را نمی‌پوشاند.
+ *  - گام شماره: دیگر auto-focus ندارد (باز شدن ناگهانی کیبورد روی صورت کاربر نبود)؛
+ *    ورودی ۱۶px (ضد zoom جهش‌ی iOS)، هدف لمسی بزرگ‌تر، CTA گرادیان برند.
+ *  - گام کد: نمایش سلولی ۶خانه‌ای (الگوی استاندارد OTP) با یک input واقعی نامرئی
+ *    روی خانه‌ها — autoComplete="one-time-code" و پیست/کیبورد سیستم سرِ جایشان‌اند؛
+ *    ارسال خودکار وقتی کد کامل شد؛ فوکوس فقط بعد از رفتن به گام کد می‌آید.
+ *  - منطق قبلی دست‌نخورده: پرچم isRegistered و ثبت‌نام نام‌دار (v1.3.0)، ارسال مجدد
+ *    واقعی BUG-63، ورود سریع دمو، بازنشانی کامل فرم بین بازشدن‌ها.
  */
 
-import React, { useState, useEffect } from 'react';
-import { Smartphone, KeyRound, ShieldAlert, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Smartphone, KeyRound, ShieldAlert, RefreshCw, ArrowRight } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { authService } from '../../services/authService';
 import { isRealApiMode } from '../../services/apiClient';
@@ -40,6 +51,8 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [nameError, setNameError] = useState<string | null>(null);
+  // v1.5.7: ارسال خودکار کد کامل‌شده — گارد ضد دوباره‌ارسال
+  const autoSubmitRef = useRef<HTMLFormElement | null>(null);
 
   useEffect(() => {
     let interval: any;
@@ -48,6 +61,22 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
     }
     return () => clearInterval(interval);
   }, [step, timer]);
+
+  // v1.5.7: وقتی کد به طول کامل رسید خودکار verify می‌شود (بدون دکمهٔ اضافی).
+  const handleOtpChange = (value: string) => {
+    const next = toEnglishDigits(value).replace(/\D+/g, '').slice(0, OTP_LENGTH);
+    setOtp(next);
+  };
+
+  useEffect(() => {
+    if (step === 'otp' && otp.length === OTP_LENGTH && !isLoading) {
+      // یک تیک تاخیر کوتاه برای اینکه آخرین خانه پرشده رندر شود
+      const t = window.setTimeout(() => {
+        autoSubmitRef.current?.requestSubmit();
+      }, 150);
+      return () => window.clearTimeout(t);
+    }
+  }, [step, otp, isLoading]);
 
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,6 +122,8 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
       onClose();
     } catch (err: any) {
       setErrorMessage(err.message || 'کد تایید نادرست است');
+      // v1.5.7: با خطای کد، سلول‌ها خالی می‌شوند تا کاربر همان‌جا دوباره بنویسد
+      setOtp('');
     } finally {
       setIsLoading(false);
     }
@@ -142,6 +173,9 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
     setNameError(null);
   };
 
+  // v1.5.7: سلول‌های نمایشی OTP — خانهٔ فعال (جایی که عدد بعدی می‌نشیند) هایلایت است
+  const otpCells = Array.from({ length: OTP_LENGTH }, (_, i) => otp[i] ?? '');
+
   return (
     <Modal
       isOpen={isOpen}
@@ -179,22 +213,23 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
         {step === 'phone' ? (
           <form onSubmit={handleSendOtp} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-stone-700 mb-1.5">
+              <label className="flex items-center gap-1.5 text-xs font-semibold text-stone-700 mb-2">
+                <Smartphone className="w-3.5 h-3.5 text-amber-800" />
                 شماره تلفن همراه (فرمت ۰۹xxxxxxxxx)
               </label>
-              <div className="relative">
-                <input
-                  type="tel"
-                  dir="ltr"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="09123456789"
-                  className="w-full pl-10 pr-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm font-mono text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-700/30 focus:border-amber-700 transition"
-                  required
-                />
-                <Smartphone className="w-4 h-4 text-stone-400 absolute left-3 top-3" />
-              </div>
-              <p className="text-[11px] text-stone-500 mt-1">
+              {/* v1.5.7: بدون autoFocus — کیبورد به اختیار کاربر باز می‌شود؛ ۱۶px ضد iOS-zoom */}
+              <input
+                type="tel"
+                dir="ltr"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="09123456789"
+                inputMode="tel"
+                autoComplete="tel"
+                className="w-full px-4 py-3 text-base bg-stone-50 border border-stone-200 rounded-2xl font-mono text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-700/30 focus:border-amber-700 focus:bg-white transition shadow-inner"
+                required
+              />
+              <p className="text-[11px] text-stone-500 mt-1.5">
                 کد تایید ورود {OTP_LENGTH} رقمی به این شماره ارسال خواهد شد.
               </p>
             </div>
@@ -202,7 +237,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full bg-amber-800 hover:bg-amber-900 text-white font-semibold py-2.5 rounded-xl text-xs transition shadow-xs flex items-center justify-center gap-2"
+              className="w-full bg-gradient-to-l from-amber-800 to-amber-700 hover:from-amber-900 hover:to-amber-800 text-white font-bold py-3.5 rounded-2xl text-sm transition shadow-md active:scale-[0.98] flex items-center justify-center gap-2"
             >
               {isLoading ? (
                 <>
@@ -242,14 +277,15 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
             )}
           </form>
         ) : (
-          <form onSubmit={handleVerifyOtp} className="space-y-4">
+          <form onSubmit={handleVerifyOtp} ref={autoSubmitRef} className="space-y-4">
             <div className="flex items-center justify-between text-xs text-stone-600 bg-stone-50 p-2.5 rounded-xl">
               <span>شماره مقصد: <strong dir="ltr" className="font-mono">{phone}</strong></span>
               <button
                 type="button"
                 onClick={() => setStep('phone')}
-                className="text-amber-800 hover:underline text-[11px] font-medium"
+                className="flex items-center gap-1 text-amber-800 hover:underline text-[11px] font-medium"
               >
+                <ArrowRight className="w-3 h-3" />
                 ویرایش شماره
               </button>
             </div>
@@ -272,7 +308,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
                       autoComplete="off"
                       maxLength={60}
                       placeholder="مثلاً سارا"
-                      className={`w-full px-3 py-2.5 bg-stone-50 border rounded-xl text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-700/30 focus:border-amber-700 transition ${
+                      className={`w-full px-3 py-2.5 text-base bg-stone-50 border rounded-xl text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-700/30 focus:border-amber-700 transition ${
                         nameError ? 'border-red-300' : 'border-stone-200'
                       }`}
                     />
@@ -287,7 +323,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
                       autoComplete="off"
                       maxLength={60}
                       placeholder="مثلاً احمدی"
-                      className={`w-full px-3 py-2.5 bg-stone-50 border rounded-xl text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-700/30 focus:border-amber-700 transition ${
+                      className={`w-full px-3 py-2.5 text-base bg-stone-50 border rounded-xl text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-700/30 focus:border-amber-700 transition ${
                         nameError ? 'border-red-300' : 'border-stone-200'
                       }`}
                     />
@@ -301,37 +337,57 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
               </div>
             )}
 
+            {/* v1.5.7: نمایش سلولی OTP — input واقعی نامرئی روی سلول‌هاست تا
+                autoComplete="one-time-code" سیستم و کیبورد عددی سرِ کارشان بمانند */}
             <div>
-              <label className="block text-xs font-semibold text-stone-700 mb-1.5">
+              <label className="block text-xs font-semibold text-stone-700 mb-2">
                 کد تایید پیامکی {isRealApiMode ? '(۶ رقمی پیامک‌شده)' : '(آزمایشی: ۱۲۳۴۵)'}
               </label>
-              <div className="relative">
+              <div className="relative" dir="ltr">
+                <div className="flex gap-1.5 justify-center pointer-events-none select-none" aria-hidden="true">
+                  {otpCells.map((digit, i) => (
+                    <div
+                      key={i}
+                      className={`flex-1 h-12 rounded-xl border flex items-center justify-center text-lg font-mono font-bold transition-all duration-150 ${
+                        digit
+                          ? 'bg-amber-50/70 border-amber-700/50 text-amber-900 shadow-xs'
+                          : i === otp.length
+                            ? 'bg-white border-amber-700 ring-2 ring-amber-700/25 text-stone-400'
+                            : 'bg-stone-50 border-stone-200 text-stone-300'
+                      }`}
+                    >
+                      {digit || (i === otp.length ? <KeyRound className="w-3.5 h-3.5 animate-pulse" /> : '•')}
+                    </div>
+                  ))}
+                </div>
+                {/* input واقعی: شفاف روی سلول‌ها، فونت ۱۶px ضد iOS-zoom */}
                 <input
                   type="text"
                   dir="ltr"
                   value={otp}
-                  // BUG-63: numeric keypad on mobile + Persian/Arabic digits are
-                  // normalized to English on every change (OTP store is ASCII).
-                  // v1.2.2: طول مجاز بر اساس حالت (Real=۶ / دمو=۵) — کد سرور ۶رقمی است.
+                  onChange={(e) => handleOtpChange(e.target.value)}
                   inputMode="numeric"
                   autoComplete="one-time-code"
-                  onChange={(e) => setOtp(toEnglishDigits(e.target.value).slice(0, OTP_LENGTH))}
-                  placeholder={isRealApiMode ? '──────' : '12345'}
                   maxLength={OTP_LENGTH}
-                  className="w-full text-center tracking-widest text-lg font-mono py-2 bg-stone-50 border border-stone-200 rounded-xl text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-700/30 focus:border-amber-700 transition"
+                  placeholder=""
+                  aria-label={`کد تایید ${OTP_LENGTH} رقمی`}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-text text-base focus:outline-none"
                   autoFocus
                   required
                 />
-                <KeyRound className="w-4 h-4 text-stone-400 absolute left-3 top-3.5" />
               </div>
-              <p className="text-[11px] text-stone-500 mt-1">
+              <p className="text-[11px] text-stone-500 mt-2 text-center">
                 {otp.length}/{OTP_LENGTH} رقم وارد شده
+                {otp.length === OTP_LENGTH && !isLoading ? ' — در حال تایید خودکار...' : ''}
               </p>
             </div>
 
-            <div className="flex items-center justify-between text-xs text-stone-500">
+            <div className="flex items-center justify-center text-xs">
               {timer > 0 ? (
-                <span>ارسال مجدد کد پس از {timer} ثانیه</span>
+                <span className="inline-flex items-center gap-1.5 bg-stone-100 text-stone-600 rounded-full px-3 py-1.5">
+                  <RefreshCw className="w-3 h-3" />
+                  ارسال مجدد کد پس از {timer} ثانیه
+                </span>
               ) : (
                 <button
                   type="button"
@@ -347,7 +403,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
             <button
               type="submit"
               disabled={isLoading || otp.length < OTP_LENGTH}
-              className="w-full bg-amber-800 hover:bg-amber-900 text-white font-semibold py-2.5 rounded-xl text-xs transition shadow-xs flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full bg-gradient-to-l from-amber-800 to-amber-700 hover:from-amber-900 hover:to-amber-800 text-white font-bold py-3.5 rounded-2xl text-sm transition shadow-md active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isLoading ? (
                 <>

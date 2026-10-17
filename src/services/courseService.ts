@@ -20,6 +20,16 @@ import { isLive } from '../utils/format';
 const STORAGE_KEY_COURSES = 'mrdastbaaf_courses';
 const STORAGE_KEY_NOTES = 'mrdastbaaf_notes';
 
+// v1.5.7 (گزارش کارفرما «استاد خاموشیان باشه به‌جای استاد مستر دستباف»):
+// پیش‌فرض سراسری مدرس — از /app-ui (پیشخوان ← محتوای وب‌اپ ← مدرس) پر می‌شود؛
+// سرور Real فیلد مدرس هر دوره را نمی‌فرستد، پس همهٔ کارت‌ها همین پیش‌فرض را
+// می‌گیرند (نام + عکس قابل‌تنظیم از پیشخوان). در دمو مقادیر mock هر دوره سرِ جایشان‌اند.
+let instructorDefaults: { name: string; photoUrl: string; bio: string } = {
+  name: 'استاد خاموشیان',
+  photoUrl: '',
+  bio: '',
+};
+
 const TIER_RANKS: Record<MembershipTier, number> = {
   free: 0,
   bronze: 1,
@@ -240,9 +250,10 @@ function normalizeApiCourse(raw: ApiCourseShape): Course {
     // دسته/سطح متن فارسی از سرور می‌آید؛ مقدار ناشناخته فقط فیلتر چیپ‌ها را از دست می‌دهد نه نمایش را.
     category: apiString(raw.category, 'قالی‌بافی و گلیم') as CourseCategory,
     level: apiString(raw.level, 'مقدماتی') as CourseLevel,
-    instructorName: apiString(raw.instructorName, 'استاد مستر دستباف'),
-    instructorBio: apiString(raw.instructorBio),
-    instructorAvatar: apiString(raw.instructorAvatar),
+    // v1.5.7: فال‌بک از پیش‌فرض سراسری مدرس (app-ui) — قبلاً «استاد مستر دستباف» هاردکد بود
+    instructorName: apiString(raw.instructorName, instructorDefaults.name),
+    instructorBio: apiString(raw.instructorBio, instructorDefaults.bio),
+    instructorAvatar: apiString(raw.instructorAvatar, instructorDefaults.photoUrl),
     thumbnailUrl: thumbnail,
     coverImageUrl: apiString(raw.coverImageUrl) || thumbnail,
     // v1.3.0: مدت کل دوره از سرور (دقیقهٔ صحیح؛ 0/غایب = نامشخص) — نمایش در CourseDetailView
@@ -267,6 +278,23 @@ function normalizeApiCourse(raw: ApiCourseShape): Course {
 }
 
 export const courseService = {
+  /**
+   * v1.5.7: ست‌کردن پیش‌فرض سراسری مدرس از /app-ui (سرویس محتوای اپ صدا می‌زند).
+   * دمو/سرور قدیمی هیچ اثری ندارد — پیش‌فرض کد «استاد خاموشیان» می‌ماند.
+   */
+  setInstructorDefaults(next: { name?: string; photoUrl?: string; bio?: string }): void {
+    if (!next || typeof next !== 'object') return;
+    if (typeof next.name === 'string' && next.name.trim() !== '') {
+      instructorDefaults = { ...instructorDefaults, name: next.name.trim() };
+    }
+    if (typeof next.photoUrl === 'string') {
+      instructorDefaults = { ...instructorDefaults, photoUrl: next.photoUrl.trim() };
+    }
+    if (typeof next.bio === 'string') {
+      instructorDefaults = { ...instructorDefaults, bio: next.bio };
+    }
+  },
+
   /**
    * Get all courses with optional filters
    */

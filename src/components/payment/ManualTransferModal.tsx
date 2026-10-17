@@ -4,11 +4,13 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Landmark, Upload, CheckCircle, AlertCircle, Copy, Check, FileText } from 'lucide-react';
+import { Landmark, Upload, CheckCircle, AlertCircle, Copy, Check, FileText, X, ImageIcon, Loader2 } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { MOCK_COMPANY_BANK_INFO } from '../../data/mockData';
 import { MembershipPlan, PaymentOrder, UserProfile } from '../../types';
 import { transferService } from '../../services/transferService';
+import { isRealApiMode } from '../../services/apiClient';
+import { compressReceiptImage, RECEIPT_IMAGE_MAX_RAW_BYTES } from '../../utils/receiptImage';
 import { formatJalali, toEnglishDigits } from '../../utils/format';
 
 interface ManualTransferModalProps {
@@ -31,7 +33,12 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
   // BUG-64c: default deposit date is TODAY's Jalali date (was hardcoded «۱۴۰۵/۰۷/۲۰»).
   const [depositDate, setDepositDate] = useState(() => formatJalali(new Date().toISOString()));
   // BUG-64a: real optional receipt image — only the file NAME is stored.
+  // v1.5.7: حالا خودِ «فایل» هم نگه داشته می‌شود و بعد از ثبت سفارش واقعاً آپلود
+  // می‌شود (فشرده‌شده سمت مرورگر) — قبلاً فقط نام فایل بود و پیشخوان هرگز تصویری دریافت نمی‌کرد.
   const [receiptImageName, setReceiptImageName] = useState('');
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptPreview, setReceiptPreview] = useState<string | null>(null);
+  const [imageStatus, setImageStatus] = useState<'idle' | 'uploading' | 'uploaded' | 'failed'>('idle');
   const [receiptError, setReceiptError] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -48,6 +55,14 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
     []
   );
 
+  // v1.5.7: پیش‌نمایش تصویر انتخابی — Object URL هنگام تعویض/بستن آزاد می‌شود
+  useEffect(
+    () => () => {
+      if (receiptPreview) URL.revokeObjectURL(receiptPreview);
+    },
+    [receiptPreview]
+  );
+
   // BUG-64b: reset ALL form state whenever the modal is (re)opened — a previous
   // submission attempt must never leak into the next one.
   useEffect(() => {
@@ -56,6 +71,8 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
     setLastFour('');
     setDepositDate(formatJalali(new Date().toISOString()));
     setReceiptImageName('');
+    setReceiptFile(null);
+    setImageStatus('idle');
     setReceiptError(null);
     setNotes('');
     setErrorMsg(null);
@@ -66,12 +83,14 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
 
   if (!isOpen || !plan || !currentUser) return null;
 
-  // BUG-64a: validate the selected receipt image (≤ 5MB, image/*) with an
-  // inline Persian error; only the file name is kept in state.
+  // BUG-64a: validate the selected receipt image (≤ 4MB — هم‌تراز سقف سرور، image/*) with an
+  // inline Persian error. v1.5.7: خود فایل + پیش‌نمایش هم نگه داشته می‌شود.
   const handleReceiptChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) {
       setReceiptImageName('');
+      setReceiptFile(null);
+      setReceiptPreview(null);
       setReceiptError(null);
       return;
     }
@@ -79,16 +98,30 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
       setReceiptError('فقط فایل تصویری (JPG، PNG و...) پذیرفته می‌شود.');
       e.target.value = '';
       setReceiptImageName('');
+      setReceiptFile(null);
+      setReceiptPreview(null);
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      setReceiptError('حجم تصویر فیش باید حداکثر ۵ مگابایت باشد.');
+    if (file.size > RECEIPT_IMAGE_MAX_RAW_BYTES) {
+      setReceiptError('حجم تصویر فیش باید حداکثر ۴ مگابایت باشد.');
       e.target.value = '';
       setReceiptImageName('');
+      setReceiptFile(null);
+      setReceiptPreview(null);
       return;
     }
     setReceiptError(null);
+    setReceiptFile(file);
     setReceiptImageName(file.name);
+    setReceiptPreview(URL.createObjectURL(file));
+  };
+
+  // v1.5.7: حذف تصویر انتخاب‌شده (پیش از ثبت)
+  const clearReceiptImage = () => {
+    if (receiptPreview) URL.revokeObjectURL(receiptPreview);
+    setReceiptPreview(null);
+    setReceiptFile(null);
+    setReceiptImageName('');
   };
 
   // BUG-64d: clipboard write with async Clipboard API + textarea fallback;
@@ -164,10 +197,28 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
         receiptImageName,
         senderNotes: notes.trim(),
       });
+
+      // v1.5.7: آپلود تصویر — فقط بعد از ثبت موفق سفارش؛ شکستش ثبت فیش را خراب نمی‌کند
+      if (receiptFile && isRealApiMode) {
+        setImageStatus('uploading');
+        try {
+          const compressed = await compressReceiptImage(receiptFile);
+          const blob = compressed?.blob ?? receiptFile;
+          const fileName = compressed?.fileName ?? receiptFile.name;
+          await transferService.uploadReceiptImage(order.id, blob, fileName);
+          setImageStatus('uploaded');
+        } catch {
+          setImageStatus('failed');
+        }
+      } else {
+        setImageStatus('idle');
+      }
+
       setSuccessOrder(order);
       setIsSubmitting(false);
     } catch (err: any) {
       setIsSubmitting(false);
+      setImageStatus('idle');
       setErrorMsg(err.message || 'خطا در ثبت فیش واریزی');
     }
   };
@@ -212,6 +263,19 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
                 اطلاعات فیش شما برای بخش مالی ارسال شد. به محض بررسی و تطبیق صورت‌حساب بانکی، اشتراک شما فعال خواهد شد (معمولاً ظرف ۱ الی ۴ ساعت کاری).
               </p>
             </div>
+
+            {/* v1.5.7: وضعیت آپلود تصویر فیش — شکست آپلود ثبت فیش را خراب نمی‌کند */}
+            {imageStatus === 'uploaded' && (
+              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] p-3 rounded-xl flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 shrink-0" />
+                تصویر فیش شما هم برای کارشناسان مالی ارسال شد.
+              </div>
+            )}
+            {imageStatus === 'failed' && (
+              <div className="bg-amber-50 border border-amber-300 text-amber-900 text-[11px] p-3 rounded-xl">
+                فیش شما ثبت شد، اما ارسال تصویر ناموفق بود؛ لطفاً تصویر را برای پشتیبانی نیز ارسال کنید تا بررسی سریع‌تر شود.
+              </div>
+            )}
 
             <button
               onClick={handleFinish}
@@ -314,22 +378,48 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
                 <label className="block font-semibold text-stone-700 mb-1">
                   فایل تصویر فیش (اختیاری)
                 </label>
-                {/* BUG-64a: real optional file picker (replaces the fake hardcoded
-                    «fish-variz.jpg») — validated ≤ 5MB and image/* on change. */}
-                <label className="flex items-center gap-2 px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-600 cursor-pointer hover:border-amber-700/50 transition">
-                  <Upload className="w-4 h-4 text-stone-400 shrink-0" />
-                  <span className="truncate font-mono text-[11px]">
-                    {receiptImageName || 'انتخاب تصویر فیش واریزی...'}
-                  </span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleReceiptChange}
-                    className="hidden"
-                  />
-                </label>
+                {/* BUG-64a: real optional file picker — v1.5.7: تصویر واقعاً آپلود و در
+                    پیشخوان نمایش داده می‌شود؛ capture از دوربین موبایل هم ممکن است. */}
+                {receiptPreview ? (
+                  <div className="flex items-center gap-2.5 bg-stone-50 border border-stone-200 rounded-xl p-2">
+                    <img
+                      src={receiptPreview}
+                      alt="پیش‌نمایش فیش"
+                      className="w-11 h-11 rounded-lg object-cover border border-stone-200"
+                    />
+                    <span className="truncate font-mono text-[11px] text-stone-600 flex-1">
+                      {receiptImageName}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={clearReceiptImage}
+                      className="p-1.5 rounded-lg text-stone-400 hover:text-red-700 hover:bg-red-50 transition"
+                      aria-label="حذف تصویر"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="flex items-center gap-2 px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-stone-600 cursor-pointer hover:border-amber-700/50 transition">
+                    <Upload className="w-4 h-4 text-stone-400 shrink-0" />
+                    <span className="truncate font-mono text-[11px]">
+                      عکس فیش یا اسکرین‌شات تراکنش...
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleReceiptChange}
+                      className="hidden"
+                    />
+                  </label>
+                )}
                 {receiptError && (
                   <p className="text-[11px] text-red-700 mt-1">{receiptError}</p>
+                )}
+                {!receiptError && receiptFile && (
+                  <p className="text-[10px] text-stone-400 mt-1">
+                    تصویر به‌صورت خودکار فشرده و همراه فیش ارسال می‌شود.
+                  </p>
                 )}
               </div>
             </div>
@@ -356,9 +446,16 @@ export const ManualTransferModal: React.FC<ManualTransferModalProps> = ({
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full bg-amber-800 hover:bg-amber-900 text-white font-bold py-3 rounded-xl text-xs transition shadow-xs flex items-center justify-center gap-2"
+              className="w-full bg-gradient-to-l from-amber-800 to-amber-700 hover:from-amber-900 hover:to-amber-800 text-white font-bold py-3.5 rounded-2xl text-xs transition shadow-md active:scale-[0.98] flex items-center justify-center gap-2"
             >
-              {isSubmitting ? 'در حال ثبت فیش...' : 'ثبت فیش و ارسال جهت بررسی'}
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  {imageStatus === 'uploading' ? 'در حال ارسال تصویر فیش...' : 'در حال ثبت فیش...'}
+                </>
+              ) : (
+                'ثبت فیش و ارسال جهت بررسی'
+              )}
             </button>
           </form>
         )}

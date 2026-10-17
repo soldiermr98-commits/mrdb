@@ -17,11 +17,18 @@
  * با sortOrder 7 به پیش‌فرض‌ها اضافه شد (کلید در types + SECTION_KEYS همگام).
  */
 
-import { AppUiConfig, AppUiSectionKey } from '../types';
+import { AppUiConfig, AppUiInstructor, AppUiSectionKey } from '../types';
 import { apiFetch, isRealApiMode } from './apiClient';
+import { courseService } from './courseService';
 
 /** پیش‌فرض‌های سمت اپ — هم‌ارز get_defaults() افزونه؛ برای دمو/آفلاین/پاسخ ناقص */
 export const DEFAULT_APP_UI: AppUiConfig = {
+  // v1.5.7: مدرس سراسری — پیش‌فرض کد «استاد خاموشیان» (گزارش کارفرما؛ عکس از پیشخوان لود می‌شود)
+  instructor: {
+    name: 'استاد خاموشیان',
+    photoUrl: '',
+    bio: '',
+  },
   hero: {
     badgeText: 'پلتفرم تخصصی آموزش صنایع دستی',
     headline: 'هنر بافندگی و اصالت ایرانی را با دستان خود زنده کنید',
@@ -120,6 +127,7 @@ function num(value: unknown, fallback: number): number {
 /** پالایش تدافعی پاسخ /app-ui روی پیش‌فرض‌ها */
 export function normalizeAppUi(raw: unknown): AppUiConfig {
   const out: AppUiConfig = {
+    instructor: { ...DEFAULT_APP_UI.instructor },
     hero: { ...DEFAULT_APP_UI.hero },
     sections: DEFAULT_APP_UI.sections.map((s) => ({ ...s })),
     menu: {
@@ -131,6 +139,16 @@ export function normalizeAppUi(raw: unknown): AppUiConfig {
 
   if (!raw || typeof raw !== 'object') return out;
   const data = raw as Record<string, unknown>;
+
+  // ─── instructor (v1.5.7: مدرس سراسری از پیشخوان) ───
+  if (data.instructor && typeof data.instructor === 'object') {
+    const ins = data.instructor as Record<string, unknown>;
+    out.instructor = {
+      name: str(ins.name, out.instructor.name),
+      photoUrl: str(ins.photoUrl, out.instructor.photoUrl),
+      bio: typeof ins.bio === 'string' ? ins.bio : out.instructor.bio,
+    };
+  }
 
   // ─── hero ───
   if (data.hero && typeof data.hero === 'object') {
@@ -235,7 +253,11 @@ export const appContentService = {
     if (!isRealApiMode) return null;
     try {
       const data = await apiFetch<unknown>('/app-ui');
-      return normalizeAppUi(data);
+      const ui = normalizeAppUi(data);
+      // v1.5.7: مدرس سراسری → پیش‌فرض کارت‌های دوره (courseService) — کارت‌هایی که
+      // سرور برایشان فیلد مدرس نمی‌فرستد همین‌جا برند و نام درست می‌گیرند.
+      courseService.setInstructorDefaults(ui.instructor);
+      return ui;
     } catch {
       return null;
     }

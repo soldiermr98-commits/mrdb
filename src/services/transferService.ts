@@ -113,6 +113,29 @@ export const transferService = {
   },
 
   /**
+   * v1.5.7: آپلود تصویر فیش کارت‌به‌کارت — فقط «بعد از» ثبت موفق سفارش صدا زده می‌شود
+   * (شکست آپلود هرگز ثبت فیش را خراب نمی‌کند؛ مودال خودش وضعیت را نشان می‌دهد).
+   * قرارداد: POST /payment/manual-transfer/{order_id}/image (multipart، فیلد receipt_image)
+   * → {success:true, imageName} — سرور فایل را در uploads/mrdastbaaf-receipts/ نگه
+   * می‌دارد و فقط نام فایل تصادفی در ستون receipt_image_name (بدون باد DB).
+   */
+  async uploadReceiptImage(orderId: string, file: Blob, fileName: string): Promise<void> {
+    if (!isRealApiMode) return; // دمو: آپلود واقعی ندارد
+    const form = new FormData();
+    form.append('receipt_image', file, fileName);
+    await apiFetch<{ success?: unknown; imageName?: unknown }>(
+      `/payment/manual-transfer/${encodeURIComponent(orderId)}/image`,
+      {
+        method: 'POST',
+        auth: true,
+        body: form,
+        // آپلود تصویر روی اینترنت موبایل ایران ممکن است کند باشد — سقف ۶۰ ثانیه
+        timeoutMs: 60000,
+      }
+    );
+  },
+
+  /**
    * Admin approves manual bank transfer order
    *
    * v1.1.0: مسیر تایید ادمین در قرارداد فریز‌شده v1.1.0 نیست (بدون اندپوینت فرانت);

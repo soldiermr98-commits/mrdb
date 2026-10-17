@@ -42,6 +42,29 @@ class MrDastbaaf_Payment_Controller {
         ));
 
         /**
+         * v1.5.7: آپلود تصویر فیش کارت‌به‌کارت — فقط مالک سفارشِ در انتظار بررسی.
+         * multipart (فیلد receipt_image)؛ فایل روی فایل‌سیستم در uploads/mrdastbaaf-receipts/
+         * ذخیره می‌شود و فقط نام تصادفی فایل در ستون موجود receipt_image_name می‌نشیند
+         * (هیچ تغییر اسکیما؛ صفر باد DB — تصویر در DB ذخیره نمی‌شود).
+         */
+        register_rest_route(MRDASTBAAF_API_NAMESPACE, '/payment/manual-transfer/(?P<order_id>[a-zA-Z0-9_-]+)/image', array(
+            'methods' => 'POST',
+            'callback' => array($this, 'handle_manual_transfer_image_upload'),
+            'permission_callback' => array('MrDastbaaf_Auth_Controller', 'permission_logged_in'),
+        ));
+
+        /**
+         * v1.5.7: نمایش تصویر فیش — فقط مدیر کل یا مالک سفارش. برای <img> پیشخوان
+         * با کوکی + _wpnonce (wp_rest) کار می‌کند؛ برای اپ با Bearer. فایل از
+         * فایل‌سیستم استریم می‌شود (مسیر مستقیم عمومی نیست — .htaccess deny).
+         */
+        register_rest_route(MRDASTBAAF_API_NAMESPACE, '/receipts/(?P<order_id>[a-zA-Z0-9_-]+)/image', array(
+            'methods' => 'GET',
+            'callback' => array($this, 'handle_receipt_image_view'),
+            'permission_callback' => array($this, 'check_receipt_image_access'),
+        ));
+
+        /**
          * v1.2.0: محرک دستی/سرور ریکنسیلیشن — برای هاست‌هایی که WP-Cron تزویرشان
          * غیرقابل‌اتکاست (مثلاً crontab سیستم با curl). توکن از آپشن
          * mrdastbaaf_cron_token با hash_equals مقایسه می‌شود (403 خودکار در شکست).
@@ -1137,6 +1160,342 @@ class MrDastbaaf_Payment_Controller {
             'status' => 'pending',
             'message' => 'فیش واریزی شما ثبت شد و در صف بررسی کارشناسان مالی قرار گرفت.',
         ));
+    }
+
+    /* ═══════════════ v1.5.7: تصویر فیش کارت‌به‌کارت (فایل‌سیستم، نه DB) ═══════════════
+     *
+     * گزارش کارفرما: «کاربر کارت‌به‌کارت می‌کند و می‌فرستد، چیزی مشخص نیست؛ تصویر
+     * تو پیشخوان باید باشد» + تاکید بر حجم/بهینگی. طراحی:
+     *  - فایل در uploads/mrdastbaaf-receipts/Y/m/ با نام کاملاً تصادفی (قابل‌حدس نیست)؛
+     *  - در DB فقط مسیر نسبی در ستون «موجودِ» receipt_image_name (بدون ALTER TABLE)؛
+     *  - دسترسی مستقیم وب به پوشه بسته است (.htaccess deny) — خواندن فقط از مسیر
+     *    REST با احراز (مدیر یا مالک سفارش)؛
+     *  - پاکسازی: حذف دستی تکی، پاکسازی جمعی بررسی‌شده‌ها از پیشخوان و کرون روزانه
+     *    با دورهٔ نگهداری قابل‌تنظیم (پیش‌فرض ۱۴ روز) — فایل حذف و ستون NULL می‌شود؛
+     *    ردیف متادیتا (چند صد بایت) برای ردپای مالی می‌ماند.
+     */
+
+    /** سقف سخت حجم فایل آپلودی — هم‌تراز سقف سمت اپ (۴ مگابایت). */
+    const RECEIPT_IMAGE_MAX_BYTES = 4194304;
+
+    /** پسوندهای مجاز → mime (مقایسه با نتیجهٔ واقعی getimagesize، نه نام فایل). */
+    private static $receipt_image_mimes = array(
+        'jpg'  => 'image/jpeg',
+        'jpeg' => 'image/jpeg',
+        'png'  => 'image/png',
+        'webp' => 'image/webp',
+    );
+
+    /**
+     * پوشهٔ پایهٔ فیش‌ها داخل uploads (بدون نیاز به جدول/تنظیم جدید).
+     * @return string مسیر با اسلش انتهایی
+     */
+    public static function receipts_base_dir() {
+        $uploads = wp_upload_dir();
+        $base = trailingslashit($uploads['basedir']) . 'mrdastbaaf-receipts/';
+        if (!is_dir($base)) {
+            wp_mkdir_p($base);
+            // گارد دسترسی مستقیم: هیچ‌کس از وب نمی‌تواند فیش را حدس بزند و باز کند.
+            // (LiteSpeed/Apache — در نبود پشتیبانی، نام تصادفی ۲۴کاراکتری لایهٔ دوم است)
+            @file_put_contents($base . '.htaccess', "Order Allow,Deny\nDeny from all\n");
+            @file_put_contents($base . 'index.html', '');
+        }
+        return $base;
+    }
+
+    /**
+     * اعتبارسنجی مسیر نسبی ذخیره‌شده در DB (دفاع مسیر — هیچ .. / اسلش مطلق).
+     * @param string $relative مثل «2026/10/ab12….jpg»
+     * @return string مسیر مطلق معتبر یا رشتهٔ خالی
+     */
+    public static function resolve_receipt_image_path($relative) {
+        $relative = trim((string) $relative);
+        if ('' === $relative || strlen($relative) > 255) {
+            return '';
+        }
+        // فقط الگوی «YYYY/MM/نام‌فایل» پذیرفته است — هر چیز دیگری مسدود
+        if (!preg_match('#^(\d{4})/(\d{2})/([A-Za-z0-9._-]+)$#', $relative, $m)) {
+            return '';
+        }
+        if (false !== strpos($m[3], '..') || 0 === strpos($m[3], '.')) {
+            return '';
+        }
+        $ext = strtolower(pathinfo($m[3], PATHINFO_EXTENSION));
+        if (!isset(self::$receipt_image_mimes[$ext])) {
+            return '';
+        }
+        $full = self::receipts_base_dir() . $m[1] . '/' . $m[2] . '/' . $m[3];
+        // defesve: مسیر نهایی باید واقعاً زیر پوشهٔ فیش‌ها باشد
+        $real_base = realpath(self::receipts_base_dir());
+        $real_full = realpath($full);
+        if (!$real_base || !$real_full || 0 !== strpos($real_full, $real_base)) {
+            return '';
+        }
+        return $real_full;
+    }
+
+    /**
+     * حذف امن فایل تصویر فیش (بر اساس مسیر نسبی DB) — هرگز بیرون پوشه را لمس نمی‌کند.
+     * @return bool آیا فایل واقعاً حذف شد
+     */
+    public static function delete_receipt_image_file($relative) {
+        $full = self::resolve_receipt_image_path($relative);
+        if ('' === $full || !is_file($full)) {
+            return false;
+        }
+        return @unlink($full);
+    }
+
+    /**
+     * ذخیرهٔ امن فایل آپلودی تصویر فیش — نوع واقعی با getimagesize، نام تصادفی،
+     * حذف تصویر قبلی (جایگزینی تا وقتی سفارش pending است) و برыв ستون DB.
+     *
+     * @param string $order_id  شناسهٔ سفارش
+     * @param array  $file      عنصر $_FILES (tmp_name/size/error/name)
+     * @return array|WP_Error {imageName} یا خطای ساختاریافتهٔ فارسی
+     */
+    public static function store_receipt_image($order_id, array $file) {
+        if (!isset($file['tmp_name']) || !is_string($file['tmp_name']) || '' === $file['tmp_name']) {
+            return new WP_Error('no_file', 'فایل تصویری ارسال نشده است.', array('status' => 400));
+        }
+        if (isset($file['error']) && UPLOAD_ERR_OK !== (int) $file['error']) {
+            return new WP_Error('upload_error', 'آپلود فایل ناموفق بود؛ حجم یا فرمت فایل را بررسی کنید.', array('status' => 400));
+        }
+        if (!@is_uploaded_file($file['tmp_name'])) {
+            return new WP_Error('upload_error', 'فایل معتبر آپلودی یافت نشد.', array('status' => 400));
+        }
+        if ((int) $file['size'] <= 0 || (int) $file['size'] > self::RECEIPT_IMAGE_MAX_BYTES) {
+            return new WP_Error('too_large', 'حجم تصویر باید حداکثر ۴ مگابایت باشد.', array('status' => 400));
+        }
+
+        // نوع واقعی محتوا (نه پسوند ادعایی) — fail-closed
+        $info = @getimagesize($file['tmp_name']);
+        if (!$info || empty($info['mime'])) {
+            return new WP_Error('invalid_image', 'فایل ارسالی تصویر معتبر نیست.', array('status' => 400));
+        }
+        $ext = array_search($info['mime'], self::$receipt_image_mimes, true);
+        if (!$ext) {
+            return new WP_Error('invalid_image', 'فقط فرمت‌های JPG، PNG و WebP پذیرفته می‌شود.', array('status' => 400));
+        }
+
+        // پوشهٔ ماهانه + نام ۲۴کاراکتری کاملاً تصادفی (قابل‌حدس/قابل‌جست‌وجو نیست)
+        $subdir = gmdate('Y') . '/' . gmdate('m');
+        $dir = self::receipts_base_dir() . $subdir;
+        if (!is_dir($dir) && !wp_mkdir_p($dir)) {
+            return new WP_Error('storage_error', 'ذخیرهٔ تصویر ناموفق بود؛ با پشتیبانی تماس بگیرید.', array('status' => 500));
+        }
+        $filename = strtolower(wp_generate_password(24, false)) . '.' . $ext;
+        $dest = $dir . '/' . $filename;
+
+        if (!@move_uploaded_file($file['tmp_name'], $dest)) {
+            return new WP_Error('storage_error', 'ذخیرهٔ تصویر روی دیسک ناموفق بود.', array('status' => 500));
+        }
+        @chmod($dest, 0640);
+
+        return array('imageName' => $subdir . '/' . $filename);
+    }
+
+    /**
+     * v1.5.7: POST /payment/manual-transfer/{order_id}/image — آپلود/جایگزینی تصویر
+     * فیش. فقط مالک سفارشِ کارت‌به‌کارتِ در انتظار بررسی؛ ۳۰۰ ثانیه فرصت کافی است.
+     */
+    public function handle_manual_transfer_image_upload(WP_REST_Request $request) {
+        global $wpdb;
+        MrDastbaaf_Auth_Controller::maybe_authenticate_bearer();
+
+        $user_id = get_current_user_id();
+        if ($user_id <= 0) {
+            return new WP_Error('unauthorized', 'برای ارسال تصویر فیش ابتدا وارد حساب کاربری خود شوید.', array('status' => 401));
+        }
+        $order_id = (string) $request['order_id'];
+        if (!preg_match('/^[A-Za-z0-9_-]{4,64}$/', $order_id)) {
+            return new WP_Error('invalid_order', 'شناسهٔ سفارش معتبر نیست.', array('status' => 400));
+        }
+
+        // سفارش باید متعلق به همین کاربر و در وضعیت قابل‌به‌روزرسانی باشد
+        $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
+        $table_transfers = $wpdb->prefix . 'mrdastbaaf_manual_transfers';
+        $order = $wpdb->get_row($wpdb->prepare(
+            "SELECT o.id, o.user_id, o.status, o.gateway, t.receipt_image_name
+             FROM $table_orders o
+             INNER JOIN $table_transfers t ON t.order_id = o.id
+             WHERE o.id = %s
+             LIMIT 1",
+            $order_id
+        ));
+        if (!$order || (int) $order->user_id !== (int) $user_id) {
+            return new WP_Error('not_found', 'سفارش یافت نشد یا به شما تعلق ندارد.', array('status' => 404));
+        }
+        if ('card_to_card' !== (string) $order->gateway || 'pending' !== (string) $order->status) {
+            return new WP_Error('not_editable', 'تصویر این فیش دیگر قابل تغییر نیست (بررسی آغاز/به پایان شده است).', array('status' => 409));
+        }
+
+        $files = $request->get_file_params();
+        $file = isset($files['receipt_image']) && is_array($files['receipt_image']) ? $files['receipt_image'] : null;
+        if (!$file) {
+            return new WP_Error('no_file', 'فیلد receipt_image (فایل تصویر) ارسال نشده است.', array('status' => 400));
+        }
+
+        $stored = self::store_receipt_image($order_id, $file);
+        if (is_wp_error($stored)) {
+            return $stored;
+        }
+
+        // جایگزینی: تصویر قبلی (در صورت وجود) حذف می‌شود تا فایل یتیم نماند
+        $old_relative = (string) $order->receipt_image_name;
+        if ('' !== $old_relative && $old_relative !== $stored['imageName']) {
+            self::delete_receipt_image_file($old_relative);
+        }
+
+        $updated = $wpdb->update(
+            $table_transfers,
+            array('receipt_image_name' => $stored['imageName']),
+            array('order_id' => $order_id),
+            array('%s'),
+            array('%s')
+        );
+        if (false === $updated) {
+            // نوشتن DB شکست خورد → فایل تازه یتیم می‌شود؛ حذفش می‌کنیم
+            self::delete_receipt_image_file($stored['imageName']);
+            error_log('MrDastbaaf: receipt image DB update failed — ' . $wpdb->last_error);
+            return new WP_Error('db_error', 'ثبت تصویر ناموفق بود؛ لطفاً دوباره تلاش کنید.', array('status' => 500));
+        }
+
+        return rest_ensure_response(array(
+            'success' => true,
+            'imageName' => $stored['imageName'],
+            'message' => 'تصویر فیش با موفقیت ثبت شد.',
+        ));
+    }
+
+    /**
+     * v1.5.7: مجوز نمایش تصویر فیش — مدیر کل یا مالک سفارش (کوکی+nonce یا Bearer).
+     * @return bool
+     */
+    public function check_receipt_image_access($request) {
+        if (current_user_can('manage_options')) {
+            return true;
+        }
+        MrDastbaaf_Auth_Controller::maybe_authenticate_bearer();
+        $user_id = get_current_user_id();
+        if ($user_id <= 0) {
+            return false;
+        }
+        global $wpdb;
+        $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
+        $table_transfers = $wpdb->prefix . 'mrdastbaaf_manual_transfers';
+        $owner_id = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT o.user_id FROM $table_orders o
+             INNER JOIN $table_transfers t ON t.order_id = o.id
+             WHERE o.id = %s LIMIT 1",
+            (string) $request['order_id']
+        ));
+        return $owner_id === (int) $user_id;
+    }
+
+    /**
+     * v1.5.7: GET /receipts/{order_id}/image — استریم امن فایل از پوشهٔ بستهٔ
+     * uploads/mrdastbaaf-receipts/ (خروجی بعد از هدرها قطع می‌شود؛ مثل استریم ویدیو).
+     */
+    public function handle_receipt_image_view(WP_REST_Request $request) {
+        global $wpdb;
+        $table_transfers = $wpdb->prefix . 'mrdastbaaf_manual_transfers';
+        $relative = (string) $wpdb->get_var($wpdb->prepare(
+            "SELECT receipt_image_name FROM $table_transfers WHERE order_id = %s LIMIT 1",
+            (string) $request['order_id']
+        ));
+
+        $full = self::resolve_receipt_image_path($relative);
+        if ('' === $full || !is_readable($full)) {
+            return new WP_Error('image_missing', 'تصویری برای این فیش ثبت نشده است.', array('status' => 404));
+        }
+
+        $ext = strtolower(pathinfo($full, PATHINFO_EXTENSION));
+        $mime = isset(self::$receipt_image_mimes[$ext]) ? self::$receipt_image_mimes[$ext] : 'application/octet-stream';
+
+        // حریم خصوصی: هیچ کشی (مرورگر/پروکسی) تصویر فیش را نگه نمی‌دارد
+        if (!headers_sent()) {
+            header('Content-Type: ' . $mime);
+            header('Content-Length: ' . (string) filesize($full));
+            header('X-Content-Type-Options: nosniff');
+            header('Content-Disposition: inline');
+            header('Cache-Control: private, no-store, max-age=0');
+            header('Pragma: private');
+        }
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+        readfile($full);
+        exit;
+    }
+
+    /**
+     * v1.5.7: پاکسازی تصاویر فیش‌های «بررسی‌شده» (تایید/رد) قدیم‌تر از N روز —
+     * فایل حذف و ستون NULL می‌شود؛ ردیف متادیتا برای ردپای مالی می‌ماند.
+     * هم از دکمهٔ پیشخوان و هم از کرون روزانه صدا زده می‌شود (بچِ محدود = کوئری سبک).
+     *
+     * @param int $older_than_days حداقل عمر تصمیم؛ ۰ = همهٔ بررسی‌شده‌ها
+     * @param int $limit           سقف تعداد در هر اجرا
+     * @return int تعداد فایل‌های حذف‌شده
+     */
+    public static function purge_decided_receipt_images($older_than_days, $limit = 300) {
+        global $wpdb;
+        $table_orders = $wpdb->prefix . 'mrdastbaaf_orders';
+        $table_transfers = $wpdb->prefix . 'mrdastbaaf_manual_transfers';
+
+        // reviewed_at با current_time('mysql') (زمان محلی سایت) ثبت می‌شود؛
+        // پس حد آستانه هم باید همان مبنا باشد (نه UTC) — الگوی مقایسهٔ
+        // TIMEZONE FIX صفحهٔ my-status (class-memberships-controller.php).
+        $cutoff_sql = '1970-01-01 00:00:01';
+        if ((int) $older_than_days > 0) {
+            $cutoff_sql = date('Y-m-d H:i:s', (int) current_time('timestamp') - ((int) $older_than_days) * DAY_IN_SECONDS);
+        }
+
+        // فقط ردیف‌های تصمیم‌گرفته (completed/rejected) با reviewed_at — جلوگیری از
+        // پاک‌شدن تصویر فیشی که هنوز در صف بررسی است
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT t.order_id, t.receipt_image_name
+             FROM $table_transfers t
+             INNER JOIN $table_orders o ON o.id = t.order_id
+             WHERE o.status IN ('completed', 'rejected')
+               AND t.receipt_image_name IS NOT NULL AND t.receipt_image_name != ''
+               AND t.reviewed_at IS NOT NULL AND t.reviewed_at <= %s
+             LIMIT %d",
+            $cutoff_sql,
+            max(1, (int) $limit)
+        ));
+
+        $deleted = 0;
+        foreach ((array) $rows as $row) {
+            if (self::delete_receipt_image_file($row->receipt_image_name)) {
+                $deleted++;
+            }
+            // ستون مستقل از سرنوشت فایل NULL می‌شود (فایل غایب = بدون تصویر)
+            $wpdb->update(
+                $table_transfers,
+                array('receipt_image_name' => null),
+                array('order_id' => (string) $row->order_id),
+                array('%s'),
+                array('%s')
+            );
+        }
+        return $deleted;
+    }
+
+    /**
+     * v1.5.7: هندلر کرون روزانه — دورهٔ نگهداری از آپشن می‌خواند؛ ۰ = کاری نمی‌کند
+     * (بدون کوئری). بچِ ۳۰۰تایی: اگر روزی بیش از ۳۰۰ فیش بررسی شود، فردا ادامه
+     * پیدا می‌کند (self-healing مثل بقیه کرون‌ها).
+     */
+    public static function run_daily_receipt_image_purge() {
+        $retention = (int) get_option('mrdastbaaf_receipt_image_retention_days', 14);
+        if ($retention <= 0) {
+            return; // ۰ = نگهداری همیشگی؛ صفر کوئری
+        }
+        $deleted = self::purge_decided_receipt_images($retention, 300);
+        if ($deleted > 0) {
+            error_log('MrDastbaaf: daily receipt-image purge deleted ' . $deleted . ' file(s).');
+        }
     }
 
     /**
