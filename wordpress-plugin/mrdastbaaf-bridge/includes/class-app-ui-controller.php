@@ -98,6 +98,13 @@ class MrDastbaaf_App_UI_Controller {
      */
     public static function get_defaults() {
         return array(
+            // v1.5.7: مدرس سراسری دوره‌ها — نام و عکس از پیشخوان؛ در کارت‌ها/جزئیات دوره
+            // وقتی سرور فیلد مدرس تکی نمی‌فرستد، همین‌جا به‌عنوان پیش‌فرض سرو می‌شود.
+            'instructor' => array(
+                'name'     => 'استاد خاموشیان',
+                'photoUrl' => '',
+                'bio'      => '',
+            ),
             'hero' => array(
                 'badgeText'        => 'پلتفرم تخصصی آموزش صنایع دستی',
                 'headline'         => 'هنر بافندگی و اصالت ایرانی را با دستان خود زنده کنید',
@@ -186,6 +193,16 @@ class MrDastbaaf_App_UI_Controller {
         $stored = get_option(self::OPTION_KEY, array());
         if (!is_array($stored)) {
             $stored = array();
+        }
+
+        // v1.5.7: مدرس سراسری — هر فیلدِ ذخیره‌شده (حتی خالی برای عکس) پیش‌فرض را می‌چربد
+        $instructor = $defaults['instructor'];
+        if (isset($stored['instructor']) && is_array($stored['instructor'])) {
+            foreach (array('name', 'photoUrl', 'bio') as $ins_field) {
+                if (array_key_exists($ins_field, $stored['instructor'])) {
+                    $instructor[$ins_field] = (string) $stored['instructor'][$ins_field];
+                }
+            }
         }
 
         // ─── hero ───
@@ -323,6 +340,8 @@ class MrDastbaaf_App_UI_Controller {
         usort($guides, array(__CLASS__, 'sort_by_sort_order'));
 
         return array(
+            // v1.5.7: مدرس سراسری (نام/عکس/معرفی از پیشخوان)
+            'instructor' => $instructor,
             'hero'     => $hero,
             'sections' => $sections,
             'menu'     => array(
@@ -351,6 +370,12 @@ class MrDastbaaf_App_UI_Controller {
      */
     public static function save(array $ui) {
         $clean = array(
+            // v1.5.7: مدرس سراسری — نام/عکس/معرفی (نام خالی = پیش‌فرض سمت اپ می‌ماند)
+            'instructor' => array(
+                'name'     => isset($ui['instructor']['name'])     ? sanitize_text_field((string) $ui['instructor']['name']) : '',
+                'photoUrl' => isset($ui['instructor']['photoUrl']) ? esc_url_raw((string) $ui['instructor']['photoUrl']) : '',
+                'bio'      => isset($ui['instructor']['bio'])      ? sanitize_textarea_field((string) $ui['instructor']['bio']) : '',
+            ),
             'hero'     => isset($ui['hero']) && is_array($ui['hero']) ? array_map('strval', $ui['hero']) : array(),
             'sections' => array(),
             'menu'     => array(

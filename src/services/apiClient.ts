@@ -80,7 +80,11 @@ export class ApiError extends Error {
 
 export interface ApiFetchOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
-  /** بدنهٔ JSON — در صورت داده شدن، Content-Type: application/json ست می‌شود. */
+  /**
+   * بدنهٔ JSON — در صورت داده شدن، Content-Type: application/json ست می‌شود.
+   * v1.5.7: FormData هم پذیرفته می‌شود (آپلود تصویر فیش) — بدون هدر Content-Type
+   * تا مرورگر boundary چندبخشی را خودش ست کند.
+   */
   body?: unknown;
   /** در صورت true، هدر Bearer از توکن ذخیره‌شده خوانده می‌شود. */
   auth?: boolean;
@@ -192,7 +196,13 @@ async function requestOnce<T>(
     response = await fetch(url, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      // v1.5.7: FormData عیناً پاس می‌شود (multipart)؛ بقیه JSON.stringify
+      body:
+        body === undefined
+          ? undefined
+          : body instanceof FormData
+            ? body
+            : JSON.stringify(body),
       // توکن opaque در هدر است؛ کوکی/سشن مرورگر لازم نیست.
       credentials: 'omit',
       signal: controller.signal,
@@ -288,7 +298,8 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
     //   Cache-Control هم در فهرست مجاز افزونه هست. Pragma دیگر ضرورتی ندارد و
     //   هرگز نباید به درخواست‌های بین‌دامنه‌ای برگردد.
   };
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  // v1.5.7: FormData → بدون هدر Content-Type (مرورگر خودش multipart boundary می‌سازد)
+  if (body !== undefined && !(body instanceof FormData)) headers['Content-Type'] = 'application/json';
   if (auth) {
     const token = getStoredAuthToken();
     if (!token) {

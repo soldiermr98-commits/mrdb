@@ -10,6 +10,8 @@ import { courseService } from '../services/courseService';
 import { membershipService } from '../services/membershipService';
 import { isRealApiMode } from '../services/apiClient';
 import { useOnlineRefetch } from '../hooks/useOnlineRefetch';
+// v1.5.7: آواتار برند شدهٔ مدرس — عکس قابل‌لود از پیشخوان، فال‌بک حرف اول نام
+import { InstructorAvatar } from '../components/common/InstructorAvatar';
 
 interface CatalogueViewProps {
   initialCategory?: CourseCategory | 'all';
@@ -286,10 +288,10 @@ export const CatalogueView: React.FC<CatalogueViewProps> = ({
                 <div className="p-4 pt-0">
                   <div className="pt-3 border-t border-stone-100 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <img
+                      <InstructorAvatar
                         src={course.instructorAvatar}
-                        alt={course.instructorName}
-                        className="w-6 h-6 rounded-full object-cover"
+                        name={course.instructorName}
+                        className="w-6 h-6 rounded-full"
                       />
                       <span className="text-[11px] text-stone-700 font-medium truncate max-w-[110px]">
                         {course.instructorName}

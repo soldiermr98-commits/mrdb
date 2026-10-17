@@ -346,6 +346,17 @@ export interface ShopShippingInfo {
   postalCode: string;
 }
 
+/**
+ * v1.5.7 — «مدرس» از پیشخوان (محتوای وب‌اپ ← مدرس دوره‌ها): وقتی سرور برای
+ * تک‌تک دوره‌ها فیلد مدرس نمی‌فرستد، این بلاک سراسری به‌عنوان پیش‌فرض همهٔ
+ * کارت‌ها/جزئیات استفاده می‌شود. photoUrl خالی = آواتار برند (حرف اول نام).
+ */
+export interface AppUiInstructor {
+  name: string;
+  photoUrl: string;
+  bio: string;
+}
+
 export interface AppUiConfig {
   hero: AppUiHero;
   sections: AppUiSection[];
@@ -359,4 +370,6 @@ export interface AppUiConfig {
    * (رفتار قبلی بر اساس پرچم featured که سرور نمی‌فرستد).
    */
   featuredCourseIds: number[];
+  /** v1.5.7 — مدرس سراسری از پیشخوان (پیش‌فرض کد: «استاد خاموشیان») */
+  instructor: AppUiInstructor;
 }

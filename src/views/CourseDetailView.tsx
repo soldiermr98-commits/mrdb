@@ -21,6 +21,8 @@ import { Course, Lesson, PaymentGatewayType, UserProfile } from '../types';
 import { courseService } from '../services/courseService';
 import { formatDurationFa } from '../utils/format';
 import { AsyncState } from '../components/common/AsyncState';
+// v1.5.7: آواتار برند شدهٔ مدرس — عکس قابل‌لود از پیشخوان، فال‌بک حرف اول نام
+import { InstructorAvatar } from '../components/common/InstructorAvatar';
 import { useOnlineRefetch } from '../hooks/useOnlineRefetch';
 
 interface CourseDetailViewProps {
@@ -264,10 +266,10 @@ export const CourseDetailView: React.FC<CourseDetailViewProps> = ({
           <div>
             <h3 className="font-bold text-sm text-amber-950 mb-2">مدرس دوره:</h3>
             <div className="flex items-center gap-3">
-              <img
+              <InstructorAvatar
                 src={course.instructorAvatar}
-                alt={course.instructorName}
-                className="w-12 h-12 rounded-2xl object-cover border border-amber-200"
+                name={course.instructorName}
+                className="w-12 h-12 rounded-2xl border border-amber-200"
               />
               <div>
                 <p className="font-bold text-xs text-stone-900">{course.instructorName}</p>
